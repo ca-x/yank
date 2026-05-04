@@ -19,6 +19,7 @@ use yank_core::{
 };
 
 const HISTORY_ROWS: usize = 20;
+const HISTORY_PAGE_STEP: usize = 10;
 const MIN_CAPTURE_INTERVAL_MS: u64 = 250;
 
 include!(concat!(env!("OUT_DIR"), "/embedded_makepad_fonts.rs"));
@@ -34,169 +35,399 @@ enum CaptureFormatKind {
 script_mod! {
     use mod.prelude.widgets.*
 
+    let AppCard = RoundedView{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: theme.space_2
+        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_2, bottom: theme.space_2}
+        new_batch: true
+        draw_bg.color: theme.color_bg_container
+        draw_bg.border_radius: 4.0
+        draw_bg.border_size: 1.0
+        draw_bg.border_color: theme.color_bg_highlight
+    }
+
+    let PanelCard = RoundedView{
+        width: Fill
+        height: Fill
+        flow: Down
+        spacing: theme.space_2
+        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_2, bottom: theme.space_2}
+        new_batch: true
+        draw_bg.color: theme.color_bg_container
+        draw_bg.border_radius: 4.0
+        draw_bg.border_size: 1.0
+        draw_bg.border_color: theme.color_bg_highlight
+    }
+
+    let FieldRow = View{
+        width: Fill
+        height: Fit
+        flow: Right {wrap: true}
+        spacing: theme.space_2
+        align: Align{y: 0.5}
+    }
+
+    let FieldGroup = View{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: theme.space_1
+    }
+
+    let MutedLabel = Label{
+        width: Fill
+        height: Fit
+        draw_text.color: theme.color_label_inner_inactive
+        draw_text.text_style.font_size: theme.font_size_p
+    }
+
+    let MetaLabel = Label{
+        width: Fit
+        height: Fit
+        draw_text.color: theme.color_label_inner_inactive
+        draw_text.text_style.font_size: theme.font_size_code
+    }
+
+    let SectionTitle = Label{
+        width: Fill
+        height: Fit
+        draw_text.color: theme.color_label_inner
+        draw_text.text_style: theme.font_bold{font_size: theme.font_size_p}
+    }
+
+    let DenseButton = ButtonFlat{
+        height: 30
+        margin: 0.
+        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        draw_bg +: {
+            border_radius: 3.0
+            border_size: 1.0
+        }
+        draw_text +: {
+            text_style +: {font_size: theme.font_size_p}
+        }
+    }
+
+    let ActionButton = Button{
+        height: 32
+        margin: 0.
+        padding: theme.mspace_2{left: theme.space_3, right: theme.space_3}
+        draw_bg +: {
+            border_radius: 3.0
+        }
+        draw_text +: {
+            text_style +: {font_size: theme.font_size_p}
+        }
+    }
+
+    let HistoryRow = ButtonFlat{
+        width: Fill
+        height: 34
+        margin: 0.
+        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        align: Align{x: 0.0 y: 0.5}
+        label_walk: Walk{width: Fill, height: Fit}
+        draw_bg +: {
+            border_radius: 2.0
+            border_size: 1.0
+            color: theme.color_bg_even
+            color_hover: theme.color_bg_highlight_inline
+            color_focus: theme.color_bg_highlight
+            color_down: theme.color_inset_focus
+            border_color: theme.color_bg_highlight
+            border_color_hover: theme.color_bevel_hover
+            border_color_focus: theme.color_highlight
+        }
+        draw_text +: {
+            text_style: theme.font_regular{font_size: theme.font_size_p}
+        }
+    }
+
+    let PreviewSurface = RoundedView{
+        width: Fill
+        height: Fill
+        flow: Down
+        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_3, bottom: theme.space_3}
+        new_batch: true
+        draw_bg.color: theme.color_inset
+        draw_bg.border_radius: 4.0
+        draw_bg.border_size: 1.0
+        draw_bg.border_color: theme.color_bg_highlight
+    }
+
     startup() do #(App::script_component(vm)){
         ui: Root{
             main_window := Window{
-                window.inner_size: vec2(1280, 860)
+                pass.clear_color: theme.color_bg_app
+                window.inner_size: vec2(820, 560)
                 body +: {
-                    content := ScrollYView{
+                    width: Fill
+                    height: Fill
+                    flow: Down
+                    spacing: 0
+
+                    app_header := SolidView{
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        spacing: theme.space_2
+                        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_2, bottom: theme.space_2}
+                        align: Align{y: 0.5}
+                        draw_bg.color: theme.color_app_caption_bar
+
+                        header_text := View{
+                            width: Fill
+                            height: Fit
+                            flow: Down
+                            spacing: 0.
+                            title := Label{
+                                width: Fill
+                                text: ""
+                                draw_text.color: theme.color_label_inner
+                                draw_text.text_style: theme.font_bold{font_size: theme.font_size_p}
+                            }
+                            subtitle := Label{
+                                width: Fill
+                                text: ""
+                                draw_text.color: theme.color_label_inner_inactive
+                                draw_text.text_style.font_size: theme.font_size_p
+                            }
+                        }
+
+                        status_shell := RoundedView{
+                            width: 300
+                            height: Fit
+                            padding: theme.mspace_2{left: theme.space_3, right: theme.space_3, top: theme.space_1, bottom: theme.space_1}
+                            new_batch: true
+                            draw_bg.color: theme.color_bg_highlight_inline
+                            draw_bg.border_radius: 3.0
+                            status := TextBox{
+                                width: Fill
+                                height: Fit
+                                text: ""
+                                draw_text.color: theme.color_label_inner
+                                draw_text.text_style.font_size: theme.font_size_code
+                            }
+                        }
+
+                        settings_button := DenseButton{text: ""}
+                    }
+
+                    main_page := View{
                         width: Fill
                         height: Fill
                         flow: Down
-                        spacing: 14
-                        padding: Inset{left: 24 right: 24 top: 22 bottom: 24}
+                        spacing: theme.space_2
+                        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
 
-                        title := H1{text: ""}
-                        status := TextBox{width: Fill height: Fit text: ""}
-
-                        toolbar := View{
+                        quick_paste_shell := PanelCard{
                             width: Fill
-                            height: Fit
-                            flow: Right {wrap: true}
-                            spacing: 8
-                            capture_toggle_button := Button{text: ""}
-                            capture_button := Button{text: ""}
-                            sync_button := Button{text: ""}
-                            theme_button := Button{text: ""}
-                            language_button := Button{text: ""}
-                        }
-
-                        search_bar := View{
-                            width: Fill
-                            height: Fit
-                            flow: Right
-                            spacing: 8
-                            search_label := Label{text: ""}
-                            search_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            clear_search_button := Button{text: ""}
-                        }
-
-                        workspace := View{
-                            width: Fill
-                            height: Fit
-                            flow: Right
-                            spacing: 16
-
-                            history_panel := View{
-                                width: 460
+                            height: Fill
+                            history_header := View{
+                                width: Fill
                                 height: Fit
+                                flow: Right
+                                spacing: theme.space_2
+                                align: Align{y: 0.5}
+                                history_title := SectionTitle{text: ""}
+                                clip_count := MetaLabel{text: ""}
+                            }
+                            rows := ScrollYView{
+                                width: Fill
+                                height: Fill
                                 flow: Down
-                                spacing: 7
-                                history_title := H2{text: ""}
-                                clip_count := Label{text: ""}
-                                row_0 := Button{width: Fill text: ""}
-                                row_1 := Button{width: Fill text: ""}
-                                row_2 := Button{width: Fill text: ""}
-                                row_3 := Button{width: Fill text: ""}
-                                row_4 := Button{width: Fill text: ""}
-                                row_5 := Button{width: Fill text: ""}
-                                row_6 := Button{width: Fill text: ""}
-                                row_7 := Button{width: Fill text: ""}
-                                row_8 := Button{width: Fill text: ""}
-                                row_9 := Button{width: Fill text: ""}
-                                row_10 := Button{width: Fill text: ""}
-                                row_11 := Button{width: Fill text: ""}
-                                row_12 := Button{width: Fill text: ""}
-                                row_13 := Button{width: Fill text: ""}
-                                row_14 := Button{width: Fill text: ""}
-                                row_15 := Button{width: Fill text: ""}
-                                row_16 := Button{width: Fill text: ""}
-                                row_17 := Button{width: Fill text: ""}
-                                row_18 := Button{width: Fill text: ""}
-                                row_19 := Button{width: Fill text: ""}
+                                spacing: theme.space_1
+                                row_0 := HistoryRow{text: ""}
+                                row_1 := HistoryRow{text: ""}
+                                row_2 := HistoryRow{text: ""}
+                                row_3 := HistoryRow{text: ""}
+                                row_4 := HistoryRow{text: ""}
+                                row_5 := HistoryRow{text: ""}
+                                row_6 := HistoryRow{text: ""}
+                                row_7 := HistoryRow{text: ""}
+                                row_8 := HistoryRow{text: ""}
+                                row_9 := HistoryRow{text: ""}
+                                row_10 := HistoryRow{text: ""}
+                                row_11 := HistoryRow{text: ""}
+                                row_12 := HistoryRow{text: ""}
+                                row_13 := HistoryRow{text: ""}
+                                row_14 := HistoryRow{text: ""}
+                                row_15 := HistoryRow{text: ""}
+                                row_16 := HistoryRow{text: ""}
+                                row_17 := HistoryRow{text: ""}
+                                row_18 := HistoryRow{text: ""}
+                                row_19 := HistoryRow{text: ""}
                             }
 
                             detail_panel := View{
                                 width: Fill
-                                height: Fit
-                                flow: Down
-                                spacing: 10
-
-                                selected_title := H2{text: ""}
-                                selected_meta := Label{width: Fill text: ""}
-                                preview := TextBox{width: Fill height: Fit text: ""}
-                                edit_label := Label{text: ""}
-                                edit_input := TextInput{
+                                height: 126
+                                flow: Right
+                                spacing: theme.space_2
+                                detail_header := View{
+                                    width: 220
+                                    height: Fill
+                                    flow: Down
+                                    spacing: theme.space_1
+                                    selected_title := SectionTitle{text: ""}
+                                    selected_meta := MutedLabel{text: ""}
+                                }
+                                preview_shell := PreviewSurface{
                                     width: Fill
-                                    height: 116
-                                    is_multiline: true
-                                    empty_text: ""
+                                    height: Fill
+                                    preview := TextBox{
+                                        width: Fill
+                                        height: Fill
+                                        text: ""
+                                        draw_text.color: theme.color_label_inner
+                                    }
+                                }
+                                edit_group := View{
+                                    width: Fill
+                                    height: Fill
+                                    flow: Down
+                                    spacing: theme.space_1
+                                    edit_label := SectionTitle{text: ""}
+                                    edit_input := TextInput{
+                                        width: Fill
+                                        height: Fill
+                                        is_multiline: true
+                                        empty_text: ""
+                                    }
                                 }
                                 detail_actions := View{
-                                    width: Fill
-                                    height: Fit
-                                    flow: Right {wrap: true}
-                                    spacing: 8
-                                    copy_selected_button := Button{text: ""}
-                                    save_edit_button := Button{text: ""}
-                                    pin_button := Button{text: ""}
-                                    delete_button := Button{text: ""}
+                                    width: Fit
+                                    height: Fill
+                                    flow: Down
+                                    spacing: theme.space_1
+                                    copy_selected_button := ActionButton{text: ""}
+                                    save_edit_button := DenseButton{text: ""}
+                                    pin_button := DenseButton{text: ""}
+                                    delete_button := DenseButton{text: ""}
                                 }
                             }
                         }
 
-                        settings_title := H2{text: ""}
-                        local_status := TextBox{width: Fill height: Fit text: ""}
+                        search_card := AppCard{
+                            flow: Right
+                            spacing: theme.space_2
+                            align: Align{y: 0.5}
+                            search_label := Label{
+                                width: Fit
+                                text: ""
+                                draw_text.color: theme.color_label_inner
+                                draw_text.text_style: theme.font_bold{font_size: theme.font_size_p}
+                            }
+                            search_input := TextInput{width: Fill height: 32 empty_text: ""}
+                            clear_search_button := DenseButton{text: ""}
+                            capture_toggle_button := DenseButton{text: ""}
+                            capture_button := ActionButton{text: ""}
+                            sync_button := DenseButton{text: ""}
+                        }
+                    }
 
-                        behavior_settings := View{
-                            width: Fill
-                            height: Fit
-                            flow: Right {wrap: true}
-                            spacing: 8
-                            device_id_label := Label{text: ""}
-                            device_id_value := TextInput{width: 300 height: Fit empty_text: "" is_read_only: true}
-                            copy_device_id_button := Button{text: ""}
-                            duplicate_policy_label := Label{text: ""}
-                            duplicate_policy_button := Button{text: ""}
-                            capture_formats_label := Label{text: ""}
-                            capture_text_button := Button{text: ""}
-                            capture_html_button := Button{text: ""}
-                            capture_image_button := Button{text: ""}
-                            capture_files_button := Button{text: ""}
-                            max_history_label := Label{text: ""}
-                            max_history_input := TextInput{width: 120 height: Fit empty_text: ""}
-                            capture_interval_label := Label{text: ""}
-                            capture_interval_input := TextInput{width: 120 height: Fit empty_text: ""}
-                            save_behavior_button := Button{text: ""}
+                    settings_page := ScrollYView{
+                        width: Fill
+                        height: Fill
+                        visible: false
+                        flow: Down
+                        spacing: theme.space_3
+                        align: Align{x: 0.5}
+                        padding: theme.mspace_3{left: theme.space_3 * 3, right: theme.space_3 * 3, top: theme.space_3 * 2, bottom: theme.space_3 * 3}
+
+                        settings_header := AppCard{
+                            width: Fill{max: 1040}
+                            flow: Right
+                            spacing: theme.space_3
+                            align: Align{y: 0.5}
+                            settings_title_group := View{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: theme.space_1
+                                settings_title := SectionTitle{text: ""}
+                                settings_subtitle := MutedLabel{text: ""}
+                            }
+                            back_to_main_button := DenseButton{text: ""}
                         }
 
-                        sync_settings := View{
-                            width: Fill
-                            height: Fit
-                            flow: Down
-                            spacing: 8
-                            sync_settings_title := H2{text: ""}
-                            server_label := Label{text: ""}
-                            server_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            token_label := Label{text: ""}
-                            token_input := TextInput{width: Fill height: Fit empty_text: "" is_password: true}
-                            save_settings_button := Button{text: ""}
+                        appearance_settings := AppCard{
+                            width: Fill{max: 1040}
+                            appearance_title := SectionTitle{text: ""}
+                            FieldRow{
+                                language_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                language_button := DenseButton{text: ""}
+                                theme_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                theme_button := DenseButton{text: ""}
+                            }
                         }
 
-                        hotkeys_settings := View{
-                            width: Fill
-                            height: Fit
-                            flow: Down
-                            spacing: 8
-                            hotkeys_title := H2{text: ""}
-                            hotkeys_status := Label{text: ""}
-                            hotkey_show_label := Label{text: ""}
-                            hotkey_show_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            hotkey_search_label := Label{text: ""}
-                            hotkey_search_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            hotkey_copy_label := Label{text: ""}
-                            hotkey_copy_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            hotkey_delete_label := Label{text: ""}
-                            hotkey_delete_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            hotkey_pin_label := Label{text: ""}
-                            hotkey_pin_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            hotkey_edit_label := Label{text: ""}
-                            hotkey_edit_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            hotkey_capture_label := Label{text: ""}
-                            hotkey_capture_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            hotkey_sync_label := Label{text: ""}
-                            hotkey_sync_input := TextInput{width: Fill height: Fit empty_text: ""}
-                            save_hotkeys_button := Button{text: ""}
+                        behavior_settings := AppCard{
+                            width: Fill{max: 1040}
+                            behavior_title := SectionTitle{text: ""}
+                            local_status := TextBox{width: Fill height: Fit text: ""}
+                            FieldRow{
+                                device_id_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                device_id_value := TextInput{width: 360 height: 34 empty_text: "" is_read_only: true}
+                                copy_device_id_button := DenseButton{text: ""}
+                            }
+                            FieldRow{
+                                duplicate_policy_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                duplicate_policy_button := DenseButton{text: ""}
+                            }
+                            FieldGroup{
+                                capture_formats_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                FieldRow{
+                                    capture_text_button := DenseButton{text: ""}
+                                    capture_html_button := DenseButton{text: ""}
+                                    capture_image_button := DenseButton{text: ""}
+                                    capture_files_button := DenseButton{text: ""}
+                                }
+                            }
+                            FieldRow{
+                                max_history_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                max_history_input := TextInput{width: 120 height: 34 empty_text: ""}
+                                capture_interval_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                capture_interval_input := TextInput{width: 120 height: 34 empty_text: ""}
+                                save_behavior_button := ActionButton{text: ""}
+                            }
+                        }
+
+                        sync_settings := AppCard{
+                            width: Fill{max: 1040}
+                            sync_settings_title := SectionTitle{text: ""}
+                            FieldGroup{
+                                server_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                server_input := TextInput{width: Fill height: 34 empty_text: ""}
+                            }
+                            FieldGroup{
+                                token_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                token_input := TextInput{width: Fill height: 34 empty_text: "" is_password: true}
+                            }
+                            save_settings_button := ActionButton{width: Fit text: ""}
+                        }
+
+                        hotkeys_settings := AppCard{
+                            width: Fill{max: 1040}
+                            hotkeys_title := SectionTitle{text: ""}
+                            hotkeys_status := MutedLabel{text: ""}
+                            hotkey_grid := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right {wrap: true}
+                                spacing: theme.space_2
+                                FieldGroup{width: 286 hotkey_show_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_show_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldGroup{width: 286 hotkey_search_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_search_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldGroup{width: 286 hotkey_copy_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_copy_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldGroup{width: 286 hotkey_delete_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_delete_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldGroup{width: 286 hotkey_pin_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_pin_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldGroup{width: 286 hotkey_edit_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_edit_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldGroup{width: 286 hotkey_capture_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_capture_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldGroup{width: 286 hotkey_sync_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_sync_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                            }
+                            save_hotkeys_button := ActionButton{width: Fit text: ""}
                         }
                     }
                 }
@@ -212,9 +443,18 @@ pub struct App {
     #[rust]
     state: Option<ClientState>,
     #[rust]
+    active_page: ClientPage,
+    #[rust]
     initialized: bool,
     #[rust]
     poll_timer: Timer,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ClientPage {
+    #[default]
+    Main,
+    Settings,
 }
 
 fn startup_theme() -> Theme {
@@ -277,6 +517,10 @@ impl AppMain for App {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
         if !self.initialized {
             self.initialize(cx);
+        }
+
+        if self.handle_type_to_search(cx, event) {
+            return;
         }
 
         self.match_event(cx, event);
@@ -366,6 +610,12 @@ impl MatchEvent for App {
         if self.button(cx, ids!(sync_button)).clicked(actions) {
             self.sync_now(cx);
         }
+        if self.button(cx, ids!(settings_button)).clicked(actions) {
+            self.show_settings_page(cx);
+        }
+        if self.button(cx, ids!(back_to_main_button)).clicked(actions) {
+            self.show_main_page(cx);
+        }
         if self.button(cx, ids!(theme_button)).clicked(actions) {
             self.toggle_theme(cx);
         }
@@ -390,22 +640,72 @@ impl MatchEvent for App {
     }
 
     fn handle_key_down(&mut self, cx: &mut Cx, event: &KeyEvent) {
+        if self.active_page == ClientPage::Settings && event.key_code == KeyCode::Escape {
+            self.show_main_page(cx);
+            return;
+        }
+
+        if self.active_page == ClientPage::Settings {
+            if self.shortcut_matches(|settings| &settings.hotkey_show_history, event)
+                || self.shortcut_matches(|settings| &settings.hotkey_search, event)
+            {
+                self.show_main_page(cx);
+            }
+            return;
+        }
+
+        if self.handle_ditto_style_key(cx, event) {
+            return;
+        }
+
+        if self.search_navigation_key(cx, event) {
+            match event.key_code {
+                KeyCode::ArrowUp => {
+                    self.select_relative_clip(cx, -1);
+                    return;
+                }
+                KeyCode::ArrowDown => {
+                    self.select_relative_clip(cx, 1);
+                    return;
+                }
+                KeyCode::PageUp => {
+                    self.select_relative_clip(cx, -(HISTORY_PAGE_STEP as isize));
+                    return;
+                }
+                KeyCode::PageDown => {
+                    self.select_relative_clip(cx, HISTORY_PAGE_STEP as isize);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         if self.shortcut_matches(|settings| &settings.hotkey_show_history, event)
             || self.shortcut_matches(|settings| &settings.hotkey_search, event)
         {
+            self.show_main_page(cx);
             self.refresh_history(cx);
             self.widget(cx, ids!(search_input)).set_key_focus(cx);
             return;
         }
         if self.shortcut_matches(|settings| &settings.hotkey_copy_selected, event) {
+            if self.detail_editor_has_focus(cx) {
+                return;
+            }
             self.copy_selected(cx);
             return;
         }
         if self.shortcut_matches(|settings| &settings.hotkey_delete_selected, event) {
+            if self.text_entry_has_focus(cx) {
+                return;
+            }
             self.delete_selected(cx);
             return;
         }
         if self.shortcut_matches(|settings| &settings.hotkey_toggle_pin, event) {
+            if self.text_entry_has_focus(cx) {
+                return;
+            }
             self.toggle_selected_pin(cx);
             return;
         }
@@ -423,6 +723,19 @@ impl MatchEvent for App {
         }
 
         if event.modifiers.is_primary()
+            && let Some(index) = paste_position_key_index(event.key_code)
+        {
+            self.select_clip_by_index(cx, index);
+            if event.modifiers.shift {
+                self.copy_selected_plain_text(cx);
+            } else {
+                self.copy_selected(cx);
+            }
+            return;
+        }
+
+        if self.active_page == ClientPage::Main
+            && self.history_list_has_focus(cx)
             && let Some(index) = number_key_index(event.key_code)
         {
             self.select_clip_by_index(cx, index);
@@ -441,6 +754,7 @@ impl App {
                 self.apply_i18n(cx);
                 self.refresh_history(cx);
                 self.set_status(cx, "app.status_local_ready");
+                self.apply_page_visibility(cx);
             }
             Err(error) => {
                 self.state = Some(ClientState::fallback(error.to_string()));
@@ -448,6 +762,7 @@ impl App {
                 self.apply_i18n(cx);
                 self.refresh_history(cx);
                 self.set_status(cx, "app.status_startup_fallback");
+                self.apply_page_visibility(cx);
             }
         }
     }
@@ -462,6 +777,174 @@ impl App {
 
     fn widget(&self, cx: &Cx, id: &[LiveId]) -> WidgetRef {
         self.ui.widget(cx, id)
+    }
+
+    fn handle_type_to_search(&mut self, cx: &mut Cx, event: &Event) -> bool {
+        let Event::TextInput(input) = event else {
+            return false;
+        };
+        if self.active_page != ClientPage::Main
+            || input.input.is_empty()
+            || self.text_entry_has_focus(cx)
+        {
+            return false;
+        }
+        if input.input.chars().any(char::is_control) {
+            return false;
+        }
+
+        let mut query = None;
+        if let Some(state) = &mut self.state {
+            state.query.push_str(&input.input);
+            query = Some(state.query.clone());
+        }
+        if let Some(query) = query {
+            self.widget(cx, ids!(search_input)).set_text(cx, &query);
+        }
+        self.widget(cx, ids!(search_input)).set_key_focus(cx);
+        self.refresh_history(cx);
+        true
+    }
+
+    fn handle_ditto_style_key(&mut self, cx: &mut Cx, event: &KeyEvent) -> bool {
+        let search_focus = self.search_has_focus(cx);
+        let edit_focus = self.detail_editor_has_focus(cx);
+
+        if edit_focus {
+            if event.modifiers.is_primary() && event.key_code == KeyCode::ReturnKey {
+                self.save_selected_edit(cx);
+                return true;
+            }
+            if event.key_code == KeyCode::Escape {
+                self.widget(cx, ids!(search_input)).set_key_focus(cx);
+                return true;
+            }
+            return false;
+        }
+
+        match event.key_code {
+            KeyCode::Escape => {
+                if self.query_is_empty() {
+                    self.set_status(cx, "app.status_ready");
+                } else {
+                    self.clear_search(cx);
+                    self.set_status(cx, "app.status_filter_cleared");
+                }
+                self.widget(cx, ids!(search_input)).set_key_focus(cx);
+                true
+            }
+            KeyCode::ReturnKey if event.modifiers.shift => {
+                self.copy_selected_plain_text(cx);
+                true
+            }
+            KeyCode::ReturnKey if !event.modifiers.is_primary() && !event.modifiers.alt => {
+                self.copy_selected(cx);
+                true
+            }
+            KeyCode::Delete if !search_focus => {
+                self.delete_selected(cx);
+                true
+            }
+            KeyCode::F5 => {
+                self.refresh_history(cx);
+                self.set_status(cx, "app.status_refreshed");
+                true
+            }
+            KeyCode::Home if !search_focus => {
+                self.select_first_clip(cx);
+                true
+            }
+            KeyCode::End if !search_focus => {
+                self.select_last_clip(cx);
+                true
+            }
+            KeyCode::Backspace if !search_focus && !self.query_is_empty() => {
+                self.clear_search(cx);
+                self.set_status(cx, "app.status_filter_cleared");
+                true
+            }
+            KeyCode::KeyC if event.modifiers.is_primary() && !search_focus => {
+                self.copy_selected(cx);
+                true
+            }
+            KeyCode::KeyF if event.modifiers.is_primary() => {
+                self.widget(cx, ids!(search_input)).set_key_focus(cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn search_has_focus(&self, cx: &Cx) -> bool {
+        self.widget(cx, ids!(search_input)).key_focus(cx)
+    }
+
+    fn detail_editor_has_focus(&self, cx: &Cx) -> bool {
+        self.widget(cx, ids!(edit_input)).key_focus(cx)
+    }
+
+    fn text_entry_has_focus(&self, cx: &Cx) -> bool {
+        [
+            ids!(search_input),
+            ids!(edit_input),
+            ids!(device_id_value),
+            ids!(max_history_input),
+            ids!(capture_interval_input),
+            ids!(server_input),
+            ids!(token_input),
+            ids!(hotkey_show_input),
+            ids!(hotkey_search_input),
+            ids!(hotkey_copy_input),
+            ids!(hotkey_delete_input),
+            ids!(hotkey_pin_input),
+            ids!(hotkey_edit_input),
+            ids!(hotkey_capture_input),
+            ids!(hotkey_sync_input),
+        ]
+        .into_iter()
+        .any(|id| self.widget(cx, id).key_focus(cx))
+    }
+
+    fn history_list_has_focus(&self, cx: &Cx) -> bool {
+        (0..HISTORY_ROWS).any(|index| self.widget(cx, row_id(index)).key_focus(cx))
+    }
+
+    fn search_navigation_key(&self, cx: &Cx, event: &KeyEvent) -> bool {
+        if self.detail_editor_has_focus(cx) {
+            return false;
+        }
+
+        matches!(
+            event.key_code,
+            KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown
+        )
+    }
+
+    fn query_is_empty(&self) -> bool {
+        self.state
+            .as_ref()
+            .map(|state| state.query.is_empty())
+            .unwrap_or(true)
+    }
+
+    fn show_main_page(&mut self, cx: &mut Cx) {
+        self.active_page = ClientPage::Main;
+        self.apply_page_visibility(cx);
+        self.widget(cx, ids!(search_input)).set_key_focus(cx);
+    }
+
+    fn show_settings_page(&mut self, cx: &mut Cx) {
+        self.active_page = ClientPage::Settings;
+        self.apply_page_visibility(cx);
+    }
+
+    fn apply_page_visibility(&mut self, cx: &mut Cx) {
+        let settings_visible = self.active_page == ClientPage::Settings;
+        self.widget(cx, ids!(main_page))
+            .set_visible(cx, !settings_visible);
+        self.widget(cx, ids!(settings_page))
+            .set_visible(cx, settings_visible);
+        self.ui.redraw(cx);
     }
 
     fn text(&self, key: &str) -> String {
@@ -487,6 +970,8 @@ impl App {
 
         for (id, key) in [
             (ids!(title), "app.title"),
+            (ids!(subtitle), "app.subtitle"),
+            (ids!(settings_button), "app.settings"),
             (ids!(capture_button), "app.capture"),
             (ids!(sync_button), "app.sync_now"),
             (ids!(language_button), "app.lang_toggle"),
@@ -499,6 +984,12 @@ impl App {
             (ids!(save_edit_button), "app.save_edit"),
             (ids!(delete_button), "app.delete"),
             (ids!(settings_title), "app.settings"),
+            (ids!(settings_subtitle), "app.settings_subtitle"),
+            (ids!(back_to_main_button), "app.back_to_history"),
+            (ids!(appearance_title), "app.appearance"),
+            (ids!(behavior_title), "app.capture_history"),
+            (ids!(language_label), "app.language"),
+            (ids!(theme_label), "app.theme"),
             (ids!(device_id_label), "app.device_id"),
             (ids!(copy_device_id_button), "app.copy_device_id"),
             (ids!(duplicate_policy_label), "app.duplicate_policy"),
@@ -629,6 +1120,7 @@ impl App {
 
         self.refresh_local_status(cx);
         self.refresh_detail(cx);
+        self.apply_page_visibility(cx);
         self.ui.redraw(cx);
     }
 
@@ -875,6 +1367,45 @@ impl App {
         {
             state.selected_id = Some(clip.id.clone());
             self.refresh_history(cx);
+            self.widget(cx, row_id(index)).set_key_focus(cx);
+        }
+    }
+
+    fn select_first_clip(&mut self, cx: &mut Cx) {
+        self.select_clip_by_index(cx, 0);
+    }
+
+    fn select_last_clip(&mut self, cx: &mut Cx) {
+        let Some(last_index) = self
+            .state
+            .as_ref()
+            .and_then(|state| state.history.len().checked_sub(1))
+        else {
+            return;
+        };
+        self.select_clip_by_index(cx, last_index);
+    }
+
+    fn select_relative_clip(&mut self, cx: &mut Cx, delta: isize) {
+        let Some(state) = &mut self.state else {
+            return;
+        };
+        if state.history.is_empty() {
+            return;
+        }
+
+        let current = state.selected_position().unwrap_or(0);
+        let last = state.history.len().saturating_sub(1);
+        let next = if delta < 0 {
+            current.saturating_sub(delta.unsigned_abs())
+        } else {
+            current.saturating_add(delta as usize).min(last)
+        };
+
+        if let Some(clip) = state.history.get(next) {
+            state.selected_id = Some(clip.id.clone());
+            self.refresh_history(cx);
+            self.widget(cx, row_id(next)).set_key_focus(cx);
         }
     }
 
@@ -921,6 +1452,16 @@ impl App {
         match result {
             Some(Ok(true)) => self.set_status(cx, "app.status_copied_selected"),
             Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
+    fn copy_selected_plain_text(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(|state| state.copy_selected_plain_text());
+        match result {
+            Some(Ok(true)) => self.set_status(cx, "app.status_copied_plain_text"),
+            Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
         }
@@ -1332,6 +1873,18 @@ impl ClientState {
         }
     }
 
+    fn copy_selected_plain_text(&mut self) -> Result<bool> {
+        let Some(text) = self.selected_clip().and_then(plain_text_payload) else {
+            return Ok(false);
+        };
+        let Some(clipboard) = &mut self.clipboard else {
+            anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
+        };
+        clipboard.set_text(text.clone())?;
+        self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
+        Ok(true)
+    }
+
     fn copy_device_id(&mut self) -> Result<()> {
         let Some(clipboard) = &mut self.clipboard else {
             anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
@@ -1552,6 +2105,33 @@ fn editable_text(clip: &Clip) -> Option<&str> {
     clip.formats.iter().find_map(ClipFormat::text_value)
 }
 
+fn plain_text_payload(clip: &Clip) -> Option<String> {
+    if let Some(text) = editable_text(clip).filter(|text| !text.trim().is_empty()) {
+        return Some(text.to_owned());
+    }
+    if let Some(text) = clip
+        .primary_text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+    {
+        return Some(text.to_owned());
+    }
+    if let Some(text) = clip
+        .formats
+        .iter()
+        .find_map(ClipFormat::html_value)
+        .map(html_to_text)
+        .filter(|text| !text.trim().is_empty())
+    {
+        return Some(text);
+    }
+    clip.formats
+        .iter()
+        .find_map(ClipFormat::file_list_paths)
+        .filter(|paths| !paths.is_empty())
+        .map(|paths| paths.join("\n"))
+}
+
 fn enabled_capture_format_names(messages: &I18nBundle, settings: &Settings) -> String {
     let mut names = Vec::new();
     if settings.capture_text_enabled {
@@ -1750,6 +2330,16 @@ fn parse_key_code(value: &str) -> Option<KeyCode> {
         "7" => Some(KeyCode::Key7),
         "8" => Some(KeyCode::Key8),
         "9" => Some(KeyCode::Key9),
+        "numpad0" | "num0" => Some(KeyCode::Numpad0),
+        "numpad1" | "num1" => Some(KeyCode::Numpad1),
+        "numpad2" | "num2" => Some(KeyCode::Numpad2),
+        "numpad3" | "num3" => Some(KeyCode::Numpad3),
+        "numpad4" | "num4" => Some(KeyCode::Numpad4),
+        "numpad5" | "num5" => Some(KeyCode::Numpad5),
+        "numpad6" | "num6" => Some(KeyCode::Numpad6),
+        "numpad7" | "num7" => Some(KeyCode::Numpad7),
+        "numpad8" | "num8" => Some(KeyCode::Numpad8),
+        "numpad9" | "num9" => Some(KeyCode::Numpad9),
         "a" => Some(KeyCode::KeyA),
         "b" => Some(KeyCode::KeyB),
         "c" => Some(KeyCode::KeyC),
@@ -1782,17 +2372,25 @@ fn parse_key_code(value: &str) -> Option<KeyCode> {
 
 fn number_key_index(key_code: KeyCode) -> Option<usize> {
     match key_code {
-        KeyCode::Key1 => Some(0),
-        KeyCode::Key2 => Some(1),
-        KeyCode::Key3 => Some(2),
-        KeyCode::Key4 => Some(3),
-        KeyCode::Key5 => Some(4),
-        KeyCode::Key6 => Some(5),
-        KeyCode::Key7 => Some(6),
-        KeyCode::Key8 => Some(7),
-        KeyCode::Key9 => Some(8),
+        KeyCode::Key1 | KeyCode::Numpad1 => Some(0),
+        KeyCode::Key2 | KeyCode::Numpad2 => Some(1),
+        KeyCode::Key3 | KeyCode::Numpad3 => Some(2),
+        KeyCode::Key4 | KeyCode::Numpad4 => Some(3),
+        KeyCode::Key5 | KeyCode::Numpad5 => Some(4),
+        KeyCode::Key6 | KeyCode::Numpad6 => Some(5),
+        KeyCode::Key7 | KeyCode::Numpad7 => Some(6),
+        KeyCode::Key8 | KeyCode::Numpad8 => Some(7),
+        KeyCode::Key9 | KeyCode::Numpad9 => Some(8),
         _ => None,
     }
+}
+
+fn paste_position_key_index(key_code: KeyCode) -> Option<usize> {
+    match key_code {
+        KeyCode::Key0 | KeyCode::Numpad0 => Some(9),
+        _ => None,
+    }
+    .or_else(|| number_key_index(key_code))
 }
 
 fn row_id(index: usize) -> &'static [LiveId] {

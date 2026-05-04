@@ -3390,7 +3390,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "yank-client"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3403,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "yank-core"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "chrono",
  "hex",
@@ -3418,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "yank-server"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "axum",
