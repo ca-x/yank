@@ -1,0 +1,7 @@
+.git
+.github
+target
+*.sqlite
+*.sqlite3
+*.db
+.omx

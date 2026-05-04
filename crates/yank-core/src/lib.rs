@@ -95,6 +95,22 @@ pub struct Settings {
     pub server_url: Option<String>,
     pub token: Option<String>,
     pub sync_enabled: bool,
+    pub capture_enabled: bool,
+    pub capture_text_enabled: bool,
+    pub capture_html_enabled: bool,
+    pub capture_image_enabled: bool,
+    pub capture_files_enabled: bool,
+    pub capture_interval_ms: u64,
+    pub max_history: u32,
+    pub duplicate_moves_to_top: bool,
+    pub hotkey_show_history: String,
+    pub hotkey_search: String,
+    pub hotkey_copy_selected: String,
+    pub hotkey_delete_selected: String,
+    pub hotkey_toggle_pin: String,
+    pub hotkey_edit_selected: String,
+    pub hotkey_capture_now: String,
+    pub hotkey_sync_now: String,
 }
 
 impl Default for Settings {
@@ -106,6 +122,22 @@ impl Default for Settings {
             server_url: None,
             token: None,
             sync_enabled: false,
+            capture_enabled: true,
+            capture_text_enabled: true,
+            capture_html_enabled: true,
+            capture_image_enabled: true,
+            capture_files_enabled: true,
+            capture_interval_ms: 1000,
+            max_history: 500,
+            duplicate_moves_to_top: true,
+            hotkey_show_history: "Ctrl+Backtick".to_owned(),
+            hotkey_search: "Ctrl+F".to_owned(),
+            hotkey_copy_selected: "Enter".to_owned(),
+            hotkey_delete_selected: "Delete".to_owned(),
+            hotkey_toggle_pin: "Ctrl+P".to_owned(),
+            hotkey_edit_selected: "Ctrl+E".to_owned(),
+            hotkey_capture_now: "Ctrl+Shift+C".to_owned(),
+            hotkey_sync_now: "Ctrl+Shift+S".to_owned(),
         }
     }
 }
@@ -123,6 +155,83 @@ impl ClipFormat {
             format: "text/plain;charset=utf-8".to_owned(),
             mime: Some("text/plain".to_owned()),
             data: value.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn html(value: &str) -> Self {
+        Self {
+            format: "text/html;charset=utf-8".to_owned(),
+            mime: Some("text/html".to_owned()),
+            data: value.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn image_rgba(width: usize, height: usize, bytes: Vec<u8>) -> Self {
+        Self {
+            format: format!("image/rgba8;width={width};height={height}"),
+            mime: Some("image/x-rgba8".to_owned()),
+            data: bytes,
+        }
+    }
+
+    pub fn file_list(paths: &[String]) -> Self {
+        Self {
+            format: "application/x-yank-file-list+json".to_owned(),
+            mime: Some("application/json".to_owned()),
+            data: serde_json::to_vec(paths).expect("file list paths should serialize"),
+        }
+    }
+
+    pub fn is_text(&self) -> bool {
+        self.mime.as_deref() == Some("text/plain") || self.format.starts_with("text/plain")
+    }
+
+    pub fn is_html(&self) -> bool {
+        self.mime.as_deref() == Some("text/html") || self.format.starts_with("text/html")
+    }
+
+    pub fn text_value(&self) -> Option<&str> {
+        if self.is_text() {
+            std::str::from_utf8(&self.data).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn html_value(&self) -> Option<&str> {
+        if self.is_html() {
+            std::str::from_utf8(&self.data).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn image_rgba_dimensions(&self) -> Option<(usize, usize)> {
+        if !self.format.starts_with("image/rgba8;") {
+            return None;
+        }
+
+        let mut width = None;
+        let mut height = None;
+        for part in self.format.split(';').skip(1) {
+            if let Some(value) = part.strip_prefix("width=") {
+                width = value.parse().ok();
+            } else if let Some(value) = part.strip_prefix("height=") {
+                height = value.parse().ok();
+            }
+        }
+        Some((width?, height?))
+    }
+
+    pub fn is_file_list(&self) -> bool {
+        self.format == "application/x-yank-file-list+json"
+    }
+
+    pub fn file_list_paths(&self) -> Option<Vec<String>> {
+        if self.is_file_list() {
+            serde_json::from_slice(&self.data).ok()
+        } else {
+            None
         }
     }
 }
@@ -145,16 +254,28 @@ pub struct Clip {
 impl Clip {
     pub fn from_text(device_id: impl Into<String>, text: impl Into<String>) -> Self {
         let text = text.into();
+        Self::from_formats(
+            device_id,
+            summarize_text(&text),
+            Some(text.clone()),
+            vec![ClipFormat::text(&text)],
+        )
+    }
+
+    pub fn from_formats(
+        device_id: impl Into<String>,
+        description: impl Into<String>,
+        primary_text: Option<String>,
+        formats: Vec<ClipFormat>,
+    ) -> Self {
         let now = now_ts();
-        let description = summarize_text(&text);
-        let formats = vec![ClipFormat::text(&text)];
         let content_hash = content_hash(&formats);
 
         Self {
             id: Uuid::new_v4().to_string(),
             device_id: device_id.into(),
-            description,
-            primary_text: Some(text),
+            description: description.into(),
+            primary_text,
             formats,
             created_at: now,
             updated_at: now,
@@ -336,12 +457,27 @@ impl Store {
     }
 
     pub fn save_text_clip(&self, device_id: &str, text: &str) -> Result<Clip> {
-        if let Some(existing) =
-            self.find_active_by_hash(&content_hash(&[ClipFormat::text(text)]))?
-        {
+        self.save_clip_deduplicated(&Clip::from_text(device_id, text), true)
+    }
+
+    pub fn save_clip_deduplicated(&self, clip: &Clip, move_to_top: bool) -> Result<Clip> {
+        let clip = clip.clone().touch_for_remote();
+        if let Some(mut existing) = self.find_active_by_hash(&clip.content_hash)? {
+            if move_to_top {
+                let updated_at = now_ts();
+                self.conn.execute(
+                    "UPDATE clips SET updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+                    params![updated_at, existing.id],
+                )?;
+                self.conn.execute(
+                    "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
+                    params![existing.id, "upsert", updated_at],
+                )?;
+                existing.updated_at = updated_at;
+            }
             return Ok(existing);
         }
-        self.save_clip(&Clip::from_text(device_id, text))
+        self.save_clip(&clip)
     }
 
     pub fn list_clips(&self, limit: u32) -> Result<Vec<Clip>> {
@@ -356,6 +492,32 @@ impl Store {
             "#,
         )?;
         let rows = stmt.query_map(params![limit], |row| self.clip_from_row(row))?;
+        let mut clips = Vec::new();
+        for row in rows {
+            clips.push(self.with_formats(row?)?);
+        }
+        Ok(clips)
+    }
+
+    pub fn search_clips(&self, query: &str, limit: u32) -> Result<Vec<Clip>> {
+        let query = query.trim();
+        if query.is_empty() {
+            return self.list_clips(limit);
+        }
+
+        let pattern = format!("%{}%", escape_like(query));
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, device_id, description, primary_text, created_at, updated_at,
+                   deleted_at, content_hash, pinned, source_app
+            FROM clips
+            WHERE deleted_at IS NULL
+              AND (description LIKE ?1 ESCAPE '\' OR primary_text LIKE ?1 ESCAPE '\')
+            ORDER BY pinned DESC, updated_at DESC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![pattern, limit], |row| self.clip_from_row(row))?;
         let mut clips = Vec::new();
         for row in rows {
             clips.push(self.with_formats(row?)?);
@@ -414,6 +576,75 @@ impl Store {
         Ok(changed > 0)
     }
 
+    pub fn set_clip_pinned(&self, id: &str, pinned: bool) -> Result<Option<Clip>> {
+        let Some(mut clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        if clip.deleted_at.is_some() {
+            return Ok(None);
+        }
+        clip.pinned = pinned;
+        clip.updated_at = now_ts();
+        self.save_clip(&clip).map(Some)
+    }
+
+    pub fn toggle_clip_pinned(&self, id: &str) -> Result<Option<Clip>> {
+        let Some(clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        self.set_clip_pinned(id, !clip.pinned)
+    }
+
+    pub fn update_clip_text(&self, id: &str, text: &str) -> Result<Option<Clip>> {
+        let Some(mut clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        if clip.deleted_at.is_some() {
+            return Ok(None);
+        }
+
+        clip.primary_text = Some(text.to_owned());
+        clip.description = summarize_text(text);
+        clip.formats = vec![ClipFormat::text(text)];
+        clip.content_hash = content_hash(&clip.formats);
+        clip.updated_at = now_ts();
+        self.save_clip(&clip).map(Some)
+    }
+
+    pub fn find_active_by_content_hash(&self, hash: &str) -> Result<Option<Clip>> {
+        self.find_active_by_hash(hash)
+    }
+
+    pub fn enforce_max_history(&self, max_history: u32) -> Result<usize> {
+        if max_history == 0 {
+            return Ok(0);
+        }
+
+        let ids = {
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id
+                FROM clips
+                WHERE deleted_at IS NULL AND pinned = 0
+                ORDER BY updated_at DESC
+                LIMIT -1 OFFSET ?1
+                "#,
+            )?;
+            let rows = stmt.query_map(params![max_history], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
+
+        for id in &ids {
+            self.delete_clip(id)?;
+        }
+
+        Ok(ids.len())
+    }
+
     pub fn stats(&self) -> Result<StoreStats> {
         let clip_count = self.conn.query_row(
             "SELECT COUNT(*) FROM clips WHERE deleted_at IS NULL",
@@ -468,6 +699,37 @@ impl Store {
             .as_deref()
             .map(|value| value == "true")
             .unwrap_or(false);
+        settings.capture_enabled =
+            self.get_bool_setting("capture_enabled", settings.capture_enabled)?;
+        settings.capture_text_enabled =
+            self.get_bool_setting("capture_text_enabled", settings.capture_text_enabled)?;
+        settings.capture_html_enabled =
+            self.get_bool_setting("capture_html_enabled", settings.capture_html_enabled)?;
+        settings.capture_image_enabled =
+            self.get_bool_setting("capture_image_enabled", settings.capture_image_enabled)?;
+        settings.capture_files_enabled =
+            self.get_bool_setting("capture_files_enabled", settings.capture_files_enabled)?;
+        settings.capture_interval_ms =
+            self.get_u64_setting("capture_interval_ms", settings.capture_interval_ms)?;
+        settings.max_history = self.get_u32_setting("max_history", settings.max_history)?;
+        settings.duplicate_moves_to_top =
+            self.get_bool_setting("duplicate_moves_to_top", settings.duplicate_moves_to_top)?;
+        settings.hotkey_show_history =
+            self.get_string_setting("hotkey_show_history", settings.hotkey_show_history)?;
+        settings.hotkey_search =
+            self.get_string_setting("hotkey_search", settings.hotkey_search)?;
+        settings.hotkey_copy_selected =
+            self.get_string_setting("hotkey_copy_selected", settings.hotkey_copy_selected)?;
+        settings.hotkey_delete_selected =
+            self.get_string_setting("hotkey_delete_selected", settings.hotkey_delete_selected)?;
+        settings.hotkey_toggle_pin =
+            self.get_string_setting("hotkey_toggle_pin", settings.hotkey_toggle_pin)?;
+        settings.hotkey_edit_selected =
+            self.get_string_setting("hotkey_edit_selected", settings.hotkey_edit_selected)?;
+        settings.hotkey_capture_now =
+            self.get_string_setting("hotkey_capture_now", settings.hotkey_capture_now)?;
+        settings.hotkey_sync_now =
+            self.get_string_setting("hotkey_sync_now", settings.hotkey_sync_now)?;
         Ok(settings)
     }
 
@@ -485,6 +747,67 @@ impl Store {
                 "false"
             },
         )?;
+        self.set_setting(
+            "capture_enabled",
+            if settings.capture_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "capture_text_enabled",
+            if settings.capture_text_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "capture_html_enabled",
+            if settings.capture_html_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "capture_image_enabled",
+            if settings.capture_image_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "capture_files_enabled",
+            if settings.capture_files_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "capture_interval_ms",
+            &settings.capture_interval_ms.to_string(),
+        )?;
+        self.set_setting("max_history", &settings.max_history.to_string())?;
+        self.set_setting(
+            "duplicate_moves_to_top",
+            if settings.duplicate_moves_to_top {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting("hotkey_show_history", &settings.hotkey_show_history)?;
+        self.set_setting("hotkey_search", &settings.hotkey_search)?;
+        self.set_setting("hotkey_copy_selected", &settings.hotkey_copy_selected)?;
+        self.set_setting("hotkey_delete_selected", &settings.hotkey_delete_selected)?;
+        self.set_setting("hotkey_toggle_pin", &settings.hotkey_toggle_pin)?;
+        self.set_setting("hotkey_edit_selected", &settings.hotkey_edit_selected)?;
+        self.set_setting("hotkey_capture_now", &settings.hotkey_capture_now)?;
+        self.set_setting("hotkey_sync_now", &settings.hotkey_sync_now)?;
         Ok(())
     }
 
@@ -515,6 +838,32 @@ impl Store {
                 .execute("DELETE FROM settings WHERE key = ?1", params![key])?;
             Ok(())
         }
+    }
+
+    fn get_string_setting(&self, key: &str, default: String) -> Result<String> {
+        Ok(self.get_setting(key)?.unwrap_or(default))
+    }
+
+    fn get_bool_setting(&self, key: &str, default: bool) -> Result<bool> {
+        Ok(self
+            .get_setting(key)?
+            .as_deref()
+            .map(|value| value == "true")
+            .unwrap_or(default))
+    }
+
+    fn get_u32_setting(&self, key: &str, default: u32) -> Result<u32> {
+        Ok(self
+            .get_setting(key)?
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(default))
+    }
+
+    fn get_u64_setting(&self, key: &str, default: u64) -> Result<u64> {
+        Ok(self
+            .get_setting(key)?
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default))
     }
 
     fn find_active_by_hash(&self, hash: &str) -> Result<Option<Clip>> {
@@ -606,6 +955,13 @@ pub fn content_hash(formats: &[ClipFormat]) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -623,6 +979,31 @@ mod tests {
     }
 
     #[test]
+    fn stores_multi_format_clip_payloads() {
+        let store = Store::open_memory().unwrap();
+        let paths = vec!["/tmp/a.txt".to_owned(), "/tmp/b.png".to_owned()];
+        let clip = Clip::from_formats(
+            "device-a",
+            "2 files, image and html",
+            Some(paths.join("\n")),
+            vec![
+                ClipFormat::file_list(&paths),
+                ClipFormat::image_rgba(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]),
+                ClipFormat::html("<b>hello</b>"),
+            ],
+        );
+
+        let saved = store.save_clip_deduplicated(&clip, true).unwrap();
+        let loaded = store.get_clip(&saved.id).unwrap().unwrap();
+
+        assert!(loaded.formats[0].is_file_list());
+        assert_eq!(loaded.formats[0].file_list_paths().unwrap(), paths);
+        assert_eq!(loaded.formats[1].image_rgba_dimensions(), Some((2, 1)));
+        assert!(loaded.formats[2].is_html());
+        assert_eq!(loaded.formats[2].html_value(), Some("<b>hello</b>"));
+    }
+
+    #[test]
     fn deduplicates_active_text_by_hash() {
         let store = Store::open_memory().unwrap();
         let first = store.save_text_clip("device-a", "same text").unwrap();
@@ -630,6 +1011,43 @@ mod tests {
 
         assert_eq!(first.id, second.id);
         assert_eq!(store.list_clips(20).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn searches_updates_pins_and_prunes_history() {
+        let store = Store::open_memory().unwrap();
+        let keep = store.save_text_clip("device-a", "keep pinned").unwrap();
+        let edit = store.save_text_clip("device-a", "edit this").unwrap();
+        let old = store.save_text_clip("device-a", "old clip").unwrap();
+
+        let pinned = store.set_clip_pinned(&keep.id, true).unwrap().unwrap();
+        assert!(pinned.pinned);
+        assert_eq!(store.search_clips("edit", 10).unwrap()[0].id, edit.id);
+
+        let edited = store
+            .update_clip_text(&edit.id, "edited text body")
+            .unwrap()
+            .unwrap();
+        assert_eq!(edited.primary_text.as_deref(), Some("edited text body"));
+        assert_eq!(edited.formats[0], ClipFormat::text("edited text body"));
+
+        assert_eq!(store.enforce_max_history(1).unwrap(), 1);
+        assert!(
+            store
+                .get_clip(&old.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_some()
+        );
+        assert!(
+            store
+                .get_clip(&keep.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_none()
+        );
     }
 
     #[test]

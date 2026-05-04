@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
+use std::time::Duration;
 use yank_core::{Clip, PullClipsResponse, PushClipRequest, PushClipResponse};
 
 #[derive(Clone, Debug)]
@@ -28,7 +29,10 @@ pub struct SyncClient {
 impl SyncClient {
     pub fn new(config: SyncConfig) -> Self {
         Self {
-            http: Client::new(),
+            http: Client::builder()
+                .timeout(Duration::from_secs(8))
+                .build()
+                .expect("reqwest client should build"),
             config,
         }
     }
@@ -59,6 +63,17 @@ impl SyncClient {
             .context("server rejected clip pull")?
             .json::<PullClipsResponse>()
             .context("decoding clip pull response")
+    }
+
+    pub fn delete_clip(&self, id: &str) -> Result<()> {
+        self.http
+            .delete(format!("{}/api/clips/{}", self.config.server_url, id))
+            .bearer_auth(&self.config.token)
+            .send()
+            .context("deleting clip on yank server")?
+            .error_for_status()
+            .context("server rejected clip delete")?;
+        Ok(())
     }
 }
 

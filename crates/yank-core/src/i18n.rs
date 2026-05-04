@@ -42,4 +42,14 @@ mod tests {
             assert!(bundle.messages.contains_key("admin.refresh"));
         }
     }
+
+    #[test]
+    fn bundled_i18n_files_have_matching_keys() {
+        let en = bundle(Language::En);
+        let zh = bundle(Language::Zh);
+        let en_keys = en.messages.keys().collect::<Vec<_>>();
+        let zh_keys = zh.messages.keys().collect::<Vec<_>>();
+
+        assert_eq!(en_keys, zh_keys);
+    }
 }
