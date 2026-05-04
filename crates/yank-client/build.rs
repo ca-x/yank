@@ -42,6 +42,12 @@ const EMBEDDED_FONTS: &[EmbeddedFont] = &[
         file_name: "LiberationMono-Regular.ttf",
     },
     EmbeddedFont {
+        const_name: "NOTO_SANS_REGULAR",
+        package: "makepad-widgets",
+        version: "1.0.0",
+        file_name: "NotoSans-Regular.ttf",
+    },
+    EmbeddedFont {
         const_name: "FONT_AWESOME_SOLID",
         package: "makepad-widgets",
         version: "1.0.0",

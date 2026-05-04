@@ -3,9 +3,9 @@ use arboard::{Clipboard, Error as ClipboardError, ImageData};
 use makepad_widgets::makepad_draw::text::{font::FontId, fonts::Fonts, loader::FontDefinition};
 use makepad_widgets::*;
 use std::{
-    any::TypeId,
     borrow::Cow,
     cell::RefCell,
+    env, fs,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -20,7 +20,6 @@ use yank_core::{
 
 const HISTORY_ROWS: usize = 20;
 const MIN_CAPTURE_INTERVAL_MS: u64 = 250;
-const MAKEPAD_PACKAGE_ROOT: &str = "makepad";
 
 include!(concat!(env!("OUT_DIR"), "/embedded_makepad_fonts.rs"));
 
@@ -1810,76 +1809,74 @@ fn main() {
         }
     }))));
 
-    register_empty_makepad_main_module(&mut cx.borrow_mut());
+    App::register_main_module(&mut cx.borrow_mut());
     cx.borrow_mut()
         .init_websockets(std::option_env!("MAKEPAD_STUDIO_HTTP").unwrap_or(""));
     if std::env::args().any(|value| value == "--stdin-loop") {
         cx.borrow_mut().in_makepad_studio = true;
     }
     live_design(&mut cx.borrow_mut());
-    cx.borrow_mut().live_registry.borrow_mut().package_root = Some(MAKEPAD_PACKAGE_ROOT.to_owned());
+    let makepad_package_root = prepare_embedded_makepad_package_root();
+    cx.borrow_mut().live_registry.borrow_mut().package_root = Some(makepad_package_root.clone());
     cx.borrow_mut().init_cx_os();
-    App::register_main_module(&mut cx.borrow_mut());
-    register_embedded_makepad_fonts(&mut cx.borrow_mut());
+    register_embedded_makepad_fonts(&mut cx.borrow_mut(), &makepad_package_root);
     Cx::event_loop(cx);
 }
 
-fn register_empty_makepad_main_module(cx: &mut Cx) {
-    cx.live_registry.borrow_mut().main_module = Some(LiveTypeInfo {
-        live_type: TypeId::of::<()>(),
-        type_name: LiveId::from_str_with_lut("YankEmptyMain").expect("valid live id"),
-        module_id: LiveModuleId::from_str("yank::empty").expect("valid live module id"),
-        live_ignore: true,
-        fields: Vec::new(),
-    });
-}
-
-fn register_embedded_makepad_fonts(cx: &mut Cx) {
+fn register_embedded_makepad_fonts(cx: &mut Cx, package_root: &str) {
     CxDraw::lazy_construct_fonts(cx);
     let fonts = cx.get_global::<Rc<RefCell<Fonts>>>().clone();
     let mut fonts = fonts.borrow_mut();
 
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("IBMPlexSans-Text.ttf"),
+        &makepad_widget_font_path(package_root, "IBMPlexSans-Text.ttf"),
         IBM_PLEX_SANS_TEXT,
         &[-0.1, 0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("IBMPlexSans-SemiBold.ttf"),
+        &makepad_widget_font_path(package_root, "IBMPlexSans-SemiBold.ttf"),
         IBM_PLEX_SANS_SEMIBOLD,
         &[-0.1, 0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("IBMPlexSans-Italic.ttf"),
+        &makepad_widget_font_path(package_root, "IBMPlexSans-Italic.ttf"),
         IBM_PLEX_SANS_ITALIC,
         &[-0.1, 0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("IBMPlexSans-BoldItalic.ttf"),
+        &makepad_widget_font_path(package_root, "IBMPlexSans-BoldItalic.ttf"),
         IBM_PLEX_SANS_BOLD_ITALIC,
         &[-0.1, 0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("LiberationMono-Regular.ttf"),
+        &makepad_widget_font_path(package_root, "LiberationMono-Regular.ttf"),
         LIBERATION_MONO_REGULAR,
         &[0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("fa-solid-900.ttf"),
+        &makepad_widget_font_path(package_root, "fa-solid-900.ttf"),
         FONT_AWESOME_SOLID,
         &[0.0],
     );
     register_multipart_font_variants(
         &mut fonts,
         &[
-            makepad_font_crate_path("makepad_fonts_chinese_regular", "LXGWWenKaiRegular.ttf"),
-            makepad_font_crate_path("makepad_fonts_chinese_regular_2", "LXGWWenKaiRegular.ttf.2"),
+            makepad_font_crate_path(
+                package_root,
+                "makepad_fonts_chinese_regular",
+                "LXGWWenKaiRegular.ttf",
+            ),
+            makepad_font_crate_path(
+                package_root,
+                "makepad_fonts_chinese_regular_2",
+                "LXGWWenKaiRegular.ttf.2",
+            ),
         ],
         &[LXGW_WENKAI_REGULAR, LXGW_WENKAI_REGULAR_2],
         &[0.0],
@@ -1887,45 +1884,53 @@ fn register_embedded_makepad_fonts(cx: &mut Cx) {
     register_multipart_font_variants(
         &mut fonts,
         &[
-            makepad_font_crate_path("makepad_fonts_chinese_bold", "LXGWWenKaiBold.ttf"),
-            makepad_font_crate_path("makepad_fonts_chinese_bold_2", "LXGWWenKaiBold.ttf.2"),
+            makepad_font_crate_path(
+                package_root,
+                "makepad_fonts_chinese_bold",
+                "LXGWWenKaiBold.ttf",
+            ),
+            makepad_font_crate_path(
+                package_root,
+                "makepad_fonts_chinese_bold_2",
+                "LXGWWenKaiBold.ttf.2",
+            ),
         ],
         &[LXGW_WENKAI_BOLD, LXGW_WENKAI_BOLD_2],
         &[0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_font_crate_path("makepad_fonts_emoji", "NotoColorEmoji.ttf"),
+        &makepad_font_crate_path(package_root, "makepad_fonts_emoji", "NotoColorEmoji.ttf"),
         NOTO_COLOR_EMOJI,
         &[0.0],
     );
 
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("LXGWWenKaiRegular.ttf"),
+        &makepad_widget_font_path(package_root, "LXGWWenKaiRegular.ttf"),
         LXGW_WENKAI_REGULAR,
         &[0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("LXGWWenKaiBold.ttf"),
+        &makepad_widget_font_path(package_root, "LXGWWenKaiBold.ttf"),
         LXGW_WENKAI_BOLD,
         &[0.0],
     );
     register_font_variants(
         &mut fonts,
-        &makepad_widget_font_path("NotoColorEmoji.ttf"),
+        &makepad_widget_font_path(package_root, "NotoColorEmoji.ttf"),
         NOTO_COLOR_EMOJI,
         &[0.0],
     );
 }
 
-fn makepad_widget_font_path(file_name: &str) -> String {
-    makepad_font_crate_path("makepad_widgets", file_name)
+fn makepad_widget_font_path(package_root: &str, file_name: &str) -> String {
+    makepad_font_crate_path(package_root, "makepad_widgets", file_name)
 }
 
-fn makepad_font_crate_path(crate_name: &str, file_name: &str) -> String {
-    format!("{MAKEPAD_PACKAGE_ROOT}/{crate_name}/resources/{file_name}")
+fn makepad_font_crate_path(package_root: &str, crate_name: &str, file_name: &str) -> String {
+    format!("{package_root}/{crate_name}/resources/{file_name}")
 }
 
 fn register_font_variants(fonts: &mut Fonts, path: &str, data: &'static [u8], ascenders: &[f32]) {
@@ -1982,4 +1987,130 @@ fn makepad_font_id(paths: &[String], ascender: f32, descender: f32) -> FontId {
         .bytes_append(&ascender.to_be_bytes())
         .bytes_append(&descender.to_be_bytes());
     FontId::from(live_id.0)
+}
+
+struct EmbeddedMakepadResource {
+    crate_name: &'static str,
+    file_name: &'static str,
+    data: &'static [u8],
+}
+
+const EMBEDDED_MAKEPAD_RESOURCES: &[EmbeddedMakepadResource] = &[
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "IBMPlexSans-Text.ttf",
+        data: IBM_PLEX_SANS_TEXT,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "IBMPlexSans-SemiBold.ttf",
+        data: IBM_PLEX_SANS_SEMIBOLD,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "IBMPlexSans-Italic.ttf",
+        data: IBM_PLEX_SANS_ITALIC,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "IBMPlexSans-BoldItalic.ttf",
+        data: IBM_PLEX_SANS_BOLD_ITALIC,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "LiberationMono-Regular.ttf",
+        data: LIBERATION_MONO_REGULAR,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "NotoSans-Regular.ttf",
+        data: NOTO_SANS_REGULAR,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "fa-solid-900.ttf",
+        data: FONT_AWESOME_SOLID,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "LXGWWenKaiRegular.ttf",
+        data: LXGW_WENKAI_REGULAR,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "LXGWWenKaiBold.ttf",
+        data: LXGW_WENKAI_BOLD,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_widgets",
+        file_name: "NotoColorEmoji.ttf",
+        data: NOTO_COLOR_EMOJI,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_fonts_chinese_regular",
+        file_name: "LXGWWenKaiRegular.ttf",
+        data: LXGW_WENKAI_REGULAR,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_fonts_chinese_regular_2",
+        file_name: "LXGWWenKaiRegular.ttf.2",
+        data: LXGW_WENKAI_REGULAR_2,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_fonts_chinese_bold",
+        file_name: "LXGWWenKaiBold.ttf",
+        data: LXGW_WENKAI_BOLD,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_fonts_chinese_bold_2",
+        file_name: "LXGWWenKaiBold.ttf.2",
+        data: LXGW_WENKAI_BOLD_2,
+    },
+    EmbeddedMakepadResource {
+        crate_name: "makepad_fonts_emoji",
+        file_name: "NotoColorEmoji.ttf",
+        data: NOTO_COLOR_EMOJI,
+    },
+];
+
+fn prepare_embedded_makepad_package_root() -> String {
+    let root = env::var_os("YANK_MAKEPAD_RESOURCE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            env::temp_dir()
+                .join("yank")
+                .join("makepad-resources")
+                .join(env!("CARGO_PKG_VERSION"))
+        });
+
+    materialize_embedded_makepad_resources(&root).unwrap_or_else(|error| {
+        panic!(
+            "could not prepare embedded Makepad resources in {}: {error}",
+            root.display()
+        )
+    });
+    root.to_string_lossy().replace('\\', "/")
+}
+
+fn materialize_embedded_makepad_resources(root: &Path) -> Result<()> {
+    for resource in EMBEDDED_MAKEPAD_RESOURCES {
+        let path = root
+            .join(resource.crate_name)
+            .join("resources")
+            .join(resource.file_name);
+        write_embedded_makepad_resource(&path, resource.data)?;
+    }
+    Ok(())
+}
+
+fn write_embedded_makepad_resource(path: &Path, data: &[u8]) -> Result<()> {
+    if fs::read(path).is_ok_and(|existing| existing == data) {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, data)?;
+    Ok(())
 }
