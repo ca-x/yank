@@ -1,0 +1,59 @@
+name: Binaries
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: binaries-${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux-x86_64
+            client: target/release/yank-client
+            server: target/release/yank-server
+          - os: macos-latest
+            artifact: macos-arm64
+            client: target/release/yank-client
+            server: target/release/yank-server
+          - os: windows-latest
+            artifact: windows-x86_64
+            client: target/release/yank-client.exe
+            server: target/release/yank-server.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxcursor-dev libasound2-dev libpulse-dev
+
+      - name: Build release binaries
+        run: cargo build --locked --release -p yank-client -p yank-server
+
+      - name: Upload client binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: yank-client-${{ matrix.artifact }}
+          path: ${{ matrix.client }}
+          if-no-files-found: error
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: yank-server-${{ matrix.artifact }}
+          path: ${{ matrix.server }}
+          if-no-files-found: error
