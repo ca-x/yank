@@ -63,7 +63,7 @@ jobs:
           timeout 10s xvfb-run -a "${{ matrix.client }}" > client-smoke.log 2>&1
           status=$?
           cat client-smoke.log
-          if grep -E "Cannot find main file id|Could not load resource|File! open failed" client-smoke.log; then
+          if grep -E "Apply error|no matching field|Cannot find main file id|Could not load resource|File! open failed|RightWrap does not support fill childnodes" client-smoke.log; then
             exit 1
           fi
           if grep -q "panicked at" client-smoke.log && ! grep -q "can't load LibEGL" client-smoke.log; then

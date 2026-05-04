@@ -81,7 +81,7 @@ live_design! {
                         }
 
                         search_bar = <View> {
-                            flow: RightWrap,
+                            flow: Right,
                             width: Fill,
                             height: Fit,
                             spacing: 8,
@@ -91,7 +91,7 @@ live_design! {
                         }
 
                         workspace = <View> {
-                            flow: RightWrap,
+                            flow: Right,
                             width: Fill,
                             height: Fit,
                             spacing: 16,
@@ -138,8 +138,7 @@ live_design! {
                                 edit_input = <TextInput> {
                                     width: Fill,
                                     height: 116,
-                                    empty_text: "",
-                                    layout: { flow: RightWrap }
+                                    empty_text: ""
                                 }
                                 detail_actions = <View> {
                                     flow: RightWrap,
