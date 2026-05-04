@@ -1,0 +1,19 @@
+[package]
+name = "yank-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+arboard.workspace = true
+directories.workspace = true
+makepad-widgets.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+yank-core = { path = "../yank-core" }
+
+[[bin]]
+name = "yank-client"
+path = "src/main.rs"
+test = false
