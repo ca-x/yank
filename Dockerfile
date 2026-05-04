@@ -1,6 +1,9 @@
 FROM rust:1-bookworm AS builder
 
 WORKDIR /app
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
+    && git config --global url."https://github.com/".insteadOf "git@github.com:"
 COPY . .
 
 RUN cargo build --locked --release -p yank-server

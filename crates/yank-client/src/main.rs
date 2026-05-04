@@ -31,190 +31,172 @@ enum CaptureFormatKind {
     Files,
 }
 
-live_design! {
-    link widgets;
-    use link::widgets::*;
-    use link::theme::*;
+script_mod! {
+    use mod.prelude.widgets.*
 
-    App = {{App}} {
-        ui: <Root> {
-            main_window = <Window> {
-                body = <View> {
-                    flow: Overlay,
-                    width: Fill,
-                    height: Fill,
+    startup() do #(App::script_component(vm)){
+        ui: Root{
+            main_window := Window{
+                window.inner_size: vec2(1280, 860)
+                body +: {
+                    content := ScrollYView{
+                        width: Fill
+                        height: Fill
+                        flow: Down
+                        spacing: 14
+                        padding: Inset{left: 24 right: 24 top: 22 bottom: 24}
 
-                    light_surface = <View> {
-                        show_bg: true,
-                        draw_bg: { color: #f5f1e8 }
-                        width: Fill,
-                        height: Fill,
-                    }
+                        title := H1{text: ""}
+                        status := TextBox{width: Fill height: Fit text: ""}
 
-                    dark_surface = <View> {
-                        show_bg: true,
-                        draw_bg: { color: #111716 }
-                        width: Fill,
-                        height: Fill,
-                    }
-
-                    content = <ScrollYView> {
-                        flow: Down,
-                        width: Fill,
-                        height: Fill,
-                        spacing: 14,
-                        padding: { left: 24, right: 24, top: 22, bottom: 24 }
-
-                        title = <H1> { text: "" }
-                        status = <TextBox> { text: "" }
-
-                        toolbar = <View> {
-                            flow: RightWrap,
-                            height: Fit,
-                            width: Fill,
-                            spacing: 8,
-                            capture_toggle_button = <Button> { text: "" }
-                            capture_button = <Button> { text: "" }
-                            sync_button = <Button> { text: "" }
-                            theme_button = <Button> { text: "" }
-                            language_button = <Button> { text: "" }
+                        toolbar := View{
+                            width: Fill
+                            height: Fit
+                            flow: Right {wrap: true}
+                            spacing: 8
+                            capture_toggle_button := Button{text: ""}
+                            capture_button := Button{text: ""}
+                            sync_button := Button{text: ""}
+                            theme_button := Button{text: ""}
+                            language_button := Button{text: ""}
                         }
 
-                        search_bar = <View> {
-                            flow: Right,
-                            width: Fill,
-                            height: Fit,
-                            spacing: 8,
-                            search_label = <Label> { text: "" }
-                            search_input = <TextInput> { width: Fill, empty_text: "" }
-                            clear_search_button = <Button> { text: "" }
+                        search_bar := View{
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            spacing: 8
+                            search_label := Label{text: ""}
+                            search_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            clear_search_button := Button{text: ""}
                         }
 
-                        workspace = <View> {
-                            flow: Right,
-                            width: Fill,
-                            height: Fit,
-                            spacing: 16,
+                        workspace := View{
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            spacing: 16
 
-                            history_panel = <View> {
-                                flow: Down,
-                                width: 460,
-                                height: Fit,
-                                spacing: 7,
-                                history_title = <H2> { text: "" }
-                                clip_count = <Label> { text: "" }
-                                row_0 = <Button> { width: Fill, text: "" }
-                                row_1 = <Button> { width: Fill, text: "" }
-                                row_2 = <Button> { width: Fill, text: "" }
-                                row_3 = <Button> { width: Fill, text: "" }
-                                row_4 = <Button> { width: Fill, text: "" }
-                                row_5 = <Button> { width: Fill, text: "" }
-                                row_6 = <Button> { width: Fill, text: "" }
-                                row_7 = <Button> { width: Fill, text: "" }
-                                row_8 = <Button> { width: Fill, text: "" }
-                                row_9 = <Button> { width: Fill, text: "" }
-                                row_10 = <Button> { width: Fill, text: "" }
-                                row_11 = <Button> { width: Fill, text: "" }
-                                row_12 = <Button> { width: Fill, text: "" }
-                                row_13 = <Button> { width: Fill, text: "" }
-                                row_14 = <Button> { width: Fill, text: "" }
-                                row_15 = <Button> { width: Fill, text: "" }
-                                row_16 = <Button> { width: Fill, text: "" }
-                                row_17 = <Button> { width: Fill, text: "" }
-                                row_18 = <Button> { width: Fill, text: "" }
-                                row_19 = <Button> { width: Fill, text: "" }
+                            history_panel := View{
+                                width: 460
+                                height: Fit
+                                flow: Down
+                                spacing: 7
+                                history_title := H2{text: ""}
+                                clip_count := Label{text: ""}
+                                row_0 := Button{width: Fill text: ""}
+                                row_1 := Button{width: Fill text: ""}
+                                row_2 := Button{width: Fill text: ""}
+                                row_3 := Button{width: Fill text: ""}
+                                row_4 := Button{width: Fill text: ""}
+                                row_5 := Button{width: Fill text: ""}
+                                row_6 := Button{width: Fill text: ""}
+                                row_7 := Button{width: Fill text: ""}
+                                row_8 := Button{width: Fill text: ""}
+                                row_9 := Button{width: Fill text: ""}
+                                row_10 := Button{width: Fill text: ""}
+                                row_11 := Button{width: Fill text: ""}
+                                row_12 := Button{width: Fill text: ""}
+                                row_13 := Button{width: Fill text: ""}
+                                row_14 := Button{width: Fill text: ""}
+                                row_15 := Button{width: Fill text: ""}
+                                row_16 := Button{width: Fill text: ""}
+                                row_17 := Button{width: Fill text: ""}
+                                row_18 := Button{width: Fill text: ""}
+                                row_19 := Button{width: Fill text: ""}
                             }
 
-                            detail_panel = <View> {
-                                flow: Down,
-                                width: Fill,
-                                height: Fit,
-                                spacing: 10,
+                            detail_panel := View{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 10
 
-                                selected_title = <H2> { text: "" }
-                                selected_meta = <Label> { text: "" }
-                                preview = <TextBox> { width: Fill, text: "" }
-                                edit_label = <Label> { text: "" }
-                                edit_input = <TextInput> {
-                                    width: Fill,
-                                    height: 116,
+                                selected_title := H2{text: ""}
+                                selected_meta := Label{width: Fill text: ""}
+                                preview := TextBox{width: Fill height: Fit text: ""}
+                                edit_label := Label{text: ""}
+                                edit_input := TextInput{
+                                    width: Fill
+                                    height: 116
+                                    is_multiline: true
                                     empty_text: ""
                                 }
-                                detail_actions = <View> {
-                                    flow: RightWrap,
-                                    width: Fill,
-                                    height: Fit,
-                                    spacing: 8,
-                                    copy_selected_button = <Button> { text: "" }
-                                    save_edit_button = <Button> { text: "" }
-                                    pin_button = <Button> { text: "" }
-                                    delete_button = <Button> { text: "" }
+                                detail_actions := View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right {wrap: true}
+                                    spacing: 8
+                                    copy_selected_button := Button{text: ""}
+                                    save_edit_button := Button{text: ""}
+                                    pin_button := Button{text: ""}
+                                    delete_button := Button{text: ""}
                                 }
                             }
                         }
 
-                        settings_title = <H2> { text: "" }
-                        local_status = <TextBox> { text: "" }
+                        settings_title := H2{text: ""}
+                        local_status := TextBox{width: Fill height: Fit text: ""}
 
-                        behavior_settings = <View> {
-                            flow: RightWrap,
-                            width: Fill,
-                            height: Fit,
-                            spacing: 8,
-                            device_id_label = <Label> { text: "" }
-                            device_id_value = <TextInput> { width: 300, empty_text: "", is_read_only: true }
-                            copy_device_id_button = <Button> { text: "" }
-                            duplicate_policy_label = <Label> { text: "" }
-                            duplicate_policy_button = <Button> { text: "" }
-                            capture_formats_label = <Label> { text: "" }
-                            capture_text_button = <Button> { text: "" }
-                            capture_html_button = <Button> { text: "" }
-                            capture_image_button = <Button> { text: "" }
-                            capture_files_button = <Button> { text: "" }
-                            max_history_label = <Label> { text: "" }
-                            max_history_input = <TextInput> { width: 120, empty_text: "" }
-                            capture_interval_label = <Label> { text: "" }
-                            capture_interval_input = <TextInput> { width: 120, empty_text: "" }
-                            save_behavior_button = <Button> { text: "" }
+                        behavior_settings := View{
+                            width: Fill
+                            height: Fit
+                            flow: Right {wrap: true}
+                            spacing: 8
+                            device_id_label := Label{text: ""}
+                            device_id_value := TextInput{width: 300 height: Fit empty_text: "" is_read_only: true}
+                            copy_device_id_button := Button{text: ""}
+                            duplicate_policy_label := Label{text: ""}
+                            duplicate_policy_button := Button{text: ""}
+                            capture_formats_label := Label{text: ""}
+                            capture_text_button := Button{text: ""}
+                            capture_html_button := Button{text: ""}
+                            capture_image_button := Button{text: ""}
+                            capture_files_button := Button{text: ""}
+                            max_history_label := Label{text: ""}
+                            max_history_input := TextInput{width: 120 height: Fit empty_text: ""}
+                            capture_interval_label := Label{text: ""}
+                            capture_interval_input := TextInput{width: 120 height: Fit empty_text: ""}
+                            save_behavior_button := Button{text: ""}
                         }
 
-                        sync_settings = <View> {
-                            flow: Down,
-                            width: Fill,
-                            height: Fit,
-                            spacing: 8,
-                            sync_settings_title = <H2> { text: "" }
-                            server_label = <Label> { text: "" }
-                            server_input = <TextInput> { width: Fill, empty_text: "" }
-                            token_label = <Label> { text: "" }
-                            token_input = <TextInput> { width: Fill, empty_text: "", is_password: true }
-                            save_settings_button = <Button> { text: "" }
+                        sync_settings := View{
+                            width: Fill
+                            height: Fit
+                            flow: Down
+                            spacing: 8
+                            sync_settings_title := H2{text: ""}
+                            server_label := Label{text: ""}
+                            server_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            token_label := Label{text: ""}
+                            token_input := TextInput{width: Fill height: Fit empty_text: "" is_password: true}
+                            save_settings_button := Button{text: ""}
                         }
 
-                        hotkeys_settings = <View> {
-                            flow: Down,
-                            width: Fill,
-                            height: Fit,
-                            spacing: 8,
-                            hotkeys_title = <H2> { text: "" }
-                            hotkeys_status = <Label> { text: "" }
-                            hotkey_show_label = <Label> { text: "" }
-                            hotkey_show_input = <TextInput> { width: Fill, empty_text: "" }
-                            hotkey_search_label = <Label> { text: "" }
-                            hotkey_search_input = <TextInput> { width: Fill, empty_text: "" }
-                            hotkey_copy_label = <Label> { text: "" }
-                            hotkey_copy_input = <TextInput> { width: Fill, empty_text: "" }
-                            hotkey_delete_label = <Label> { text: "" }
-                            hotkey_delete_input = <TextInput> { width: Fill, empty_text: "" }
-                            hotkey_pin_label = <Label> { text: "" }
-                            hotkey_pin_input = <TextInput> { width: Fill, empty_text: "" }
-                            hotkey_edit_label = <Label> { text: "" }
-                            hotkey_edit_input = <TextInput> { width: Fill, empty_text: "" }
-                            hotkey_capture_label = <Label> { text: "" }
-                            hotkey_capture_input = <TextInput> { width: Fill, empty_text: "" }
-                            hotkey_sync_label = <Label> { text: "" }
-                            hotkey_sync_input = <TextInput> { width: Fill, empty_text: "" }
-                            save_hotkeys_button = <Button> { text: "" }
+                        hotkeys_settings := View{
+                            width: Fill
+                            height: Fit
+                            flow: Down
+                            spacing: 8
+                            hotkeys_title := H2{text: ""}
+                            hotkeys_status := Label{text: ""}
+                            hotkey_show_label := Label{text: ""}
+                            hotkey_show_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            hotkey_search_label := Label{text: ""}
+                            hotkey_search_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            hotkey_copy_label := Label{text: ""}
+                            hotkey_copy_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            hotkey_delete_label := Label{text: ""}
+                            hotkey_delete_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            hotkey_pin_label := Label{text: ""}
+                            hotkey_pin_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            hotkey_edit_label := Label{text: ""}
+                            hotkey_edit_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            hotkey_capture_label := Label{text: ""}
+                            hotkey_capture_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            hotkey_sync_label := Label{text: ""}
+                            hotkey_sync_input := TextInput{width: Fill height: Fit empty_text: ""}
+                            save_hotkeys_button := Button{text: ""}
                         }
                     }
                 }
@@ -223,7 +205,7 @@ live_design! {
     }
 }
 
-#[derive(Live, LiveHook)]
+#[derive(Script, ScriptHook)]
 pub struct App {
     #[live]
     ui: WidgetRef,
@@ -235,13 +217,63 @@ pub struct App {
     poll_timer: Timer,
 }
 
-impl LiveRegister for App {
-    fn live_register(cx: &mut Cx) {
-        makepad_widgets::live_design(cx);
+fn startup_theme() -> Theme {
+    paths::database_path()
+        .ok()
+        .and_then(|path| Store::open(path).ok())
+        .and_then(|store| store.settings().ok())
+        .map(|settings| settings.theme)
+        .unwrap_or_default()
+}
+
+fn register_makepad_widgets(vm: &mut ScriptVm, theme: Theme) {
+    makepad_widgets::theme_mod(vm);
+    apply_makepad_theme_to_vm(vm, theme);
+    makepad_widgets::widgets_mod(vm);
+}
+
+fn apply_makepad_theme_to_vm(vm: &mut ScriptVm, theme: Theme) {
+    match theme {
+        Theme::Light => {
+            script_eval!(vm, {
+                mod.theme = mod.themes.light
+            });
+        }
+        Theme::Dark => {
+            script_eval!(vm, {
+                mod.theme = mod.themes.dark
+            });
+        }
     }
 }
 
+fn apply_makepad_theme_to_cx(cx: &mut Cx, theme: Theme) {
+    match theme {
+        Theme::Light => {
+            script_eval!(cx, {
+                mod.theme = mod.themes.light
+                mod.prelude.widgets_internal.theme = mod.themes.light
+                mod.prelude.widgets.theme = mod.themes.light
+            });
+        }
+        Theme::Dark => {
+            script_eval!(cx, {
+                mod.theme = mod.themes.dark
+                mod.prelude.widgets_internal.theme = mod.themes.dark
+                mod.prelude.widgets.theme = mod.themes.dark
+            });
+        }
+    }
+    cx.request_script_reapply();
+    cx.redraw_all();
+}
+
 impl AppMain for App {
+    fn script_mod(vm: &mut ScriptVm) -> ScriptValue {
+        register_makepad_widgets(vm, startup_theme());
+        self::script_mod(vm)
+    }
+
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
         if !self.initialized {
             self.initialize(cx);
@@ -254,7 +286,7 @@ impl AppMain for App {
 
 impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
-        if let Some(query) = self.text_input(id!(search_input)).changed(actions) {
+        if let Some(query) = self.text_input(cx, ids!(search_input)).changed(actions) {
             if let Some(state) = &mut self.state {
                 state.query = query;
             }
@@ -262,78 +294,91 @@ impl MatchEvent for App {
         }
 
         if self
-            .text_input(id!(search_input))
+            .text_input(cx, ids!(search_input))
             .returned(actions)
             .is_some()
         {
             self.copy_selected(cx);
         }
 
-        if self.text_input(id!(edit_input)).returned(actions).is_some() {
+        if self
+            .text_input(cx, ids!(edit_input))
+            .returned(actions)
+            .is_some()
+        {
             self.save_selected_edit(cx);
         }
 
         for index in 0..HISTORY_ROWS {
-            if self.button(row_id(index)).clicked(actions) {
+            if self.button(cx, row_id(index)).clicked(actions) {
                 self.select_clip_by_index(cx, index);
             }
         }
 
-        if self.button(id!(clear_search_button)).clicked(actions) {
+        if self.button(cx, ids!(clear_search_button)).clicked(actions) {
             self.clear_search(cx);
         }
-        if self.button(id!(copy_device_id_button)).clicked(actions) {
+        if self
+            .button(cx, ids!(copy_device_id_button))
+            .clicked(actions)
+        {
             self.copy_device_id(cx);
         }
-        if self.button(id!(duplicate_policy_button)).clicked(actions) {
+        if self
+            .button(cx, ids!(duplicate_policy_button))
+            .clicked(actions)
+        {
             self.toggle_duplicate_policy(cx);
         }
-        if self.button(id!(capture_text_button)).clicked(actions) {
+        if self.button(cx, ids!(capture_text_button)).clicked(actions) {
             self.toggle_capture_format(cx, CaptureFormatKind::Text);
         }
-        if self.button(id!(capture_html_button)).clicked(actions) {
+        if self.button(cx, ids!(capture_html_button)).clicked(actions) {
             self.toggle_capture_format(cx, CaptureFormatKind::Html);
         }
-        if self.button(id!(capture_image_button)).clicked(actions) {
+        if self.button(cx, ids!(capture_image_button)).clicked(actions) {
             self.toggle_capture_format(cx, CaptureFormatKind::Image);
         }
-        if self.button(id!(capture_files_button)).clicked(actions) {
+        if self.button(cx, ids!(capture_files_button)).clicked(actions) {
             self.toggle_capture_format(cx, CaptureFormatKind::Files);
         }
-        if self.button(id!(capture_toggle_button)).clicked(actions) {
+        if self
+            .button(cx, ids!(capture_toggle_button))
+            .clicked(actions)
+        {
             self.toggle_capture(cx);
         }
-        if self.button(id!(capture_button)).clicked(actions) {
+        if self.button(cx, ids!(capture_button)).clicked(actions) {
             self.capture_clipboard(cx);
         }
-        if self.button(id!(copy_selected_button)).clicked(actions) {
+        if self.button(cx, ids!(copy_selected_button)).clicked(actions) {
             self.copy_selected(cx);
         }
-        if self.button(id!(save_edit_button)).clicked(actions) {
+        if self.button(cx, ids!(save_edit_button)).clicked(actions) {
             self.save_selected_edit(cx);
         }
-        if self.button(id!(pin_button)).clicked(actions) {
+        if self.button(cx, ids!(pin_button)).clicked(actions) {
             self.toggle_selected_pin(cx);
         }
-        if self.button(id!(delete_button)).clicked(actions) {
+        if self.button(cx, ids!(delete_button)).clicked(actions) {
             self.delete_selected(cx);
         }
-        if self.button(id!(sync_button)).clicked(actions) {
+        if self.button(cx, ids!(sync_button)).clicked(actions) {
             self.sync_now(cx);
         }
-        if self.button(id!(theme_button)).clicked(actions) {
+        if self.button(cx, ids!(theme_button)).clicked(actions) {
             self.toggle_theme(cx);
         }
-        if self.button(id!(language_button)).clicked(actions) {
+        if self.button(cx, ids!(language_button)).clicked(actions) {
             self.toggle_language(cx);
         }
-        if self.button(id!(save_behavior_button)).clicked(actions) {
+        if self.button(cx, ids!(save_behavior_button)).clicked(actions) {
             self.save_behavior_settings(cx);
         }
-        if self.button(id!(save_settings_button)).clicked(actions) {
+        if self.button(cx, ids!(save_settings_button)).clicked(actions) {
             self.save_connection_settings(cx);
         }
-        if self.button(id!(save_hotkeys_button)).clicked(actions) {
+        if self.button(cx, ids!(save_hotkeys_button)).clicked(actions) {
             self.save_hotkey_settings(cx);
         }
     }
@@ -349,7 +394,7 @@ impl MatchEvent for App {
             || self.shortcut_matches(|settings| &settings.hotkey_search, event)
         {
             self.refresh_history(cx);
-            self.widget(id!(search_input)).set_key_focus(cx);
+            self.widget(cx, ids!(search_input)).set_key_focus(cx);
             return;
         }
         if self.shortcut_matches(|settings| &settings.hotkey_copy_selected, event) {
@@ -365,7 +410,7 @@ impl MatchEvent for App {
             return;
         }
         if self.shortcut_matches(|settings| &settings.hotkey_edit_selected, event) {
-            self.widget(id!(edit_input)).set_key_focus(cx);
+            self.widget(cx, ids!(edit_input)).set_key_focus(cx);
             return;
         }
         if self.shortcut_matches(|settings| &settings.hotkey_capture_now, event) {
@@ -407,16 +452,16 @@ impl App {
         }
     }
 
-    fn button(&self, id: &[LiveId]) -> ButtonRef {
-        self.ui.widget(id).as_button()
+    fn button(&self, cx: &Cx, id: &[LiveId]) -> ButtonRef {
+        self.ui.button(cx, id)
     }
 
-    fn text_input(&self, id: &[LiveId]) -> TextInputRef {
-        self.ui.widget(id).as_text_input()
+    fn text_input(&self, cx: &Cx, id: &[LiveId]) -> TextInputRef {
+        self.ui.text_input(cx, id)
     }
 
-    fn widget(&self, id: &[LiveId]) -> WidgetRef {
-        self.ui.widget(id)
+    fn widget(&self, cx: &Cx, id: &[LiveId]) -> WidgetRef {
+        self.ui.widget(cx, id)
     }
 
     fn text(&self, key: &str) -> String {
@@ -441,53 +486,53 @@ impl App {
         let messages = &state.messages;
 
         for (id, key) in [
-            (id!(title), "app.title"),
-            (id!(capture_button), "app.capture"),
-            (id!(sync_button), "app.sync_now"),
-            (id!(language_button), "app.lang_toggle"),
-            (id!(search_label), "app.search"),
-            (id!(clear_search_button), "app.clear_search"),
-            (id!(history_title), "app.latest"),
-            (id!(selected_title), "app.no_selection"),
-            (id!(edit_label), "app.edit_text"),
-            (id!(copy_selected_button), "app.copy_selected"),
-            (id!(save_edit_button), "app.save_edit"),
-            (id!(delete_button), "app.delete"),
-            (id!(settings_title), "app.settings"),
-            (id!(device_id_label), "app.device_id"),
-            (id!(copy_device_id_button), "app.copy_device_id"),
-            (id!(duplicate_policy_label), "app.duplicate_policy"),
-            (id!(capture_formats_label), "app.capture_formats"),
-            (id!(max_history_label), "app.max_history"),
-            (id!(capture_interval_label), "app.capture_interval"),
-            (id!(save_behavior_button), "app.save_behavior"),
-            (id!(sync_settings_title), "app.sync_settings"),
-            (id!(server_label), "app.server"),
-            (id!(token_label), "app.token"),
-            (id!(save_settings_button), "app.save_settings"),
-            (id!(hotkeys_title), "app.hotkeys"),
-            (id!(hotkeys_status), "app.hotkeys_status"),
-            (id!(hotkey_show_label), "app.hotkey_show"),
-            (id!(hotkey_search_label), "app.hotkey_search"),
-            (id!(hotkey_copy_label), "app.hotkey_copy"),
-            (id!(hotkey_delete_label), "app.hotkey_delete"),
-            (id!(hotkey_pin_label), "app.hotkey_pin"),
-            (id!(hotkey_edit_label), "app.hotkey_edit"),
-            (id!(hotkey_capture_label), "app.hotkey_capture"),
-            (id!(hotkey_sync_label), "app.hotkey_sync"),
-            (id!(save_hotkeys_button), "app.save_hotkeys"),
+            (ids!(title), "app.title"),
+            (ids!(capture_button), "app.capture"),
+            (ids!(sync_button), "app.sync_now"),
+            (ids!(language_button), "app.lang_toggle"),
+            (ids!(search_label), "app.search"),
+            (ids!(clear_search_button), "app.clear_search"),
+            (ids!(history_title), "app.latest"),
+            (ids!(selected_title), "app.no_selection"),
+            (ids!(edit_label), "app.edit_text"),
+            (ids!(copy_selected_button), "app.copy_selected"),
+            (ids!(save_edit_button), "app.save_edit"),
+            (ids!(delete_button), "app.delete"),
+            (ids!(settings_title), "app.settings"),
+            (ids!(device_id_label), "app.device_id"),
+            (ids!(copy_device_id_button), "app.copy_device_id"),
+            (ids!(duplicate_policy_label), "app.duplicate_policy"),
+            (ids!(capture_formats_label), "app.capture_formats"),
+            (ids!(max_history_label), "app.max_history"),
+            (ids!(capture_interval_label), "app.capture_interval"),
+            (ids!(save_behavior_button), "app.save_behavior"),
+            (ids!(sync_settings_title), "app.sync_settings"),
+            (ids!(server_label), "app.server"),
+            (ids!(token_label), "app.token"),
+            (ids!(save_settings_button), "app.save_settings"),
+            (ids!(hotkeys_title), "app.hotkeys"),
+            (ids!(hotkeys_status), "app.hotkeys_status"),
+            (ids!(hotkey_show_label), "app.hotkey_show"),
+            (ids!(hotkey_search_label), "app.hotkey_search"),
+            (ids!(hotkey_copy_label), "app.hotkey_copy"),
+            (ids!(hotkey_delete_label), "app.hotkey_delete"),
+            (ids!(hotkey_pin_label), "app.hotkey_pin"),
+            (ids!(hotkey_edit_label), "app.hotkey_edit"),
+            (ids!(hotkey_capture_label), "app.hotkey_capture"),
+            (ids!(hotkey_sync_label), "app.hotkey_sync"),
+            (ids!(save_hotkeys_button), "app.save_hotkeys"),
         ] {
-            self.widget(id).set_text(cx, messages.text(key));
+            self.widget(cx, id).set_text(cx, messages.text(key));
         }
 
-        self.widget(id!(theme_button)).set_text(
+        self.widget(cx, ids!(theme_button)).set_text(
             cx,
             match state.settings.theme {
                 Theme::Light => messages.text("app.dark"),
                 Theme::Dark => messages.text("app.light"),
             },
         );
-        self.widget(id!(capture_toggle_button)).set_text(
+        self.widget(cx, ids!(capture_toggle_button)).set_text(
             cx,
             if state.settings.capture_enabled {
                 messages.text("app.capture_on")
@@ -495,7 +540,7 @@ impl App {
                 messages.text("app.capture_off")
             },
         );
-        self.widget(id!(duplicate_policy_button)).set_text(
+        self.widget(cx, ids!(duplicate_policy_button)).set_text(
             cx,
             if state.settings.duplicate_moves_to_top {
                 messages.text("app.duplicate_move_top")
@@ -505,31 +550,31 @@ impl App {
         );
         for (id, enabled, on_key, off_key) in [
             (
-                id!(capture_text_button),
+                ids!(capture_text_button),
                 state.settings.capture_text_enabled,
                 "app.capture_text_on",
                 "app.capture_text_off",
             ),
             (
-                id!(capture_html_button),
+                ids!(capture_html_button),
                 state.settings.capture_html_enabled,
                 "app.capture_html_on",
                 "app.capture_html_off",
             ),
             (
-                id!(capture_image_button),
+                ids!(capture_image_button),
                 state.settings.capture_image_enabled,
                 "app.capture_image_on",
                 "app.capture_image_off",
             ),
             (
-                id!(capture_files_button),
+                ids!(capture_files_button),
                 state.settings.capture_files_enabled,
                 "app.capture_files_on",
                 "app.capture_files_off",
             ),
         ] {
-            self.widget(id).set_text(
+            self.widget(cx, id).set_text(
                 cx,
                 if enabled {
                     messages.text(on_key)
@@ -539,51 +584,49 @@ impl App {
             );
         }
 
-        self.text_input(id!(search_input))
+        self.text_input(cx, ids!(search_input))
             .set_empty_text(cx, messages.text("app.search_placeholder").to_owned());
-        self.text_input(id!(edit_input))
+        self.text_input(cx, ids!(edit_input))
             .set_empty_text(cx, messages.text("app.edit_placeholder").to_owned());
-        self.text_input(id!(server_input))
+        self.text_input(cx, ids!(server_input))
             .set_empty_text(cx, messages.text("app.server_placeholder").to_owned());
-        self.text_input(id!(token_input))
+        self.text_input(cx, ids!(token_input))
             .set_empty_text(cx, messages.text("app.token_placeholder").to_owned());
-        self.text_input(id!(max_history_input))
+        self.text_input(cx, ids!(max_history_input))
             .set_empty_text(cx, messages.text("app.max_history_placeholder").to_owned());
-        self.text_input(id!(capture_interval_input)).set_empty_text(
-            cx,
-            messages.text("app.capture_interval_placeholder").to_owned(),
-        );
+        self.text_input(cx, ids!(capture_interval_input))
+            .set_empty_text(
+                cx,
+                messages.text("app.capture_interval_placeholder").to_owned(),
+            );
 
-        self.widget(id!(server_input))
+        self.widget(cx, ids!(server_input))
             .set_text(cx, state.settings.server_url.as_deref().unwrap_or(""));
-        self.widget(id!(token_input))
+        self.widget(cx, ids!(token_input))
             .set_text(cx, state.settings.token.as_deref().unwrap_or(""));
-        self.widget(id!(device_id_value))
+        self.widget(cx, ids!(device_id_value))
             .set_text(cx, &state.settings.device_id);
-        self.widget(id!(max_history_input))
+        self.widget(cx, ids!(max_history_input))
             .set_text(cx, &state.settings.max_history.to_string());
-        self.widget(id!(capture_interval_input))
+        self.widget(cx, ids!(capture_interval_input))
             .set_text(cx, &state.settings.capture_interval_ms.to_string());
-        self.widget(id!(hotkey_show_input))
+        self.widget(cx, ids!(hotkey_show_input))
             .set_text(cx, &state.settings.hotkey_show_history);
-        self.widget(id!(hotkey_search_input))
+        self.widget(cx, ids!(hotkey_search_input))
             .set_text(cx, &state.settings.hotkey_search);
-        self.widget(id!(hotkey_copy_input))
+        self.widget(cx, ids!(hotkey_copy_input))
             .set_text(cx, &state.settings.hotkey_copy_selected);
-        self.widget(id!(hotkey_delete_input))
+        self.widget(cx, ids!(hotkey_delete_input))
             .set_text(cx, &state.settings.hotkey_delete_selected);
-        self.widget(id!(hotkey_pin_input))
+        self.widget(cx, ids!(hotkey_pin_input))
             .set_text(cx, &state.settings.hotkey_toggle_pin);
-        self.widget(id!(hotkey_edit_input))
+        self.widget(cx, ids!(hotkey_edit_input))
             .set_text(cx, &state.settings.hotkey_edit_selected);
-        self.widget(id!(hotkey_capture_input))
+        self.widget(cx, ids!(hotkey_capture_input))
             .set_text(cx, &state.settings.hotkey_capture_now);
-        self.widget(id!(hotkey_sync_input))
+        self.widget(cx, ids!(hotkey_sync_input))
             .set_text(cx, &state.settings.hotkey_sync_now);
 
-        let light = state.settings.theme == Theme::Light;
-        self.widget(id!(light_surface)).set_visible(cx, light);
-        self.widget(id!(dark_surface)).set_visible(cx, !light);
         self.refresh_local_status(cx);
         self.refresh_detail(cx);
         self.ui.redraw(cx);
@@ -620,7 +663,7 @@ impl App {
                 ("{max}", state.settings.max_history.to_string()),
             ],
         );
-        self.widget(id!(local_status)).set_text(cx, &status);
+        self.widget(cx, ids!(local_status)).set_text(cx, &status);
     }
 
     fn refresh_history(&mut self, cx: &mut Cx) {
@@ -647,7 +690,7 @@ impl App {
             (clips, state.selected_id.clone(), count)
         };
 
-        self.widget(id!(clip_count)).set_text(
+        self.widget(cx, ids!(clip_count)).set_text(
             cx,
             &self.template("app.history_count", &[("{count}", count.to_string())]),
         );
@@ -657,16 +700,16 @@ impl App {
             if let Some(clip) = clips.get(index) {
                 let selected = selected_id.as_deref() == Some(clip.id.as_str());
                 let row_text = self.row_text(index, clip, selected);
-                self.widget(id).set_visible(cx, true);
-                self.widget(id).set_text(cx, &row_text);
+                self.widget(cx, id).set_visible(cx, true);
+                self.widget(cx, id).set_text(cx, &row_text);
             } else {
-                self.widget(id).set_visible(cx, index == 0);
+                self.widget(cx, id).set_visible(cx, index == 0);
                 let empty_text = if index == 0 {
                     self.text("app.empty")
                 } else {
                     String::new()
                 };
-                self.widget(id).set_text(cx, &empty_text);
+                self.widget(cx, id).set_text(cx, &empty_text);
             }
         }
 
@@ -727,7 +770,7 @@ impl App {
                 .and_then(|state| state.selected_position())
                 .map(|index| index + 1)
                 .unwrap_or(0);
-            self.widget(id!(selected_title)).set_text(
+            self.widget(cx, ids!(selected_title)).set_text(
                 cx,
                 &self.template("app.selected_title", &[("{index}", position.to_string())]),
             );
@@ -744,7 +787,7 @@ impl App {
                         .join(state.messages.text("app.list_separator"))
                 })
                 .unwrap_or_default();
-            self.widget(id!(selected_meta)).set_text(
+            self.widget(cx, ids!(selected_meta)).set_text(
                 cx,
                 &self.template(
                     "app.selected_meta",
@@ -759,22 +802,23 @@ impl App {
             );
             let preview = self.clip_preview(&clip);
             let editable_text = editable_text(&clip).unwrap_or_default();
-            self.widget(id!(preview)).set_text(cx, &preview);
-            self.widget(id!(edit_input)).set_text(cx, editable_text);
+            self.widget(cx, ids!(preview)).set_text(cx, &preview);
+            self.widget(cx, ids!(edit_input))
+                .set_text(cx, editable_text);
             let pin_label = if clip.pinned {
                 self.text("app.unpin")
             } else {
                 self.text("app.pin")
             };
-            self.widget(id!(pin_button)).set_text(cx, &pin_label);
+            self.widget(cx, ids!(pin_button)).set_text(cx, &pin_label);
         } else {
-            self.widget(id!(selected_title))
+            self.widget(cx, ids!(selected_title))
                 .set_text(cx, &self.text("app.no_selection"));
-            self.widget(id!(selected_meta)).set_text(cx, "");
-            self.widget(id!(preview))
+            self.widget(cx, ids!(selected_meta)).set_text(cx, "");
+            self.widget(cx, ids!(preview))
                 .set_text(cx, &self.text("app.empty"));
-            self.widget(id!(edit_input)).set_text(cx, "");
-            self.widget(id!(pin_button))
+            self.widget(cx, ids!(edit_input)).set_text(cx, "");
+            self.widget(cx, ids!(pin_button))
                 .set_text(cx, &self.text("app.pin"));
         }
     }
@@ -811,7 +855,7 @@ impl App {
         if let Some(state) = &mut self.state {
             state.query.clear();
         }
-        self.widget(id!(search_input)).set_text(cx, "");
+        self.widget(cx, ids!(search_input)).set_text(cx, "");
         self.refresh_history(cx);
         self.set_status(cx, "app.status_ready");
     }
@@ -892,7 +936,7 @@ impl App {
             return;
         }
 
-        let text = self.widget(id!(edit_input)).text();
+        let text = self.widget(cx, ids!(edit_input)).text();
         if text.trim().is_empty() {
             self.set_status(cx, "app.status_clipboard_empty");
             return;
@@ -1000,14 +1044,20 @@ impl App {
     }
 
     fn toggle_theme(&mut self, cx: &mut Cx) {
+        let mut next_theme = None;
         if let Some(state) = &mut self.state {
             state.settings.theme = state.settings.theme.toggle();
+            next_theme = Some(state.settings.theme);
             if let Err(error) = state.persist_settings() {
                 self.set_status_text(cx, &error.to_string());
                 return;
             }
         }
+        if let Some(theme) = next_theme {
+            apply_makepad_theme_to_cx(cx, theme);
+        }
         self.apply_i18n(cx);
+        self.refresh_history(cx);
     }
 
     fn toggle_language(&mut self, cx: &mut Cx) {
@@ -1025,8 +1075,8 @@ impl App {
     }
 
     fn save_connection_settings(&mut self, cx: &mut Cx) {
-        let server_url = self.widget(id!(server_input)).text();
-        let token = self.widget(id!(token_input)).text();
+        let server_url = self.widget(cx, ids!(server_input)).text();
+        let token = self.widget(cx, ids!(token_input)).text();
         if let Some(state) = &mut self.state {
             state.settings.server_url = blank_to_none(server_url);
             state.settings.token = blank_to_none(token);
@@ -1042,7 +1092,8 @@ impl App {
     }
 
     fn save_behavior_settings(&mut self, cx: &mut Cx) {
-        let max_history = match parse_u32_setting(&self.widget(id!(max_history_input)).text()) {
+        let max_history = match parse_u32_setting(&self.widget(cx, ids!(max_history_input)).text())
+        {
             Some(value) if value > 0 => value,
             _ => {
                 self.set_status(cx, "app.status_invalid_number");
@@ -1050,7 +1101,7 @@ impl App {
             }
         };
         let capture_interval_ms =
-            match parse_u64_setting(&self.widget(id!(capture_interval_input)).text()) {
+            match parse_u64_setting(&self.widget(cx, ids!(capture_interval_input)).text()) {
                 Some(value) if value >= MIN_CAPTURE_INTERVAL_MS => value,
                 _ => {
                     self.set_status(cx, "app.status_invalid_number");
@@ -1078,14 +1129,14 @@ impl App {
 
     fn save_hotkey_settings(&mut self, cx: &mut Cx) {
         let hotkeys = HotkeySettingsInput {
-            show_history: self.widget(id!(hotkey_show_input)).text(),
-            search: self.widget(id!(hotkey_search_input)).text(),
-            copy_selected: self.widget(id!(hotkey_copy_input)).text(),
-            delete_selected: self.widget(id!(hotkey_delete_input)).text(),
-            toggle_pin: self.widget(id!(hotkey_pin_input)).text(),
-            edit_selected: self.widget(id!(hotkey_edit_input)).text(),
-            capture_now: self.widget(id!(hotkey_capture_input)).text(),
-            sync_now: self.widget(id!(hotkey_sync_input)).text(),
+            show_history: self.widget(cx, ids!(hotkey_show_input)).text(),
+            search: self.widget(cx, ids!(hotkey_search_input)).text(),
+            copy_selected: self.widget(cx, ids!(hotkey_copy_input)).text(),
+            delete_selected: self.widget(cx, ids!(hotkey_delete_input)).text(),
+            toggle_pin: self.widget(cx, ids!(hotkey_pin_input)).text(),
+            edit_selected: self.widget(cx, ids!(hotkey_edit_input)).text(),
+            capture_now: self.widget(cx, ids!(hotkey_capture_input)).text(),
+            sync_now: self.widget(cx, ids!(hotkey_sync_input)).text(),
         };
         if let Some(invalid) = hotkeys.invalid_shortcut() {
             self.set_status_text(
@@ -1147,7 +1198,7 @@ impl App {
     }
 
     fn set_status_text(&mut self, cx: &mut Cx, text: &str) {
-        self.widget(id!(status)).set_text(cx, text);
+        self.widget(cx, ids!(status)).set_text(cx, text);
     }
 
     fn with_state_mut<T>(&mut self, action: impl FnOnce(&mut ClientState) -> T) -> Option<T> {
@@ -1746,26 +1797,26 @@ fn number_key_index(key_code: KeyCode) -> Option<usize> {
 
 fn row_id(index: usize) -> &'static [LiveId] {
     match index {
-        0 => id!(row_0),
-        1 => id!(row_1),
-        2 => id!(row_2),
-        3 => id!(row_3),
-        4 => id!(row_4),
-        5 => id!(row_5),
-        6 => id!(row_6),
-        7 => id!(row_7),
-        8 => id!(row_8),
-        9 => id!(row_9),
-        10 => id!(row_10),
-        11 => id!(row_11),
-        12 => id!(row_12),
-        13 => id!(row_13),
-        14 => id!(row_14),
-        15 => id!(row_15),
-        16 => id!(row_16),
-        17 => id!(row_17),
-        18 => id!(row_18),
-        _ => id!(row_19),
+        0 => ids!(row_0),
+        1 => ids!(row_1),
+        2 => ids!(row_2),
+        3 => ids!(row_3),
+        4 => ids!(row_4),
+        5 => ids!(row_5),
+        6 => ids!(row_6),
+        7 => ids!(row_7),
+        8 => ids!(row_8),
+        9 => ids!(row_9),
+        10 => ids!(row_10),
+        11 => ids!(row_11),
+        12 => ids!(row_12),
+        13 => ids!(row_13),
+        14 => ids!(row_14),
+        15 => ids!(row_15),
+        16 => ids!(row_16),
+        17 => ids!(row_17),
+        18 => ids!(row_18),
+        _ => ids!(row_19),
     }
 }
 
@@ -1791,32 +1842,21 @@ fn blank_to_none(value: String) -> Option<String> {
 }
 
 fn main() {
+    Cx::init_log();
     if Cx::pre_start() {
         return;
     }
 
-    let app = Rc::new(RefCell::new(None));
-    let cx = Rc::new(RefCell::new(Cx::new(Box::new(move |cx, event| {
-        if let Event::Startup = event {
-            *app.borrow_mut() = App::new_main(cx);
-        }
-        if let Event::LiveEdit = event {
-            app.borrow_mut().update_main(cx);
-        }
-        if let Some(app) = &mut *app.borrow_mut() {
-            <dyn AppMain>::handle_event(app, cx, event);
-        }
-    }))));
-
-    App::register_main_module(&mut cx.borrow_mut());
-    cx.borrow_mut()
-        .init_websockets(std::option_env!("MAKEPAD_STUDIO_HTTP").unwrap_or(""));
+    let cx = Rc::new(RefCell::new(Cx::new(
+        makepad_widgets::_app_main_event_closure!(App),
+    )));
+    let studio_http = makepad_widgets::resolve_studio_http();
+    cx.borrow_mut().init_websockets(&studio_http);
     if std::env::args().any(|value| value == "--stdin-loop") {
         cx.borrow_mut().in_makepad_studio = true;
     }
-    live_design(&mut cx.borrow_mut());
     let makepad_package_root = prepare_embedded_makepad_package_root();
-    cx.borrow_mut().live_registry.borrow_mut().package_root = Some(makepad_package_root.clone());
+    cx.borrow_mut().package_root = Some(makepad_package_root.clone());
     cx.borrow_mut().init_cx_os();
     register_embedded_makepad_fonts(&mut cx.borrow_mut(), &makepad_package_root);
     Cx::event_loop(cx);
@@ -1863,47 +1903,6 @@ fn register_embedded_makepad_fonts(cx: &mut Cx, package_root: &str) {
         FONT_AWESOME_SOLID,
         &[0.0],
     );
-    register_multipart_font_variants(
-        &mut fonts,
-        &[
-            makepad_font_crate_path(
-                package_root,
-                "makepad_fonts_chinese_regular",
-                "LXGWWenKaiRegular.ttf",
-            ),
-            makepad_font_crate_path(
-                package_root,
-                "makepad_fonts_chinese_regular_2",
-                "LXGWWenKaiRegular.ttf.2",
-            ),
-        ],
-        &[LXGW_WENKAI_REGULAR, LXGW_WENKAI_REGULAR_2],
-        &[0.0],
-    );
-    register_multipart_font_variants(
-        &mut fonts,
-        &[
-            makepad_font_crate_path(
-                package_root,
-                "makepad_fonts_chinese_bold",
-                "LXGWWenKaiBold.ttf",
-            ),
-            makepad_font_crate_path(
-                package_root,
-                "makepad_fonts_chinese_bold_2",
-                "LXGWWenKaiBold.ttf.2",
-            ),
-        ],
-        &[LXGW_WENKAI_BOLD, LXGW_WENKAI_BOLD_2],
-        &[0.0],
-    );
-    register_font_variants(
-        &mut fonts,
-        &makepad_font_crate_path(package_root, "makepad_fonts_emoji", "NotoColorEmoji.ttf"),
-        NOTO_COLOR_EMOJI,
-        &[0.0],
-    );
-
     register_font_variants(
         &mut fonts,
         &makepad_widget_font_path(package_root, "LXGWWenKaiRegular.ttf"),
@@ -1938,22 +1937,6 @@ fn register_font_variants(fonts: &mut Fonts, path: &str, data: &'static [u8], as
     }
 }
 
-fn register_multipart_font_variants(
-    fonts: &mut Fonts,
-    paths: &[String],
-    parts: &[&'static [u8]],
-    ascenders: &[f32],
-) {
-    let mut data = Vec::new();
-    for part in parts {
-        data.extend_from_slice(part);
-    }
-
-    for ascender in ascenders {
-        register_font(fonts, paths, data.clone(), *ascender, 0.0);
-    }
-}
-
 fn register_font(
     fonts: &mut Fonts,
     paths: &[String],
@@ -1969,10 +1952,12 @@ fn register_font(
     fonts.define_font(
         font_id,
         FontDefinition {
-            data: Rc::new(data),
+            data: SharedBytes::from_vec(data),
             index: 0,
             ascender_fudge_in_ems: ascender,
             descender_fudge_in_ems: descender,
+            weight: None,
+            variations: Vec::new(),
         },
     );
 }
@@ -2042,31 +2027,6 @@ const EMBEDDED_MAKEPAD_RESOURCES: &[EmbeddedMakepadResource] = &[
     },
     EmbeddedMakepadResource {
         crate_name: "makepad_widgets",
-        file_name: "NotoColorEmoji.ttf",
-        data: NOTO_COLOR_EMOJI,
-    },
-    EmbeddedMakepadResource {
-        crate_name: "makepad_fonts_chinese_regular",
-        file_name: "LXGWWenKaiRegular.ttf",
-        data: LXGW_WENKAI_REGULAR,
-    },
-    EmbeddedMakepadResource {
-        crate_name: "makepad_fonts_chinese_regular_2",
-        file_name: "LXGWWenKaiRegular.ttf.2",
-        data: LXGW_WENKAI_REGULAR_2,
-    },
-    EmbeddedMakepadResource {
-        crate_name: "makepad_fonts_chinese_bold",
-        file_name: "LXGWWenKaiBold.ttf",
-        data: LXGW_WENKAI_BOLD,
-    },
-    EmbeddedMakepadResource {
-        crate_name: "makepad_fonts_chinese_bold_2",
-        file_name: "LXGWWenKaiBold.ttf.2",
-        data: LXGW_WENKAI_BOLD_2,
-    },
-    EmbeddedMakepadResource {
-        crate_name: "makepad_fonts_emoji",
         file_name: "NotoColorEmoji.ttf",
         data: NOTO_COLOR_EMOJI,
     },
