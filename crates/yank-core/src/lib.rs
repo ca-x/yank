@@ -103,6 +103,23 @@ pub struct Settings {
     pub capture_interval_ms: u64,
     pub max_history: u32,
     pub duplicate_moves_to_top: bool,
+    pub start_on_login: bool,
+    pub show_tray_icon: bool,
+    pub show_in_taskbar: bool,
+    pub quick_paste_position: String,
+    pub quick_paste_find_as_you_type: bool,
+    pub quick_paste_show_hotkey_text: bool,
+    pub quick_paste_show_leading_whitespace: bool,
+    pub quick_paste_show_thumbnails: bool,
+    pub quick_paste_draw_rtf: bool,
+    pub quick_paste_ensure_visible: bool,
+    pub quick_paste_show_groups_in_main: bool,
+    pub quick_paste_prompt_delete: bool,
+    pub quick_paste_always_show_scrollbar: bool,
+    pub quick_paste_show_pasted_indicator: bool,
+    pub quick_paste_elevated_paste: bool,
+    pub quick_paste_lines_per_row: u32,
+    pub quick_paste_transparency_percent: u32,
     pub hotkey_show_history: String,
     pub hotkey_search: String,
     pub hotkey_copy_selected: String,
@@ -130,6 +147,23 @@ impl Default for Settings {
             capture_interval_ms: 1000,
             max_history: 500,
             duplicate_moves_to_top: true,
+            start_on_login: false,
+            show_tray_icon: true,
+            show_in_taskbar: true,
+            quick_paste_position: "cursor".to_owned(),
+            quick_paste_find_as_you_type: true,
+            quick_paste_show_hotkey_text: true,
+            quick_paste_show_leading_whitespace: false,
+            quick_paste_show_thumbnails: true,
+            quick_paste_draw_rtf: true,
+            quick_paste_ensure_visible: true,
+            quick_paste_show_groups_in_main: true,
+            quick_paste_prompt_delete: true,
+            quick_paste_always_show_scrollbar: false,
+            quick_paste_show_pasted_indicator: true,
+            quick_paste_elevated_paste: false,
+            quick_paste_lines_per_row: 1,
+            quick_paste_transparency_percent: 0,
             hotkey_show_history: "Ctrl+Backtick".to_owned(),
             hotkey_search: "Ctrl+F".to_owned(),
             hotkey_copy_selected: "Enter".to_owned(),
@@ -714,6 +748,64 @@ impl Store {
         settings.max_history = self.get_u32_setting("max_history", settings.max_history)?;
         settings.duplicate_moves_to_top =
             self.get_bool_setting("duplicate_moves_to_top", settings.duplicate_moves_to_top)?;
+        settings.start_on_login =
+            self.get_bool_setting("start_on_login", settings.start_on_login)?;
+        settings.show_tray_icon =
+            self.get_bool_setting("show_tray_icon", settings.show_tray_icon)?;
+        settings.show_in_taskbar =
+            self.get_bool_setting("show_in_taskbar", settings.show_in_taskbar)?;
+        settings.quick_paste_position =
+            self.get_string_setting("quick_paste_position", settings.quick_paste_position)?;
+        settings.quick_paste_find_as_you_type = self.get_bool_setting(
+            "quick_paste_find_as_you_type",
+            settings.quick_paste_find_as_you_type,
+        )?;
+        settings.quick_paste_show_hotkey_text = self.get_bool_setting(
+            "quick_paste_show_hotkey_text",
+            settings.quick_paste_show_hotkey_text,
+        )?;
+        settings.quick_paste_show_leading_whitespace = self.get_bool_setting(
+            "quick_paste_show_leading_whitespace",
+            settings.quick_paste_show_leading_whitespace,
+        )?;
+        settings.quick_paste_show_thumbnails = self.get_bool_setting(
+            "quick_paste_show_thumbnails",
+            settings.quick_paste_show_thumbnails,
+        )?;
+        settings.quick_paste_draw_rtf =
+            self.get_bool_setting("quick_paste_draw_rtf", settings.quick_paste_draw_rtf)?;
+        settings.quick_paste_ensure_visible = self.get_bool_setting(
+            "quick_paste_ensure_visible",
+            settings.quick_paste_ensure_visible,
+        )?;
+        settings.quick_paste_show_groups_in_main = self.get_bool_setting(
+            "quick_paste_show_groups_in_main",
+            settings.quick_paste_show_groups_in_main,
+        )?;
+        settings.quick_paste_prompt_delete = self.get_bool_setting(
+            "quick_paste_prompt_delete",
+            settings.quick_paste_prompt_delete,
+        )?;
+        settings.quick_paste_always_show_scrollbar = self.get_bool_setting(
+            "quick_paste_always_show_scrollbar",
+            settings.quick_paste_always_show_scrollbar,
+        )?;
+        settings.quick_paste_show_pasted_indicator = self.get_bool_setting(
+            "quick_paste_show_pasted_indicator",
+            settings.quick_paste_show_pasted_indicator,
+        )?;
+        settings.quick_paste_elevated_paste = self.get_bool_setting(
+            "quick_paste_elevated_paste",
+            settings.quick_paste_elevated_paste,
+        )?;
+        settings.quick_paste_lines_per_row = self.get_u32_setting(
+            "quick_paste_lines_per_row",
+            settings.quick_paste_lines_per_row,
+        )?;
+        settings.quick_paste_transparency_percent = self.get_u32_setting(
+            "quick_paste_transparency_percent",
+            settings.quick_paste_transparency_percent,
+        )?;
         settings.hotkey_show_history =
             self.get_string_setting("hotkey_show_history", settings.hotkey_show_history)?;
         settings.hotkey_search =
@@ -799,6 +891,127 @@ impl Store {
             } else {
                 "false"
             },
+        )?;
+        self.set_setting(
+            "start_on_login",
+            if settings.start_on_login {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "show_tray_icon",
+            if settings.show_tray_icon {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "show_in_taskbar",
+            if settings.show_in_taskbar {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting("quick_paste_position", &settings.quick_paste_position)?;
+        self.set_setting(
+            "quick_paste_find_as_you_type",
+            if settings.quick_paste_find_as_you_type {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_show_hotkey_text",
+            if settings.quick_paste_show_hotkey_text {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_show_leading_whitespace",
+            if settings.quick_paste_show_leading_whitespace {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_show_thumbnails",
+            if settings.quick_paste_show_thumbnails {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_draw_rtf",
+            if settings.quick_paste_draw_rtf {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_ensure_visible",
+            if settings.quick_paste_ensure_visible {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_show_groups_in_main",
+            if settings.quick_paste_show_groups_in_main {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_prompt_delete",
+            if settings.quick_paste_prompt_delete {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_always_show_scrollbar",
+            if settings.quick_paste_always_show_scrollbar {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_show_pasted_indicator",
+            if settings.quick_paste_show_pasted_indicator {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_elevated_paste",
+            if settings.quick_paste_elevated_paste {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_lines_per_row",
+            &settings.quick_paste_lines_per_row.to_string(),
+        )?;
+        self.set_setting(
+            "quick_paste_transparency_percent",
+            &settings.quick_paste_transparency_percent.to_string(),
         )?;
         self.set_setting("hotkey_show_history", &settings.hotkey_show_history)?;
         self.set_setting("hotkey_search", &settings.hotkey_search)?;

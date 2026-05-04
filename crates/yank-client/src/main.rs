@@ -1,5 +1,6 @@
 use anyhow::Result;
 use arboard::{Clipboard, Error as ClipboardError, ImageData};
+use chrono::{DateTime, Local};
 use makepad_widgets::makepad_draw::text::{font::FontId, fonts::Fonts, loader::FontDefinition};
 use makepad_widgets::*;
 use std::{
@@ -8,6 +9,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::mpsc::Receiver,
 };
 use yank_client::{
     paths,
@@ -17,6 +19,11 @@ use yank_core::{
     Clip, ClipFormat, Settings, Store, Theme, content_hash,
     i18n::{self, I18nBundle},
 };
+
+#[cfg(target_os = "linux")]
+use ksni::blocking::TrayMethods as _;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
 
 const HISTORY_ROWS: usize = 20;
 const HISTORY_PAGE_STEP: usize = 10;
@@ -64,7 +71,7 @@ script_mod! {
     let FieldRow = View{
         width: Fill
         height: Fit
-        flow: Right {wrap: true}
+        flow: Right
         spacing: theme.space_2
         align: Align{y: 0.5}
     }
@@ -110,6 +117,34 @@ script_mod! {
         }
     }
 
+    let MenuButton = ButtonFlat{
+        width: Fit
+        height: 28
+        margin: 0.
+        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        draw_bg +: {
+            border_radius: 2.0
+            border_size: 1.0
+        }
+        draw_text +: {
+            text_style +: {font_size: theme.font_size_p}
+        }
+    }
+
+    let TabButton = ButtonFlat{
+        width: 122
+        height: 30
+        margin: 0.
+        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        draw_bg +: {
+            border_radius: 2.0
+            border_size: 1.0
+        }
+        draw_text +: {
+            text_style +: {font_size: theme.font_size_p}
+        }
+    }
+
     let ActionButton = Button{
         height: 32
         margin: 0.
@@ -124,13 +159,13 @@ script_mod! {
 
     let HistoryRow = ButtonFlat{
         width: Fill
-        height: 34
+        height: 30
         margin: 0.
         padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
         align: Align{x: 0.0 y: 0.5}
         label_walk: Walk{width: Fill, height: Fit}
         draw_bg +: {
-            border_radius: 2.0
+            border_radius: 0.0
             border_size: 1.0
             color: theme.color_bg_even
             color_hover: theme.color_bg_highlight_inline
@@ -157,11 +192,25 @@ script_mod! {
         draw_bg.border_color: theme.color_bg_highlight
     }
 
+    let InlinePanel = RoundedView{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: theme.space_1
+        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
+        new_batch: true
+        draw_bg.color: theme.color_inset
+        draw_bg.border_radius: 3.0
+        draw_bg.border_size: 1.0
+        draw_bg.border_color: theme.color_bg_highlight
+    }
+
     startup() do #(App::script_component(vm)){
         ui: Root{
             main_window := Window{
                 pass.clear_color: theme.color_bg_app
-                window.inner_size: vec2(820, 560)
+                window.title: "yank"
+                window.inner_size: vec2(460, 590)
                 body +: {
                     width: Fill
                     height: Fill
@@ -173,7 +222,7 @@ script_mod! {
                         height: Fit
                         flow: Right
                         spacing: theme.space_2
-                        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_2, bottom: theme.space_2}
+                        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_1, bottom: theme.space_1}
                         align: Align{y: 0.5}
                         draw_bg.color: theme.color_app_caption_bar
 
@@ -197,12 +246,12 @@ script_mod! {
                         }
 
                         status_shell := RoundedView{
-                            width: 300
+                            width: 188
                             height: Fit
-                            padding: theme.mspace_2{left: theme.space_3, right: theme.space_3, top: theme.space_1, bottom: theme.space_1}
+                            padding: theme.mspace_2{left: theme.space_2, right: theme.space_2, top: theme.space_1, bottom: theme.space_1}
                             new_batch: true
                             draw_bg.color: theme.color_bg_highlight_inline
-                            draw_bg.border_radius: 3.0
+                            draw_bg.border_radius: 2.0
                             status := TextBox{
                                 width: Fill
                                 height: Fit
@@ -219,12 +268,14 @@ script_mod! {
                         width: Fill
                         height: Fill
                         flow: Down
-                        spacing: theme.space_2
-                        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
+                        spacing: theme.space_1
+                        padding: theme.mspace_3{left: theme.space_1, right: theme.space_1, top: theme.space_1, bottom: theme.space_1}
 
                         quick_paste_shell := PanelCard{
                             width: Fill
                             height: Fill
+                            spacing: theme.space_1
+                            padding: theme.mspace_3{left: theme.space_1, right: theme.space_1, top: theme.space_1, bottom: theme.space_1}
                             history_header := View{
                                 width: Fill
                                 height: Fit
@@ -234,11 +285,44 @@ script_mod! {
                                 history_title := SectionTitle{text: ""}
                                 clip_count := MetaLabel{text: ""}
                             }
+                            group_bar := View{
+                                visible: false
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                filter_all_button := MenuButton{text: ""}
+                                filter_pinned_button := MenuButton{text: ""}
+                                filter_text_button := MenuButton{text: ""}
+                                filter_image_button := MenuButton{text: ""}
+                                filter_files_button := MenuButton{text: ""}
+                            }
+                            group_panel := InlinePanel{
+                                visible: false
+                                group_filter_title := SectionTitle{text: ""}
+                                group_filter_row_a := View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: theme.space_1
+                                    group_history_button := MenuButton{text: ""}
+                                    group_pinned_button := MenuButton{text: ""}
+                                    group_text_button := MenuButton{text: ""}
+                                }
+                                group_filter_row_b := View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: theme.space_1
+                                    group_image_button := MenuButton{text: ""}
+                                    group_files_button := MenuButton{text: ""}
+                                }
+                            }
                             rows := ScrollYView{
                                 width: Fill
                                 height: Fill
                                 flow: Down
-                                spacing: theme.space_1
+                                spacing: 0.
                                 row_0 := HistoryRow{text: ""}
                                 row_1 := HistoryRow{text: ""}
                                 row_2 := HistoryRow{text: ""}
@@ -261,34 +345,19 @@ script_mod! {
                                 row_19 := HistoryRow{text: ""}
                             }
 
-                            detail_panel := View{
+                            editor_panel := View{
                                 width: Fill
                                 height: 126
+                                visible: false
                                 flow: Right
-                                spacing: theme.space_2
-                                detail_header := View{
-                                    width: 220
-                                    height: Fill
-                                    flow: Down
-                                    spacing: theme.space_1
-                                    selected_title := SectionTitle{text: ""}
-                                    selected_meta := MutedLabel{text: ""}
-                                }
-                                preview_shell := PreviewSurface{
-                                    width: Fill
-                                    height: Fill
-                                    preview := TextBox{
-                                        width: Fill
-                                        height: Fill
-                                        text: ""
-                                        draw_text.color: theme.color_label_inner
-                                    }
-                                }
+                                spacing: theme.space_1
                                 edit_group := View{
                                     width: Fill
                                     height: Fill
                                     flow: Down
                                     spacing: theme.space_1
+                                    selected_title := SectionTitle{text: ""}
+                                    selected_meta := MutedLabel{text: ""}
                                     edit_label := SectionTitle{text: ""}
                                     edit_input := TextInput{
                                         width: Fill
@@ -310,21 +379,73 @@ script_mod! {
                             }
                         }
 
-                        search_card := AppCard{
-                            flow: Right
-                            spacing: theme.space_2
-                            align: Align{y: 0.5}
-                            search_label := Label{
-                                width: Fit
-                                text: ""
-                                draw_text.color: theme.color_label_inner
-                                draw_text.text_style: theme.font_bold{font_size: theme.font_size_p}
+                        menu_panel := AppCard{
+                            visible: false
+                            flow: Down
+                            spacing: theme.space_1
+                            menu_row_a := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_copy_button := MenuButton{text: ""}
+                                menu_paste_plain_button := MenuButton{text: ""}
+                                menu_edit_button := MenuButton{text: ""}
+                                menu_delete_button := MenuButton{text: ""}
                             }
+                            menu_row_b := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_pin_button := MenuButton{text: ""}
+                                menu_capture_button := MenuButton{text: ""}
+                                menu_capture_toggle_button := MenuButton{text: ""}
+                                menu_sync_button := MenuButton{text: ""}
+                            }
+                            menu_row_c := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_refresh_button := MenuButton{text: ""}
+                                menu_options_button := MenuButton{text: ""}
+                                menu_exit_button := MenuButton{text: ""}
+                            }
+                            menu_row_d := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_groups_button := MenuButton{text: ""}
+                                menu_position_button := MenuButton{text: ""}
+                                menu_lines_button := MenuButton{text: ""}
+                                menu_transparency_button := MenuButton{text: ""}
+                            }
+                            menu_row_e := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_upper_button := MenuButton{text: ""}
+                                menu_lower_button := MenuButton{text: ""}
+                                menu_trim_button := MenuButton{text: ""}
+                                menu_no_lf_button := MenuButton{text: ""}
+                                menu_camel_button := MenuButton{text: ""}
+                            }
+                        }
+
+                        search_card := View{
+                            width: Fill
+                            height: 40
+                            flow: Right
+                            spacing: theme.space_1
+                            padding: theme.mspace_3{left: theme.space_1, right: theme.space_1, top: theme.space_1, bottom: theme.space_1}
+                            align: Align{y: 0.5}
+                            groups_button := MenuButton{text: ""}
                             search_input := TextInput{width: Fill height: 32 empty_text: ""}
                             clear_search_button := DenseButton{text: ""}
-                            capture_toggle_button := DenseButton{text: ""}
-                            capture_button := ActionButton{text: ""}
-                            sync_button := DenseButton{text: ""}
+                            system_menu_button := MenuButton{text: ""}
                         }
                     }
 
@@ -333,14 +454,13 @@ script_mod! {
                         height: Fill
                         visible: false
                         flow: Down
-                        spacing: theme.space_3
-                        align: Align{x: 0.5}
-                        padding: theme.mspace_3{left: theme.space_3 * 3, right: theme.space_3 * 3, top: theme.space_3 * 2, bottom: theme.space_3 * 3}
+                        spacing: theme.space_2
+                        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
 
                         settings_header := AppCard{
-                            width: Fill{max: 1040}
+                            width: Fill
                             flow: Right
-                            spacing: theme.space_3
+                            spacing: theme.space_2
                             align: Align{y: 0.5}
                             settings_title_group := View{
                                 width: Fill
@@ -353,8 +473,32 @@ script_mod! {
                             back_to_main_button := DenseButton{text: ""}
                         }
 
+                        settings_tabs := AppCard{
+                            width: Fill
+                            flow: Down
+                            spacing: theme.space_1
+                            tab_row_1 := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                settings_general_tab := TabButton{text: ""}
+                                settings_types_tab := TabButton{text: ""}
+                                settings_keyboard_tab := TabButton{text: ""}
+                            }
+                            tab_row_2 := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                settings_quick_paste_tab := TabButton{text: ""}
+                                settings_sync_tab := TabButton{text: ""}
+                                settings_about_tab := TabButton{text: ""}
+                            }
+                        }
+
                         appearance_settings := AppCard{
-                            width: Fill{max: 1040}
+                            width: Fill
                             appearance_title := SectionTitle{text: ""}
                             FieldRow{
                                 language_label := Label{text: "" draw_text.color: theme.color_label_inner}
@@ -362,15 +506,24 @@ script_mod! {
                                 theme_label := Label{text: "" draw_text.color: theme.color_label_inner}
                                 theme_button := DenseButton{text: ""}
                             }
+                            FieldRow{
+                                start_on_login_button := DenseButton{text: ""}
+                                show_tray_button := DenseButton{text: ""}
+                                show_taskbar_button := DenseButton{text: ""}
+                            }
+                            FieldRow{
+                                popup_position_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                popup_position_button := DenseButton{text: ""}
+                            }
                         }
 
                         behavior_settings := AppCard{
-                            width: Fill{max: 1040}
+                            width: Fill
                             behavior_title := SectionTitle{text: ""}
                             local_status := TextBox{width: Fill height: Fit text: ""}
                             FieldRow{
                                 device_id_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                device_id_value := TextInput{width: 360 height: 34 empty_text: "" is_read_only: true}
+                                device_id_value := TextInput{width: Fill height: 34 empty_text: "" is_read_only: true}
                                 copy_device_id_button := DenseButton{text: ""}
                             }
                             FieldRow{
@@ -389,14 +542,51 @@ script_mod! {
                             FieldRow{
                                 max_history_label := Label{text: "" draw_text.color: theme.color_label_inner}
                                 max_history_input := TextInput{width: 120 height: 34 empty_text: ""}
+                                save_behavior_button := ActionButton{text: ""}
+                            }
+                            FieldRow{
                                 capture_interval_label := Label{text: "" draw_text.color: theme.color_label_inner}
                                 capture_interval_input := TextInput{width: 120 height: 34 empty_text: ""}
-                                save_behavior_button := ActionButton{text: ""}
+                            }
+                        }
+
+                        quick_paste_settings := AppCard{
+                            width: Fill
+                            quick_paste_title := SectionTitle{text: ""}
+                            FieldRow{
+                                show_hotkey_text_button := DenseButton{text: ""}
+                                show_leading_ws_button := DenseButton{text: ""}
+                            }
+                            FieldRow{
+                                find_as_you_type_button := DenseButton{text: ""}
+                                show_thumbnails_button := DenseButton{text: ""}
+                                draw_rtf_button := DenseButton{text: ""}
+                            }
+                            FieldRow{
+                                ensure_visible_button := DenseButton{text: ""}
+                                show_groups_main_button := DenseButton{text: ""}
+                            }
+                            FieldRow{
+                                prompt_delete_button := DenseButton{text: ""}
+                                always_show_scrollbar_button := DenseButton{text: ""}
+                                show_pasted_button := DenseButton{text: ""}
+                            }
+                            FieldRow{
+                                elevated_paste_button := DenseButton{text: ""}
+                            }
+                            FieldRow{
+                                lines_per_row_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                lines_per_row_input := TextInput{width: 90 height: 34 empty_text: ""}
+                                save_quick_paste_button := ActionButton{text: ""}
+                            }
+                            FieldRow{
+                                transparency_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                transparency_input := TextInput{width: 90 height: 34 empty_text: ""}
                             }
                         }
 
                         sync_settings := AppCard{
-                            width: Fill{max: 1040}
+                            width: Fill
                             sync_settings_title := SectionTitle{text: ""}
                             FieldGroup{
                                 server_label := Label{text: "" draw_text.color: theme.color_label_inner}
@@ -410,24 +600,30 @@ script_mod! {
                         }
 
                         hotkeys_settings := AppCard{
-                            width: Fill{max: 1040}
+                            width: Fill
                             hotkeys_title := SectionTitle{text: ""}
                             hotkeys_status := MutedLabel{text: ""}
                             hotkey_grid := View{
                                 width: Fill
                                 height: Fit
-                                flow: Right {wrap: true}
+                                flow: Down
                                 spacing: theme.space_2
-                                FieldGroup{width: 286 hotkey_show_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_show_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldGroup{width: 286 hotkey_search_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_search_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldGroup{width: 286 hotkey_copy_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_copy_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldGroup{width: 286 hotkey_delete_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_delete_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldGroup{width: 286 hotkey_pin_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_pin_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldGroup{width: 286 hotkey_edit_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_edit_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldGroup{width: 286 hotkey_capture_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_capture_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldGroup{width: 286 hotkey_sync_label := Label{text: "" draw_text.color: theme.color_label_inner} hotkey_sync_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_show_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_show_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_search_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_search_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_copy_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_copy_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_delete_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_delete_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_pin_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_pin_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_edit_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_edit_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_capture_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_capture_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                FieldRow{hotkey_sync_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_sync_input := TextInput{width: Fill height: 34 empty_text: ""}}
                             }
                             save_hotkeys_button := ActionButton{width: Fit text: ""}
+                        }
+
+                        about_settings := AppCard{
+                            width: Fill
+                            about_title := SectionTitle{text: ""}
+                            about_text := MutedLabel{text: ""}
                         }
                     }
                 }
@@ -445,9 +641,28 @@ pub struct App {
     #[rust]
     active_page: ClientPage,
     #[rust]
+    active_settings_tab: SettingsTab,
+    #[rust]
+    clip_filter: ClipFilter,
+    #[rust]
+    menu_visible: bool,
+    #[rust]
+    group_panel_visible: bool,
+    #[rust]
+    editor_visible: bool,
+    #[rust]
+    pending_delete_id: Option<String>,
+    #[rust]
     initialized: bool,
     #[rust]
     poll_timer: Timer,
+    #[rust]
+    tray_timer: Timer,
+    #[rust]
+    tray_rx: Option<Receiver<TrayCommand>>,
+    #[cfg(target_os = "linux")]
+    #[rust]
+    tray_handle: Option<ksni::blocking::Handle<YankTray>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -455,6 +670,258 @@ enum ClientPage {
     #[default]
     Main,
     Settings,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SettingsTab {
+    #[default]
+    General,
+    Types,
+    Keyboard,
+    QuickPaste,
+    Sync,
+    About,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ClipFilter {
+    #[default]
+    All,
+    Pinned,
+    Text,
+    Images,
+    Files,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QuickPastePosition {
+    Cursor,
+    Caret,
+    Previous,
+}
+
+impl QuickPastePosition {
+    fn parse(value: &str) -> Self {
+        match value {
+            "caret" => Self::Caret,
+            "previous" => Self::Previous,
+            _ => Self::Cursor,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Cursor => "cursor",
+            Self::Caret => "caret",
+            Self::Previous => "previous",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Cursor => Self::Caret,
+            Self::Caret => Self::Previous,
+            Self::Previous => Self::Cursor,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TextTransform {
+    Upper,
+    Lower,
+    Trim,
+    RemoveLineFeeds,
+    CamelCase,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrayCommand {
+    Open,
+    Settings,
+    CaptureNow,
+    SyncNow,
+    ToggleCapture,
+    Exit,
+}
+
+#[cfg(target_os = "linux")]
+struct TrayLabels {
+    title: String,
+    open: String,
+    options: String,
+    capture: String,
+    sync: String,
+    pause: String,
+    resume: String,
+    exit: String,
+}
+
+#[cfg(target_os = "linux")]
+impl TrayLabels {
+    fn from_messages(messages: &I18nBundle) -> Self {
+        Self {
+            title: messages.text("app.title").to_owned(),
+            open: messages.text("app.tray_open").to_owned(),
+            options: messages.text("app.tray_options").to_owned(),
+            capture: messages.text("app.tray_capture").to_owned(),
+            sync: messages.text("app.tray_sync").to_owned(),
+            pause: messages.text("app.tray_pause").to_owned(),
+            resume: messages.text("app.tray_resume").to_owned(),
+            exit: messages.text("app.tray_exit").to_owned(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct YankTray {
+    sender: mpsc::Sender<TrayCommand>,
+    capture_enabled: bool,
+    labels: TrayLabels,
+}
+
+#[cfg(target_os = "linux")]
+impl ksni::Tray for YankTray {
+    const MENU_ON_ACTIVATE: bool = false;
+
+    fn id(&self) -> String {
+        "yank".to_owned()
+    }
+
+    fn title(&self) -> String {
+        self.labels.title.clone()
+    }
+
+    fn icon_name(&self) -> String {
+        String::new()
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        vec![tray_icon_pixmap(32), tray_icon_pixmap(64)]
+    }
+
+    fn tool_tip(&self) -> ksni::ToolTip {
+        ksni::ToolTip {
+            title: self.labels.title.clone(),
+            description: self.labels.title.clone(),
+            ..Default::default()
+        }
+    }
+
+    fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.sender.send(TrayCommand::Open);
+    }
+
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        use ksni::menu::{CheckmarkItem, StandardItem};
+
+        let open = self.sender.clone();
+        let settings = self.sender.clone();
+        let capture = self.sender.clone();
+        let sync = self.sender.clone();
+        let toggle = self.sender.clone();
+        let exit = self.sender.clone();
+
+        vec![
+            StandardItem {
+                label: self.labels.open.clone(),
+                icon_name: "window-new".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = open.send(TrayCommand::Open);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: self.labels.options.clone(),
+                icon_name: "preferences-system".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = settings.send(TrayCommand::Settings);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            ksni::MenuItem::Separator,
+            StandardItem {
+                label: self.labels.capture.clone(),
+                icon_name: "document-save".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = capture.send(TrayCommand::CaptureNow);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: self.labels.sync.clone(),
+                icon_name: "view-refresh".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = sync.send(TrayCommand::SyncNow);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: if self.capture_enabled {
+                    self.labels.pause.clone()
+                } else {
+                    self.labels.resume.clone()
+                },
+                checked: self.capture_enabled,
+                activate: Box::new(move |tray: &mut YankTray| {
+                    tray.capture_enabled = !tray.capture_enabled;
+                    let _ = toggle.send(TrayCommand::ToggleCapture);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            ksni::MenuItem::Separator,
+            StandardItem {
+                label: self.labels.exit.clone(),
+                icon_name: "application-exit".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = exit.send(TrayCommand::Exit);
+                }),
+                ..Default::default()
+            }
+            .into(),
+        ]
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tray_icon_pixmap(size: i32) -> ksni::Icon {
+    let size = size.max(16);
+    let mut data = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let offset = ((y * size + x) * 4) as usize;
+            let border = x < 2 || y < 2 || x >= size - 2 || y >= size - 2;
+            let sheet = x >= size / 5 && x <= size * 4 / 5 && y >= size / 6 && y <= size * 5 / 6;
+            let clip = x >= size / 3 && x <= size * 2 / 3 && y >= size / 10 && y <= size / 4;
+            let line = sheet && y % 7 == 0 && x > size / 3 && x < size * 2 / 3;
+
+            let (a, r, g, b) = if border {
+                (255, 45, 45, 55)
+            } else if clip {
+                (255, 76, 110, 245)
+            } else if line {
+                (255, 70, 76, 88)
+            } else if sheet {
+                (255, 238, 240, 245)
+            } else {
+                (0, 0, 0, 0)
+            };
+            data[offset] = a;
+            data[offset + 1] = r;
+            data[offset + 2] = g;
+            data[offset + 3] = b;
+        }
+    }
+    ksni::Icon {
+        width: size,
+        height: size,
+        data,
+    }
 }
 
 fn startup_theme() -> Theme {
@@ -519,6 +986,8 @@ impl AppMain for App {
             self.initialize(cx);
         }
 
+        self.drain_tray_commands(cx);
+
         if self.handle_type_to_search(cx, event) {
             return;
         }
@@ -562,6 +1031,42 @@ impl MatchEvent for App {
         if self.button(cx, ids!(clear_search_button)).clicked(actions) {
             self.clear_search(cx);
         }
+        if self.button(cx, ids!(groups_button)).clicked(actions) {
+            self.toggle_group_panel(cx);
+        }
+        if self.button(cx, ids!(system_menu_button)).clicked(actions) {
+            self.toggle_menu_panel(cx);
+        }
+        if self.button(cx, ids!(filter_all_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::All);
+        }
+        if self.button(cx, ids!(filter_pinned_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Pinned);
+        }
+        if self.button(cx, ids!(filter_text_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Text);
+        }
+        if self.button(cx, ids!(filter_image_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Images);
+        }
+        if self.button(cx, ids!(filter_files_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Files);
+        }
+        if self.button(cx, ids!(group_history_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::All);
+        }
+        if self.button(cx, ids!(group_pinned_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Pinned);
+        }
+        if self.button(cx, ids!(group_text_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Text);
+        }
+        if self.button(cx, ids!(group_image_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Images);
+        }
+        if self.button(cx, ids!(group_files_button)).clicked(actions) {
+            self.set_clip_filter(cx, ClipFilter::Files);
+        }
         if self
             .button(cx, ids!(copy_device_id_button))
             .clicked(actions)
@@ -587,34 +1092,113 @@ impl MatchEvent for App {
             self.toggle_capture_format(cx, CaptureFormatKind::Files);
         }
         if self
-            .button(cx, ids!(capture_toggle_button))
+            .button(cx, ids!(menu_capture_toggle_button))
             .clicked(actions)
         {
             self.toggle_capture(cx);
         }
-        if self.button(cx, ids!(capture_button)).clicked(actions) {
+        if self.button(cx, ids!(menu_capture_button)).clicked(actions) {
             self.capture_clipboard(cx);
         }
-        if self.button(cx, ids!(copy_selected_button)).clicked(actions) {
+        if self.button(cx, ids!(copy_selected_button)).clicked(actions)
+            || self.button(cx, ids!(menu_copy_button)).clicked(actions)
+        {
             self.copy_selected(cx);
+        }
+        if self
+            .button(cx, ids!(menu_paste_plain_button))
+            .clicked(actions)
+        {
+            self.copy_selected_plain_text(cx);
+        }
+        if self.button(cx, ids!(menu_edit_button)).clicked(actions) {
+            self.show_editor(cx);
+        }
+        if self.button(cx, ids!(menu_refresh_button)).clicked(actions) {
+            self.refresh_history(cx);
+            self.set_status(cx, "app.status_refreshed");
+        }
+        if self.button(cx, ids!(menu_exit_button)).clicked(actions) {
+            std::process::exit(0);
         }
         if self.button(cx, ids!(save_edit_button)).clicked(actions) {
             self.save_selected_edit(cx);
         }
-        if self.button(cx, ids!(pin_button)).clicked(actions) {
+        if self.button(cx, ids!(pin_button)).clicked(actions)
+            || self.button(cx, ids!(menu_pin_button)).clicked(actions)
+        {
             self.toggle_selected_pin(cx);
         }
-        if self.button(cx, ids!(delete_button)).clicked(actions) {
+        if self.button(cx, ids!(delete_button)).clicked(actions)
+            || self.button(cx, ids!(menu_delete_button)).clicked(actions)
+        {
             self.delete_selected(cx);
         }
-        if self.button(cx, ids!(sync_button)).clicked(actions) {
+        if self.button(cx, ids!(menu_sync_button)).clicked(actions) {
             self.sync_now(cx);
         }
         if self.button(cx, ids!(settings_button)).clicked(actions) {
             self.show_settings_page(cx);
         }
+        if self.button(cx, ids!(menu_options_button)).clicked(actions) {
+            self.show_settings_page(cx);
+        }
+        if self.button(cx, ids!(menu_groups_button)).clicked(actions) {
+            self.toggle_group_panel(cx);
+        }
+        if self.button(cx, ids!(menu_position_button)).clicked(actions) {
+            self.cycle_popup_position(cx);
+        }
+        if self.button(cx, ids!(menu_lines_button)).clicked(actions) {
+            self.cycle_lines_per_row(cx);
+        }
+        if self
+            .button(cx, ids!(menu_transparency_button))
+            .clicked(actions)
+        {
+            self.cycle_transparency(cx);
+        }
+        if self.button(cx, ids!(menu_upper_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::Upper);
+        }
+        if self.button(cx, ids!(menu_lower_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::Lower);
+        }
+        if self.button(cx, ids!(menu_trim_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::Trim);
+        }
+        if self.button(cx, ids!(menu_no_lf_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::RemoveLineFeeds);
+        }
+        if self.button(cx, ids!(menu_camel_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::CamelCase);
+        }
         if self.button(cx, ids!(back_to_main_button)).clicked(actions) {
             self.show_main_page(cx);
+        }
+        if self.button(cx, ids!(settings_general_tab)).clicked(actions) {
+            self.show_settings_tab(cx, SettingsTab::General);
+        }
+        if self.button(cx, ids!(settings_types_tab)).clicked(actions) {
+            self.show_settings_tab(cx, SettingsTab::Types);
+        }
+        if self
+            .button(cx, ids!(settings_keyboard_tab))
+            .clicked(actions)
+        {
+            self.show_settings_tab(cx, SettingsTab::Keyboard);
+        }
+        if self
+            .button(cx, ids!(settings_quick_paste_tab))
+            .clicked(actions)
+        {
+            self.show_settings_tab(cx, SettingsTab::QuickPaste);
+        }
+        if self.button(cx, ids!(settings_sync_tab)).clicked(actions) {
+            self.show_settings_tab(cx, SettingsTab::Sync);
+        }
+        if self.button(cx, ids!(settings_about_tab)).clicked(actions) {
+            self.show_settings_tab(cx, SettingsTab::About);
         }
         if self.button(cx, ids!(theme_button)).clicked(actions) {
             self.toggle_theme(cx);
@@ -622,8 +1206,96 @@ impl MatchEvent for App {
         if self.button(cx, ids!(language_button)).clicked(actions) {
             self.toggle_language(cx);
         }
+        if self
+            .button(cx, ids!(start_on_login_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.start_on_login);
+        }
+        if self.button(cx, ids!(show_tray_button)).clicked(actions) {
+            self.toggle_bool_setting(cx, |settings| &mut settings.show_tray_icon);
+            self.apply_tray_visibility();
+        }
+        if self.button(cx, ids!(show_taskbar_button)).clicked(actions) {
+            self.toggle_bool_setting(cx, |settings| &mut settings.show_in_taskbar);
+        }
+        if self
+            .button(cx, ids!(popup_position_button))
+            .clicked(actions)
+        {
+            self.cycle_popup_position(cx);
+        }
+        if self
+            .button(cx, ids!(find_as_you_type_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_find_as_you_type);
+        }
+        if self
+            .button(cx, ids!(show_hotkey_text_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_show_hotkey_text);
+        }
+        if self
+            .button(cx, ids!(show_leading_ws_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| {
+                &mut settings.quick_paste_show_leading_whitespace
+            });
+        }
+        if self
+            .button(cx, ids!(show_thumbnails_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_show_thumbnails);
+        }
+        if self.button(cx, ids!(draw_rtf_button)).clicked(actions) {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_draw_rtf);
+        }
+        if self.button(cx, ids!(prompt_delete_button)).clicked(actions) {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_prompt_delete);
+        }
+        if self
+            .button(cx, ids!(ensure_visible_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_ensure_visible);
+        }
+        if self
+            .button(cx, ids!(show_groups_main_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_show_groups_in_main);
+        }
+        if self
+            .button(cx, ids!(always_show_scrollbar_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| {
+                &mut settings.quick_paste_always_show_scrollbar
+            });
+        }
+        if self.button(cx, ids!(show_pasted_button)).clicked(actions) {
+            self.toggle_bool_setting(cx, |settings| {
+                &mut settings.quick_paste_show_pasted_indicator
+            });
+        }
+        if self
+            .button(cx, ids!(elevated_paste_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_elevated_paste);
+        }
         if self.button(cx, ids!(save_behavior_button)).clicked(actions) {
             self.save_behavior_settings(cx);
+        }
+        if self
+            .button(cx, ids!(save_quick_paste_button))
+            .clicked(actions)
+        {
+            self.save_quick_paste_settings(cx);
         }
         if self.button(cx, ids!(save_settings_button)).clicked(actions) {
             self.save_connection_settings(cx);
@@ -636,6 +1308,9 @@ impl MatchEvent for App {
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
         if self.poll_timer.is_timer(event).is_some() {
             self.poll_clipboard(cx);
+        }
+        if self.tray_timer.is_timer(event).is_some() {
+            self.drain_tray_commands(cx);
         }
     }
 
@@ -750,6 +1425,8 @@ impl App {
         match ClientState::load() {
             Ok(state) => {
                 self.state = Some(state);
+                self.start_tray();
+                self.restart_tray_timer(cx);
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
                 self.refresh_history(cx);
@@ -758,6 +1435,8 @@ impl App {
             }
             Err(error) => {
                 self.state = Some(ClientState::fallback(error.to_string()));
+                self.start_tray();
+                self.restart_tray_timer(cx);
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
                 self.refresh_history(cx);
@@ -786,6 +1465,14 @@ impl App {
         if self.active_page != ClientPage::Main
             || input.input.is_empty()
             || self.text_entry_has_focus(cx)
+        {
+            return false;
+        }
+        if !self
+            .state
+            .as_ref()
+            .map(|state| state.settings.quick_paste_find_as_you_type)
+            .unwrap_or(true)
         {
             return false;
         }
@@ -890,6 +1577,8 @@ impl App {
             ids!(device_id_value),
             ids!(max_history_input),
             ids!(capture_interval_input),
+            ids!(lines_per_row_input),
+            ids!(transparency_input),
             ids!(server_input),
             ids!(token_input),
             ids!(hotkey_show_input),
@@ -929,13 +1618,26 @@ impl App {
 
     fn show_main_page(&mut self, cx: &mut Cx) {
         self.active_page = ClientPage::Main;
+        self.menu_visible = false;
+        self.group_panel_visible = false;
         self.apply_page_visibility(cx);
         self.widget(cx, ids!(search_input)).set_key_focus(cx);
     }
 
     fn show_settings_page(&mut self, cx: &mut Cx) {
         self.active_page = ClientPage::Settings;
+        self.menu_visible = false;
+        self.group_panel_visible = false;
         self.apply_page_visibility(cx);
+        self.apply_settings_tab_visibility(cx);
+    }
+
+    fn show_settings_tab(&mut self, cx: &mut Cx, tab: SettingsTab) {
+        self.active_settings_tab = tab;
+        self.apply_settings_tab_visibility(cx);
+        if let Some(state) = self.state.as_ref() {
+            self.apply_settings_tab_labels(cx, &state.messages);
+        }
     }
 
     fn apply_page_visibility(&mut self, cx: &mut Cx) {
@@ -944,7 +1646,52 @@ impl App {
             .set_visible(cx, !settings_visible);
         self.widget(cx, ids!(settings_page))
             .set_visible(cx, settings_visible);
+        self.widget(cx, ids!(menu_panel))
+            .set_visible(cx, self.menu_visible && !settings_visible);
+        self.widget(cx, ids!(group_panel))
+            .set_visible(cx, self.group_panel_visible && !settings_visible);
+        self.widget(cx, ids!(editor_panel))
+            .set_visible(cx, self.editor_visible && !settings_visible);
         self.ui.redraw(cx);
+    }
+
+    fn apply_settings_tab_visibility(&mut self, cx: &mut Cx) {
+        let tab = self.active_settings_tab;
+        self.widget(cx, ids!(appearance_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::General));
+        self.widget(cx, ids!(behavior_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::Types));
+        self.widget(cx, ids!(hotkeys_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::Keyboard));
+        self.widget(cx, ids!(quick_paste_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::QuickPaste));
+        self.widget(cx, ids!(sync_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::Sync));
+        self.widget(cx, ids!(about_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::About));
+        self.ui.redraw(cx);
+    }
+
+    fn toggle_menu_panel(&mut self, cx: &mut Cx) {
+        self.menu_visible = !self.menu_visible;
+        if self.menu_visible {
+            self.group_panel_visible = false;
+        }
+        self.apply_page_visibility(cx);
+    }
+
+    fn toggle_group_panel(&mut self, cx: &mut Cx) {
+        self.group_panel_visible = !self.group_panel_visible;
+        if self.group_panel_visible {
+            self.menu_visible = false;
+        }
+        self.apply_page_visibility(cx);
+    }
+
+    fn show_editor(&mut self, cx: &mut Cx) {
+        self.editor_visible = true;
+        self.apply_page_visibility(cx);
+        self.widget(cx, ids!(edit_input)).set_key_focus(cx);
     }
 
     fn text(&self, key: &str) -> String {
@@ -972,10 +1719,7 @@ impl App {
             (ids!(title), "app.title"),
             (ids!(subtitle), "app.subtitle"),
             (ids!(settings_button), "app.settings"),
-            (ids!(capture_button), "app.capture"),
-            (ids!(sync_button), "app.sync_now"),
             (ids!(language_button), "app.lang_toggle"),
-            (ids!(search_label), "app.search"),
             (ids!(clear_search_button), "app.clear_search"),
             (ids!(history_title), "app.latest"),
             (ids!(selected_title), "app.no_selection"),
@@ -1012,9 +1756,85 @@ impl App {
             (ids!(hotkey_capture_label), "app.hotkey_capture"),
             (ids!(hotkey_sync_label), "app.hotkey_sync"),
             (ids!(save_hotkeys_button), "app.save_hotkeys"),
+            (ids!(filter_all_button), "app.filter_all"),
+            (ids!(filter_pinned_button), "app.filter_pinned"),
+            (ids!(filter_text_button), "app.filter_text"),
+            (ids!(filter_image_button), "app.filter_images"),
+            (ids!(filter_files_button), "app.filter_files"),
+            (ids!(group_filter_title), "app.group_filter_title"),
+            (ids!(group_history_button), "app.filter_all"),
+            (ids!(group_pinned_button), "app.filter_pinned"),
+            (ids!(group_text_button), "app.filter_text"),
+            (ids!(group_image_button), "app.filter_images"),
+            (ids!(group_files_button), "app.filter_files"),
+            (ids!(system_menu_button), "app.menu"),
+            (ids!(menu_copy_button), "app.copy_selected"),
+            (ids!(menu_paste_plain_button), "app.paste_plain"),
+            (ids!(menu_edit_button), "app.edit"),
+            (ids!(menu_refresh_button), "app.refresh"),
+            (ids!(menu_delete_button), "app.delete"),
+            (ids!(menu_capture_button), "app.capture"),
+            (ids!(menu_sync_button), "app.sync_now"),
+            (ids!(menu_options_button), "app.settings"),
+            (ids!(menu_exit_button), "app.tray_exit"),
+            (ids!(menu_groups_button), "app.groups"),
+            (ids!(settings_general_tab), "app.settings_general"),
+            (ids!(settings_types_tab), "app.settings_types"),
+            (ids!(settings_keyboard_tab), "app.settings_keyboard"),
+            (ids!(settings_quick_paste_tab), "app.settings_quick_paste"),
+            (ids!(settings_sync_tab), "app.sync_settings"),
+            (ids!(settings_about_tab), "app.settings_about"),
+            (ids!(popup_position_label), "app.popup_position"),
+            (ids!(quick_paste_title), "app.quick_paste_options"),
+            (ids!(lines_per_row_label), "app.lines_per_row"),
+            (ids!(transparency_label), "app.transparency"),
+            (ids!(save_quick_paste_button), "app.save_quick_paste"),
+            (ids!(menu_upper_button), "app.special_upper"),
+            (ids!(menu_lower_button), "app.special_lower"),
+            (ids!(menu_trim_button), "app.special_trim"),
+            (ids!(menu_no_lf_button), "app.special_no_lf"),
+            (ids!(menu_camel_button), "app.special_camel"),
+            (ids!(about_title), "app.settings_about"),
         ] {
             self.widget(cx, id).set_text(cx, messages.text(key));
         }
+
+        self.apply_filter_labels(cx, messages);
+        self.apply_settings_tab_labels(cx, messages);
+        self.widget(cx, ids!(about_text))
+            .set_text(cx, messages.text("app.about_text"));
+        self.widget(cx, ids!(groups_button))
+            .set_text(cx, &self.clip_filter_label(messages));
+        self.widget(cx, ids!(menu_position_button)).set_text(
+            cx,
+            &self.template(
+                "app.quick_menu_position",
+                &[(
+                    "{position}",
+                    popup_position_label(messages, &state.settings.quick_paste_position).to_owned(),
+                )],
+            ),
+        );
+        self.widget(cx, ids!(menu_lines_button)).set_text(
+            cx,
+            &self.template(
+                "app.quick_menu_lines",
+                &[(
+                    "{lines}",
+                    state.settings.quick_paste_lines_per_row.to_string(),
+                )],
+            ),
+        );
+        self.widget(cx, ids!(menu_transparency_button)).set_text(
+            cx,
+            &self.template(
+                "app.quick_menu_transparency",
+                &[(
+                    "{percent}",
+                    state.settings.quick_paste_transparency_percent.to_string(),
+                )],
+            ),
+        );
 
         self.widget(cx, ids!(theme_button)).set_text(
             cx,
@@ -1023,12 +1843,141 @@ impl App {
                 Theme::Dark => messages.text("app.light"),
             },
         );
-        self.widget(cx, ids!(capture_toggle_button)).set_text(
+        self.widget(cx, ids!(menu_capture_toggle_button)).set_text(
             cx,
             if state.settings.capture_enabled {
                 messages.text("app.capture_on")
             } else {
                 messages.text("app.capture_off")
+            },
+        );
+        self.widget(cx, ids!(menu_pin_button)).set_text(
+            cx,
+            if state
+                .selected_clip()
+                .map(|clip| clip.pinned)
+                .unwrap_or(false)
+            {
+                messages.text("app.unpin")
+            } else {
+                messages.text("app.pin")
+            },
+        );
+        self.widget(cx, ids!(start_on_login_button)).set_text(
+            cx,
+            if state.settings.start_on_login {
+                messages.text("app.start_on_login_on")
+            } else {
+                messages.text("app.start_on_login_off")
+            },
+        );
+        self.widget(cx, ids!(show_tray_button)).set_text(
+            cx,
+            if state.settings.show_tray_icon {
+                messages.text("app.show_tray_on")
+            } else {
+                messages.text("app.show_tray_off")
+            },
+        );
+        self.widget(cx, ids!(show_taskbar_button)).set_text(
+            cx,
+            if state.settings.show_in_taskbar {
+                messages.text("app.show_taskbar_on")
+            } else {
+                messages.text("app.show_taskbar_off")
+            },
+        );
+        self.widget(cx, ids!(popup_position_button)).set_text(
+            cx,
+            popup_position_label(messages, &state.settings.quick_paste_position),
+        );
+        self.widget(cx, ids!(find_as_you_type_button)).set_text(
+            cx,
+            if state.settings.quick_paste_find_as_you_type {
+                messages.text("app.find_as_type_on")
+            } else {
+                messages.text("app.find_as_type_off")
+            },
+        );
+        self.widget(cx, ids!(show_hotkey_text_button)).set_text(
+            cx,
+            if state.settings.quick_paste_show_hotkey_text {
+                messages.text("app.hotkey_text_on")
+            } else {
+                messages.text("app.hotkey_text_off")
+            },
+        );
+        self.widget(cx, ids!(show_leading_ws_button)).set_text(
+            cx,
+            if state.settings.quick_paste_show_leading_whitespace {
+                messages.text("app.leading_ws_on")
+            } else {
+                messages.text("app.leading_ws_off")
+            },
+        );
+        self.widget(cx, ids!(show_thumbnails_button)).set_text(
+            cx,
+            if state.settings.quick_paste_show_thumbnails {
+                messages.text("app.thumbnails_on")
+            } else {
+                messages.text("app.thumbnails_off")
+            },
+        );
+        self.widget(cx, ids!(draw_rtf_button)).set_text(
+            cx,
+            if state.settings.quick_paste_draw_rtf {
+                messages.text("app.draw_rtf_on")
+            } else {
+                messages.text("app.draw_rtf_off")
+            },
+        );
+        self.widget(cx, ids!(prompt_delete_button)).set_text(
+            cx,
+            if state.settings.quick_paste_prompt_delete {
+                messages.text("app.prompt_delete_on")
+            } else {
+                messages.text("app.prompt_delete_off")
+            },
+        );
+        self.widget(cx, ids!(ensure_visible_button)).set_text(
+            cx,
+            if state.settings.quick_paste_ensure_visible {
+                messages.text("app.ensure_visible_on")
+            } else {
+                messages.text("app.ensure_visible_off")
+            },
+        );
+        self.widget(cx, ids!(show_groups_main_button)).set_text(
+            cx,
+            if state.settings.quick_paste_show_groups_in_main {
+                messages.text("app.groups_main_on")
+            } else {
+                messages.text("app.groups_main_off")
+            },
+        );
+        self.widget(cx, ids!(always_show_scrollbar_button))
+            .set_text(
+                cx,
+                if state.settings.quick_paste_always_show_scrollbar {
+                    messages.text("app.scrollbar_on")
+                } else {
+                    messages.text("app.scrollbar_off")
+                },
+            );
+        self.widget(cx, ids!(show_pasted_button)).set_text(
+            cx,
+            if state.settings.quick_paste_show_pasted_indicator {
+                messages.text("app.pasted_indicator_on")
+            } else {
+                messages.text("app.pasted_indicator_off")
+            },
+        );
+        self.widget(cx, ids!(elevated_paste_button)).set_text(
+            cx,
+            if state.settings.quick_paste_elevated_paste {
+                messages.text("app.elevated_paste_on")
+            } else {
+                messages.text("app.elevated_paste_off")
             },
         );
         self.widget(cx, ids!(duplicate_policy_button)).set_text(
@@ -1101,6 +2050,12 @@ impl App {
             .set_text(cx, &state.settings.max_history.to_string());
         self.widget(cx, ids!(capture_interval_input))
             .set_text(cx, &state.settings.capture_interval_ms.to_string());
+        self.widget(cx, ids!(lines_per_row_input))
+            .set_text(cx, &state.settings.quick_paste_lines_per_row.to_string());
+        self.widget(cx, ids!(transparency_input)).set_text(
+            cx,
+            &state.settings.quick_paste_transparency_percent.to_string(),
+        );
         self.widget(cx, ids!(hotkey_show_input))
             .set_text(cx, &state.settings.hotkey_show_history);
         self.widget(cx, ids!(hotkey_search_input))
@@ -1121,7 +2076,88 @@ impl App {
         self.refresh_local_status(cx);
         self.refresh_detail(cx);
         self.apply_page_visibility(cx);
+        self.apply_settings_tab_visibility(cx);
+        self.sync_tray_state();
         self.ui.redraw(cx);
+    }
+
+    fn apply_filter_labels(&self, cx: &mut Cx, messages: &I18nBundle) {
+        for (id, filter, key) in [
+            (ids!(filter_all_button), ClipFilter::All, "app.filter_all"),
+            (
+                ids!(filter_pinned_button),
+                ClipFilter::Pinned,
+                "app.filter_pinned",
+            ),
+            (
+                ids!(filter_text_button),
+                ClipFilter::Text,
+                "app.filter_text",
+            ),
+            (
+                ids!(filter_image_button),
+                ClipFilter::Images,
+                "app.filter_images",
+            ),
+            (
+                ids!(filter_files_button),
+                ClipFilter::Files,
+                "app.filter_files",
+            ),
+        ] {
+            let text = if self.clip_filter == filter {
+                messages
+                    .text("app.active_choice")
+                    .replace("{label}", messages.text(key))
+            } else {
+                messages.text(key).to_owned()
+            };
+            self.widget(cx, id).set_text(cx, &text);
+        }
+    }
+
+    fn apply_settings_tab_labels(&self, cx: &mut Cx, messages: &I18nBundle) {
+        for (id, tab, key) in [
+            (
+                ids!(settings_general_tab),
+                SettingsTab::General,
+                "app.settings_general",
+            ),
+            (
+                ids!(settings_types_tab),
+                SettingsTab::Types,
+                "app.settings_types",
+            ),
+            (
+                ids!(settings_keyboard_tab),
+                SettingsTab::Keyboard,
+                "app.settings_keyboard",
+            ),
+            (
+                ids!(settings_quick_paste_tab),
+                SettingsTab::QuickPaste,
+                "app.settings_quick_paste",
+            ),
+            (
+                ids!(settings_sync_tab),
+                SettingsTab::Sync,
+                "app.sync_settings",
+            ),
+            (
+                ids!(settings_about_tab),
+                SettingsTab::About,
+                "app.settings_about",
+            ),
+        ] {
+            let text = if self.active_settings_tab == tab {
+                messages
+                    .text("app.active_choice")
+                    .replace("{label}", messages.text(key))
+            } else {
+                messages.text(key).to_owned()
+            };
+            self.widget(cx, id).set_text(cx, &text);
+        }
     }
 
     fn refresh_local_status(&mut self, cx: &mut Cx) {
@@ -1163,10 +2199,15 @@ impl App {
             let Some(state) = self.state.as_mut() else {
                 return;
             };
+            let limit = state.settings.max_history.max(HISTORY_ROWS as u32);
             let clips = state
                 .store
-                .search_clips(&state.query, HISTORY_ROWS as u32)
-                .unwrap_or_default();
+                .search_clips(&state.query, limit)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|clip| clip_matches_filter(clip, self.clip_filter))
+                .take(HISTORY_ROWS)
+                .collect::<Vec<_>>();
             let count = state
                 .store
                 .stats()
@@ -1209,17 +2250,23 @@ impl App {
     }
 
     fn row_text(&self, index: usize, clip: &Clip, selected: bool) -> String {
-        let text = clip
-            .primary_text
-            .as_deref()
-            .map(yank_core::summarize_text)
-            .unwrap_or_else(|| clip.description.clone());
+        let show_leading_whitespace = self
+            .state
+            .as_ref()
+            .map(|state| state.settings.quick_paste_show_leading_whitespace)
+            .unwrap_or(false);
+        let text = clip.primary_text.as_deref().map_or_else(
+            || clip.description.clone(),
+            |text| summarize_row_text(text, show_leading_whitespace),
+        );
         let pin = if clip.pinned {
             self.text("app.pinned_marker")
         } else {
             String::new()
         };
         let types = self.row_type_text(clip);
+        let source = clip.source_app.as_deref().unwrap_or("yank");
+        let updated = format_timestamp(clip.updated_at);
         let key = if selected {
             "app.row_selected_template"
         } else {
@@ -1228,12 +2275,27 @@ impl App {
         self.template(
             key,
             &[
-                ("{index}", (index + 1).to_string()),
+                ("{index}", self.row_hotkey_text(index)),
                 ("{pin}", pin),
                 ("{types}", types),
+                ("{source}", source.to_owned()),
+                ("{updated}", updated),
                 ("{text}", text),
             ],
         )
+    }
+
+    fn row_hotkey_text(&self, index: usize) -> String {
+        if self
+            .state
+            .as_ref()
+            .map(|state| state.settings.quick_paste_show_hotkey_text)
+            .unwrap_or(true)
+        {
+            (index + 1).to_string()
+        } else {
+            String::new()
+        }
     }
 
     fn row_type_text(&self, clip: &Clip) -> String {
@@ -1287,14 +2349,12 @@ impl App {
                         ("{id}", short_id(&clip.id)),
                         ("{formats}", clip.formats.len().to_string()),
                         ("{types}", types),
-                        ("{updated}", clip.updated_at.to_string()),
+                        ("{updated}", format_timestamp(clip.updated_at)),
                         ("{pin}", pin),
                     ],
                 ),
             );
-            let preview = self.clip_preview(&clip);
             let editable_text = editable_text(&clip).unwrap_or_default();
-            self.widget(cx, ids!(preview)).set_text(cx, &preview);
             self.widget(cx, ids!(edit_input))
                 .set_text(cx, editable_text);
             let pin_label = if clip.pinned {
@@ -1303,44 +2363,18 @@ impl App {
                 self.text("app.pin")
             };
             self.widget(cx, ids!(pin_button)).set_text(cx, &pin_label);
+            self.widget(cx, ids!(menu_pin_button))
+                .set_text(cx, &pin_label);
         } else {
             self.widget(cx, ids!(selected_title))
                 .set_text(cx, &self.text("app.no_selection"));
             self.widget(cx, ids!(selected_meta)).set_text(cx, "");
-            self.widget(cx, ids!(preview))
-                .set_text(cx, &self.text("app.empty"));
             self.widget(cx, ids!(edit_input)).set_text(cx, "");
             self.widget(cx, ids!(pin_button))
                 .set_text(cx, &self.text("app.pin"));
+            self.widget(cx, ids!(menu_pin_button))
+                .set_text(cx, &self.text("app.pin"));
         }
-    }
-
-    fn clip_preview(&self, clip: &Clip) -> String {
-        if let Some(text) = editable_text(clip) {
-            return text.to_owned();
-        }
-        if let Some(text) = clip.primary_text.as_deref().filter(|text| !text.is_empty()) {
-            return text.to_owned();
-        }
-        if let Some((width, height)) = clip
-            .formats
-            .iter()
-            .find_map(ClipFormat::image_rgba_dimensions)
-        {
-            return self.template(
-                "app.preview_image",
-                &[
-                    ("{width}", width.to_string()),
-                    ("{height}", height.to_string()),
-                ],
-            );
-        }
-        clip.formats
-            .iter()
-            .find_map(ClipFormat::html_value)
-            .map(html_to_text)
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| clip.description.clone())
     }
 
     fn clear_search(&mut self, cx: &mut Cx) {
@@ -1350,6 +2384,28 @@ impl App {
         self.widget(cx, ids!(search_input)).set_text(cx, "");
         self.refresh_history(cx);
         self.set_status(cx, "app.status_ready");
+    }
+
+    fn set_clip_filter(&mut self, cx: &mut Cx, filter: ClipFilter) {
+        self.clip_filter = filter;
+        self.group_panel_visible = false;
+        if let Some(state) = self.state.as_ref() {
+            self.widget(cx, ids!(groups_button))
+                .set_text(cx, &self.clip_filter_label(&state.messages));
+            self.apply_filter_labels(cx, &state.messages);
+        }
+        self.refresh_history(cx);
+    }
+
+    fn clip_filter_label(&self, messages: &I18nBundle) -> String {
+        let key = match self.clip_filter {
+            ClipFilter::All => "app.filter_all",
+            ClipFilter::Pinned => "app.filter_pinned",
+            ClipFilter::Text => "app.filter_text",
+            ClipFilter::Images => "app.filter_images",
+            ClipFilter::Files => "app.filter_files",
+        };
+        format!("{}: {}", messages.text("app.groups"), messages.text(key))
     }
 
     fn copy_device_id(&mut self, cx: &mut Cx) {
@@ -1366,6 +2422,7 @@ impl App {
             && let Some(clip) = state.history.get(index)
         {
             state.selected_id = Some(clip.id.clone());
+            self.pending_delete_id = None;
             self.refresh_history(cx);
             self.widget(cx, row_id(index)).set_key_focus(cx);
         }
@@ -1467,6 +2524,16 @@ impl App {
         }
     }
 
+    fn copy_selected_transformed(&mut self, cx: &mut Cx, transform: TextTransform) {
+        let result = self.with_state_mut(|state| state.copy_selected_transformed(transform));
+        match result {
+            Some(Ok(true)) => self.set_status(cx, "app.status_copied_transformed"),
+            Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
     fn save_selected_edit(&mut self, cx: &mut Cx) {
         let Some(selected) = self.state.as_ref().and_then(|state| state.selected_clip()) else {
             self.set_status(cx, "app.status_no_selection");
@@ -1509,9 +2576,28 @@ impl App {
     }
 
     fn delete_selected(&mut self, cx: &mut Cx) {
+        let selected_id = self
+            .state
+            .as_ref()
+            .and_then(|state| state.selected_id.clone());
+        let prompt_delete = self
+            .state
+            .as_ref()
+            .map(|state| state.settings.quick_paste_prompt_delete)
+            .unwrap_or(false);
+        if prompt_delete
+            && selected_id.is_some()
+            && self.pending_delete_id.as_ref() != selected_id.as_ref()
+        {
+            self.pending_delete_id = selected_id;
+            self.set_status(cx, "app.status_confirm_delete");
+            return;
+        }
+
         let result = self.with_state_mut(|state| state.delete_selected());
         match result {
             Some(Ok(true)) => {
+                self.pending_delete_id = None;
                 self.set_status(cx, "app.status_deleted");
                 self.refresh_history(cx);
             }
@@ -1668,6 +2754,98 @@ impl App {
         self.set_status(cx, "app.status_settings_saved");
     }
 
+    fn save_quick_paste_settings(&mut self, cx: &mut Cx) {
+        let lines_per_row =
+            match parse_u32_setting(&self.widget(cx, ids!(lines_per_row_input)).text()) {
+                Some(value) if (1..=5).contains(&value) => value,
+                _ => {
+                    self.set_status(cx, "app.status_invalid_number");
+                    return;
+                }
+            };
+        let transparency_percent =
+            match parse_u32_setting(&self.widget(cx, ids!(transparency_input)).text()) {
+                Some(value) if value <= 90 => value,
+                _ => {
+                    self.set_status(cx, "app.status_invalid_number");
+                    return;
+                }
+            };
+
+        if let Some(state) = &mut self.state {
+            state.settings.quick_paste_lines_per_row = lines_per_row;
+            state.settings.quick_paste_transparency_percent = transparency_percent;
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn toggle_bool_setting(&mut self, cx: &mut Cx, field: impl FnOnce(&mut Settings) -> &mut bool) {
+        if let Some(state) = &mut self.state {
+            let value = field(&mut state.settings);
+            *value = !*value;
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn cycle_popup_position(&mut self, cx: &mut Cx) {
+        if let Some(state) = &mut self.state {
+            let next = QuickPastePosition::parse(&state.settings.quick_paste_position).next();
+            state.settings.quick_paste_position = next.as_str().to_owned();
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn cycle_lines_per_row(&mut self, cx: &mut Cx) {
+        if let Some(state) = &mut self.state {
+            state.settings.quick_paste_lines_per_row =
+                if state.settings.quick_paste_lines_per_row >= 5 {
+                    1
+                } else {
+                    state.settings.quick_paste_lines_per_row + 1
+                };
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn cycle_transparency(&mut self, cx: &mut Cx) {
+        const STEPS: &[u32] = &[0, 5, 10, 15, 20, 25, 30, 35, 40];
+        if let Some(state) = &mut self.state {
+            let current = state.settings.quick_paste_transparency_percent;
+            let next_index = STEPS
+                .iter()
+                .position(|value| *value == current)
+                .map(|index| (index + 1) % STEPS.len())
+                .unwrap_or(0);
+            state.settings.quick_paste_transparency_percent = STEPS[next_index];
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
     fn save_hotkey_settings(&mut self, cx: &mut Cx) {
         let hotkeys = HotkeySettingsInput {
             show_history: self.widget(cx, ids!(hotkey_show_input)).text(),
@@ -1730,6 +2908,96 @@ impl App {
                 .max(MIN_CAPTURE_INTERVAL_MS) as f64
                 / 1000.0;
             self.poll_timer = cx.start_interval(interval);
+        }
+    }
+
+    fn restart_tray_timer(&mut self, cx: &mut Cx) {
+        if !self.tray_timer.is_empty() {
+            cx.stop_timer(self.tray_timer);
+            self.tray_timer = Timer::empty();
+        }
+        self.tray_timer = cx.start_interval(0.25);
+    }
+
+    fn drain_tray_commands(&mut self, cx: &mut Cx) {
+        let mut commands = Vec::new();
+        if let Some(rx) = &self.tray_rx {
+            while let Ok(command) = rx.try_recv() {
+                commands.push(command);
+            }
+        }
+
+        for command in commands {
+            match command {
+                TrayCommand::Open => {
+                    self.show_main_page(cx);
+                    self.refresh_history(cx);
+                }
+                TrayCommand::Settings => self.show_settings_page(cx),
+                TrayCommand::CaptureNow => self.capture_clipboard(cx),
+                TrayCommand::SyncNow => self.sync_now(cx),
+                TrayCommand::ToggleCapture => self.toggle_capture(cx),
+                TrayCommand::Exit => std::process::exit(0),
+            }
+        }
+    }
+
+    fn start_tray(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            let Some(state) = self.state.as_ref() else {
+                return;
+            };
+            if !state.settings.show_tray_icon || self.tray_handle.is_some() {
+                return;
+            }
+
+            let (tx, rx) = mpsc::channel();
+            let tray = YankTray {
+                sender: tx,
+                capture_enabled: state.settings.capture_enabled,
+                labels: TrayLabels::from_messages(&state.messages),
+            };
+            match tray.assume_sni_available(true).spawn() {
+                Ok(handle) => {
+                    self.tray_rx = Some(rx);
+                    self.tray_handle = Some(handle);
+                }
+                Err(error) => {
+                    eprintln!("system tray unavailable: {error}");
+                }
+            }
+        }
+    }
+
+    fn sync_tray_state(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            if let (Some(handle), Some(state)) = (self.tray_handle.as_ref(), self.state.as_ref()) {
+                let capture_enabled = state.settings.capture_enabled;
+                let labels = TrayLabels::from_messages(&state.messages);
+                let _ = handle.update(|tray| {
+                    tray.capture_enabled = capture_enabled;
+                    tray.labels = labels;
+                });
+            }
+        }
+    }
+
+    fn apply_tray_visibility(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            let enabled = self
+                .state
+                .as_ref()
+                .map(|state| state.settings.show_tray_icon)
+                .unwrap_or(false);
+            if enabled {
+                self.start_tray();
+            } else if let Some(handle) = self.tray_handle.take() {
+                handle.shutdown().wait();
+                self.tray_rx = None;
+            }
         }
     }
 
@@ -1882,6 +3150,19 @@ impl ClientState {
         };
         clipboard.set_text(text.clone())?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
+        Ok(true)
+    }
+
+    fn copy_selected_transformed(&mut self, transform: TextTransform) -> Result<bool> {
+        let Some(text) = self.selected_clip().and_then(plain_text_payload) else {
+            return Ok(false);
+        };
+        let Some(clipboard) = &mut self.clipboard else {
+            anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
+        };
+        let transformed = transform_text(&text, transform);
+        clipboard.set_text(transformed.clone())?;
+        self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&transformed)]));
         Ok(true)
     }
 
@@ -2132,6 +3413,39 @@ fn plain_text_payload(clip: &Clip) -> Option<String> {
         .map(|paths| paths.join("\n"))
 }
 
+fn transform_text(text: &str, transform: TextTransform) -> String {
+    match transform {
+        TextTransform::Upper => text.to_uppercase(),
+        TextTransform::Lower => text.to_lowercase(),
+        TextTransform::Trim => text.trim().to_owned(),
+        TextTransform::RemoveLineFeeds => text
+            .lines()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+        TextTransform::CamelCase => {
+            let mut output = String::new();
+            for (index, word) in text
+                .split(|ch: char| !ch.is_alphanumeric())
+                .filter(|word| !word.is_empty())
+                .enumerate()
+            {
+                let mut chars = word.chars();
+                if let Some(first) = chars.next() {
+                    if index == 0 {
+                        output.push_str(&first.to_lowercase().collect::<String>());
+                    } else {
+                        output.push_str(&first.to_uppercase().collect::<String>());
+                    }
+                    output.push_str(&chars.as_str().to_lowercase());
+                }
+            }
+            output
+        }
+    }
+}
+
 fn enabled_capture_format_names(messages: &I18nBundle, settings: &Settings) -> String {
     let mut names = Vec::new();
     if settings.capture_text_enabled {
@@ -2174,6 +3488,27 @@ fn clip_format_names<'a>(messages: &'a I18nBundle, clip: &Clip) -> Vec<&'a str> 
     names
 }
 
+fn clip_matches_filter(clip: &Clip, filter: ClipFilter) -> bool {
+    match filter {
+        ClipFilter::All => true,
+        ClipFilter::Pinned => clip.pinned,
+        ClipFilter::Text => clip.formats.iter().any(ClipFormat::is_text),
+        ClipFilter::Images => clip
+            .formats
+            .iter()
+            .any(|format| format.image_rgba_dimensions().is_some()),
+        ClipFilter::Files => clip.formats.iter().any(ClipFormat::is_file_list),
+    }
+}
+
+fn popup_position_label<'a>(messages: &'a I18nBundle, value: &str) -> &'a str {
+    match QuickPastePosition::parse(value) {
+        QuickPastePosition::Cursor => messages.text("app.popup_cursor"),
+        QuickPastePosition::Caret => messages.text("app.popup_caret"),
+        QuickPastePosition::Previous => messages.text("app.popup_previous"),
+    }
+}
+
 fn summarize_paths(paths: &[String]) -> String {
     paths
         .iter()
@@ -2186,6 +3521,28 @@ fn summarize_paths(paths: &[String]) -> String {
         .take(4)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn summarize_row_text(text: &str, show_leading_whitespace: bool) -> String {
+    if show_leading_whitespace {
+        let visible = text
+            .chars()
+            .map(|ch| match ch {
+                ' ' => '.',
+                '\t' => '>',
+                '\r' | '\n' => ' ',
+                other => other,
+            })
+            .take(160)
+            .collect::<String>();
+        if visible.trim().is_empty() {
+            "(empty text)".to_owned()
+        } else {
+            visible
+        }
+    } else {
+        yank_core::summarize_text(text)
+    }
 }
 
 fn html_to_text(html: &str) -> String {
@@ -2420,6 +3777,16 @@ fn row_id(index: usize) -> &'static [LiveId] {
 
 fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
+}
+
+fn format_timestamp(timestamp: i64) -> String {
+    DateTime::from_timestamp(timestamp, 0)
+        .map(|time| {
+            time.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|| timestamp.to_string())
 }
 
 fn parse_u32_setting(value: &str) -> Option<u32> {

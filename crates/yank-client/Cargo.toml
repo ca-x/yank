@@ -8,11 +8,15 @@ build = "build.rs"
 [dependencies]
 anyhow.workspace = true
 arboard.workspace = true
+chrono.workspace = true
 directories.workspace = true
 makepad-widgets.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 yank-core = { path = "../yank-core" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni.workspace = true
 
 [[bin]]
 name = "yank-client"

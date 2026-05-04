@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -19,6 +19,7 @@ chrono = { version = "0.4.42", default-features = false, features = ["clock", "s
 clap = { version = "4.5.51", features = ["derive", "env"] }
 directories = "6.0.0"
 hex = "0.4.3"
+ksni = { version = "0.3.4", features = ["blocking"] }
 makepad-widgets = { git = "https://github.com/makepad/makepad.git", rev = "c2fb2c4b064f89dcb534d8cb6cf15e6f5691ad73" }
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }

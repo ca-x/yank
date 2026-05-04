@@ -1,0 +1,7 @@
+[env]
+MAKEPAD_APP_ICON_32 = { value = "crates/yank-client/assets/yank-icon-32.png", relative = true }
+MAKEPAD_APP_ICON_64 = { value = "crates/yank-client/assets/yank-icon-64.png", relative = true }
+MAKEPAD_APP_ICON_128 = { value = "crates/yank-client/assets/yank-icon-128.png", relative = true }
+MAKEPAD_APP_ICON_256 = { value = "crates/yank-client/assets/yank-icon-256.png", relative = true }
+MAKEPAD_APP_ICON_512 = { value = "crates/yank-client/assets/yank-icon-512.png", relative = true }
+MAKEPAD_APP_ICON_1024 = { value = "crates/yank-client/assets/yank-icon-1024.png", relative = true }
