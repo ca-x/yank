@@ -1,9 +1,13 @@
 use anyhow::Result;
 use arboard::{Clipboard, Error as ClipboardError, ImageData};
+use makepad_widgets::makepad_draw::text::{font::FontId, fonts::Fonts, loader::FontDefinition};
 use makepad_widgets::*;
 use std::{
+    any::TypeId,
     borrow::Cow,
+    cell::RefCell,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 use yank_client::{
     paths,
@@ -16,6 +20,9 @@ use yank_core::{
 
 const HISTORY_ROWS: usize = 20;
 const MIN_CAPTURE_INTERVAL_MS: u64 = 250;
+const MAKEPAD_PACKAGE_ROOT: &str = "makepad";
+
+include!(concat!(env!("OUT_DIR"), "/embedded_makepad_fonts.rs"));
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CaptureFormatKind {
@@ -997,7 +1004,10 @@ impl App {
     fn toggle_theme(&mut self, cx: &mut Cx) {
         if let Some(state) = &mut self.state {
             state.settings.theme = state.settings.theme.toggle();
-            let _ = state.persist_settings();
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
         }
         self.apply_i18n(cx);
     }
@@ -1006,7 +1016,10 @@ impl App {
         if let Some(state) = &mut self.state {
             state.settings.language = state.settings.language.toggle();
             state.messages = i18n::bundle(state.settings.language);
-            let _ = state.persist_settings();
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
         }
         self.apply_i18n(cx);
         self.refresh_history(cx);
@@ -1779,8 +1792,194 @@ fn blank_to_none(value: String) -> Option<String> {
     }
 }
 
-app_main!(App);
-
 fn main() {
-    app_main();
+    if Cx::pre_start() {
+        return;
+    }
+
+    let app = Rc::new(RefCell::new(None));
+    let cx = Rc::new(RefCell::new(Cx::new(Box::new(move |cx, event| {
+        if let Event::Startup = event {
+            *app.borrow_mut() = App::new_main(cx);
+        }
+        if let Event::LiveEdit = event {
+            app.borrow_mut().update_main(cx);
+        }
+        if let Some(app) = &mut *app.borrow_mut() {
+            <dyn AppMain>::handle_event(app, cx, event);
+        }
+    }))));
+
+    register_empty_makepad_main_module(&mut cx.borrow_mut());
+    cx.borrow_mut()
+        .init_websockets(std::option_env!("MAKEPAD_STUDIO_HTTP").unwrap_or(""));
+    if std::env::args().any(|value| value == "--stdin-loop") {
+        cx.borrow_mut().in_makepad_studio = true;
+    }
+    live_design(&mut cx.borrow_mut());
+    cx.borrow_mut().live_registry.borrow_mut().package_root = Some(MAKEPAD_PACKAGE_ROOT.to_owned());
+    cx.borrow_mut().init_cx_os();
+    App::register_main_module(&mut cx.borrow_mut());
+    register_embedded_makepad_fonts(&mut cx.borrow_mut());
+    Cx::event_loop(cx);
+}
+
+fn register_empty_makepad_main_module(cx: &mut Cx) {
+    cx.live_registry.borrow_mut().main_module = Some(LiveTypeInfo {
+        live_type: TypeId::of::<()>(),
+        type_name: LiveId::from_str_with_lut("YankEmptyMain").expect("valid live id"),
+        module_id: LiveModuleId::from_str("yank::empty").expect("valid live module id"),
+        live_ignore: true,
+        fields: Vec::new(),
+    });
+}
+
+fn register_embedded_makepad_fonts(cx: &mut Cx) {
+    CxDraw::lazy_construct_fonts(cx);
+    let fonts = cx.get_global::<Rc<RefCell<Fonts>>>().clone();
+    let mut fonts = fonts.borrow_mut();
+
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("IBMPlexSans-Text.ttf"),
+        IBM_PLEX_SANS_TEXT,
+        &[-0.1, 0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("IBMPlexSans-SemiBold.ttf"),
+        IBM_PLEX_SANS_SEMIBOLD,
+        &[-0.1, 0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("IBMPlexSans-Italic.ttf"),
+        IBM_PLEX_SANS_ITALIC,
+        &[-0.1, 0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("IBMPlexSans-BoldItalic.ttf"),
+        IBM_PLEX_SANS_BOLD_ITALIC,
+        &[-0.1, 0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("LiberationMono-Regular.ttf"),
+        LIBERATION_MONO_REGULAR,
+        &[0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("fa-solid-900.ttf"),
+        FONT_AWESOME_SOLID,
+        &[0.0],
+    );
+    register_multipart_font_variants(
+        &mut fonts,
+        &[
+            makepad_font_crate_path("makepad_fonts_chinese_regular", "LXGWWenKaiRegular.ttf"),
+            makepad_font_crate_path("makepad_fonts_chinese_regular_2", "LXGWWenKaiRegular.ttf.2"),
+        ],
+        &[LXGW_WENKAI_REGULAR, LXGW_WENKAI_REGULAR_2],
+        &[0.0],
+    );
+    register_multipart_font_variants(
+        &mut fonts,
+        &[
+            makepad_font_crate_path("makepad_fonts_chinese_bold", "LXGWWenKaiBold.ttf"),
+            makepad_font_crate_path("makepad_fonts_chinese_bold_2", "LXGWWenKaiBold.ttf.2"),
+        ],
+        &[LXGW_WENKAI_BOLD, LXGW_WENKAI_BOLD_2],
+        &[0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_font_crate_path("makepad_fonts_emoji", "NotoColorEmoji.ttf"),
+        NOTO_COLOR_EMOJI,
+        &[0.0],
+    );
+
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("LXGWWenKaiRegular.ttf"),
+        LXGW_WENKAI_REGULAR,
+        &[0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("LXGWWenKaiBold.ttf"),
+        LXGW_WENKAI_BOLD,
+        &[0.0],
+    );
+    register_font_variants(
+        &mut fonts,
+        &makepad_widget_font_path("NotoColorEmoji.ttf"),
+        NOTO_COLOR_EMOJI,
+        &[0.0],
+    );
+}
+
+fn makepad_widget_font_path(file_name: &str) -> String {
+    makepad_font_crate_path("makepad_widgets", file_name)
+}
+
+fn makepad_font_crate_path(crate_name: &str, file_name: &str) -> String {
+    format!("{MAKEPAD_PACKAGE_ROOT}/{crate_name}/resources/{file_name}")
+}
+
+fn register_font_variants(fonts: &mut Fonts, path: &str, data: &'static [u8], ascenders: &[f32]) {
+    for ascender in ascenders {
+        register_font(fonts, &[path.to_owned()], data.to_vec(), *ascender, 0.0);
+    }
+}
+
+fn register_multipart_font_variants(
+    fonts: &mut Fonts,
+    paths: &[String],
+    parts: &[&'static [u8]],
+    ascenders: &[f32],
+) {
+    let mut data = Vec::new();
+    for part in parts {
+        data.extend_from_slice(part);
+    }
+
+    for ascender in ascenders {
+        register_font(fonts, paths, data.clone(), *ascender, 0.0);
+    }
+}
+
+fn register_font(
+    fonts: &mut Fonts,
+    paths: &[String],
+    data: Vec<u8>,
+    ascender: f32,
+    descender: f32,
+) {
+    let font_id = makepad_font_id(paths, ascender, descender);
+    if fonts.is_font_known(font_id) {
+        return;
+    }
+
+    fonts.define_font(
+        font_id,
+        FontDefinition {
+            data: Rc::new(data),
+            index: 0,
+            ascender_fudge_in_ems: ascender,
+            descender_fudge_in_ems: descender,
+        },
+    );
+}
+
+fn makepad_font_id(paths: &[String], ascender: f32, descender: f32) -> FontId {
+    let mut live_id = LiveId::seeded();
+    for path in paths {
+        live_id = live_id.str_append(path);
+    }
+    live_id = live_id
+        .bytes_append(&ascender.to_be_bytes())
+        .bytes_append(&descender.to_be_bytes());
+    FontId::from(live_id.0)
 }
