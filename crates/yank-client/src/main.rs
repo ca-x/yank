@@ -4667,12 +4667,12 @@ impl ClientState {
     fn clear_history(&mut self) -> yank_core::Result<usize> {
         self.selected_id = None;
         self.history.clear();
-        Ok(self.store.clear_all_clips()?)
+        self.store.clear_all_clips()
     }
 
     fn delete_non_pinned(&mut self) -> yank_core::Result<usize> {
         self.selected_id = None;
-        Ok(self.store.delete_non_pinned_clips()?)
+        self.store.delete_non_pinned_clips()
     }
 
     fn export_history(&mut self, path: &str) -> Result<(usize, String)> {
