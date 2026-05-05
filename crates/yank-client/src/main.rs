@@ -1255,6 +1255,7 @@ impl RegisteredGlobalHotkeys {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrayCommand {
     Open,
@@ -6804,10 +6805,17 @@ impl App {
     }
 
     fn close_to_tray_enabled(&self) -> bool {
-        self.state
-            .as_ref()
-            .map(|state| state.settings.show_tray_icon)
-            .unwrap_or(false)
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        {
+            self.state
+                .as_ref()
+                .map(|state| state.settings.show_tray_icon)
+                .unwrap_or(false)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            false
+        }
     }
 
     fn restart_background_timer(&mut self, cx: &mut Cx) {
@@ -7072,6 +7080,7 @@ impl App {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn shutdown_tray(&mut self) {
         #[cfg(target_os = "linux")]
         {
@@ -7089,6 +7098,7 @@ impl App {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn exit_application(&mut self) -> ! {
         self.shutdown_tray();
         std::process::exit(0);
