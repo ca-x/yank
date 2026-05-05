@@ -1540,6 +1540,63 @@ fn tray_icon_pixmap(size: i32) -> ksni::Icon {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn restore_linux_main_window_from_iconified_state() {
+    use makepad_widgets::makepad_platform::os::linux::x11::{
+        x11_sys, xlib_app::get_xlib_app_global,
+    };
+
+    unsafe {
+        let app = get_xlib_app_global();
+        if app.display.is_null() {
+            return;
+        }
+
+        let Some(window) = app
+            .window_map
+            .values()
+            .copied()
+            .filter(|window| !window.is_null())
+            .map(|window| &*window)
+            .find(|window| window.window_id == CxWindowPool::id_zero())
+            .and_then(|window| window.window)
+        else {
+            return;
+        };
+
+        x11_sys::XMapWindow(app.display, window);
+
+        let default_screen = x11_sys::XDefaultScreen(app.display);
+        let root_window = x11_sys::XRootWindow(app.display, default_screen);
+        let active_window_atom =
+            x11_sys::XInternAtom(app.display, c"_NET_ACTIVE_WINDOW".as_ptr(), 0);
+        let mut event = x11_sys::XClientMessageEvent {
+            type_: x11_sys::ClientMessage as i32,
+            serial: 0,
+            send_event: 1,
+            display: app.display,
+            window,
+            message_type: active_window_atom,
+            format: 32,
+            data: {
+                let mut data = std::mem::zeroed::<x11_sys::XClientMessageEvent__bindgen_ty_1>();
+                data.l[0] = 1;
+                data.l[1] = x11_sys::CurrentTime as std::os::raw::c_long;
+                data
+            },
+        };
+        x11_sys::XSendEvent(
+            app.display,
+            root_window,
+            0,
+            (x11_sys::SubstructureNotifyMask | x11_sys::SubstructureRedirectMask)
+                as std::os::raw::c_long,
+            &mut event as *mut _ as *mut x11_sys::XEvent,
+        );
+        x11_sys::XFlush(app.display);
+    }
+}
+
 fn startup_theme() -> Theme {
     paths::database_path()
         .ok()
@@ -6909,6 +6966,8 @@ impl App {
 
     fn restore_main_window(&mut self, cx: &mut Cx) {
         cx.push_unique_platform_op(CxOsOp::RestoreWindow(CxWindowPool::id_zero()));
+        #[cfg(target_os = "linux")]
+        restore_linux_main_window_from_iconified_state();
     }
 
     fn minimize_main_window(&mut self, cx: &mut Cx) {
