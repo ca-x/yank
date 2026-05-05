@@ -1,6 +1,10 @@
 use anyhow::Result;
 use arboard::{Clipboard, Error as ClipboardError, ImageData};
 use chrono::{DateTime, Local};
+use global_hotkey::{
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
+    hotkey::{Code as GlobalHotKeyCode, HotKey, Modifiers as GlobalHotKeyModifiers},
+};
 use makepad_widgets::makepad_draw::text::{font::FontId, fonts::Fonts, loader::FontDefinition};
 use makepad_widgets::*;
 use regex::RegexBuilder;
@@ -826,11 +830,16 @@ script_mod! {
                                     }
                                     FieldRow{
                                         elevated_paste_button := DenseButton{text: ""}
+                                        paste_active_window_button := DenseButton{text: ""}
                                     }
                                     FieldRow{
                                         lines_per_row_label := Label{text: "" draw_text.color: theme.color_label_inner}
                                         lines_per_row_input := TextInput{width: 90 height: 34 empty_text: ""}
                                         save_quick_paste_button := ActionButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        paste_delay_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        paste_delay_input := TextInput{width: 90 height: 34 empty_text: ""}
                                     }
                                     FieldRow{
                                         transparency_label := Label{text: "" draw_text.color: theme.color_label_inner}
@@ -960,6 +969,8 @@ pub struct App {
     pending_clear_history: bool,
     #[rust]
     compare_left_id: Option<String>,
+    #[rust]
+    global_hotkeys: Option<RegisteredGlobalHotkeys>,
     #[rust]
     last_search_query: String,
     #[rust]
@@ -1139,6 +1150,53 @@ enum ExternalAction {
     WebSearch,
     QrCode,
     EmailBody,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PasteDispatch {
+    Disabled,
+    Scheduled,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum GlobalHotkeyAction {
+    ShowHistory,
+    CaptureNow,
+    SyncNow,
+    Clip(String),
+    Group(i64),
+    CopyBufferCopy(usize),
+    CopyBufferPaste(usize),
+    CopyBufferCut(usize),
+}
+
+struct RegisteredGlobalHotkey {
+    hotkey: HotKey,
+    action: GlobalHotkeyAction,
+}
+
+struct RegisteredGlobalHotkeys {
+    manager: GlobalHotKeyManager,
+    bindings: Vec<RegisteredGlobalHotkey>,
+}
+
+impl RegisteredGlobalHotkeys {
+    fn action_for(&self, id: u32) -> Option<GlobalHotkeyAction> {
+        self.bindings
+            .iter()
+            .find(|binding| binding.hotkey.id() == id)
+            .map(|binding| binding.action.clone())
+    }
+
+    fn unregister_all(&self) {
+        let hotkeys = self
+            .bindings
+            .iter()
+            .map(|binding| binding.hotkey)
+            .collect::<Vec<_>>();
+        let _ = self.manager.unregister_all(&hotkeys);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1488,6 +1546,7 @@ impl AppMain for App {
         }
 
         self.drain_tray_commands(cx);
+        self.drain_global_hotkey_events(cx);
 
         if self.handle_secondary_mouse_down(cx, event) {
             return;
@@ -2176,6 +2235,14 @@ impl MatchEvent for App {
         {
             self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_elevated_paste);
         }
+        if self
+            .button(cx, ids!(paste_active_window_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| {
+                &mut settings.quick_paste_paste_in_active_window
+            });
+        }
         if self.button(cx, ids!(save_behavior_button)).clicked(actions) {
             self.save_behavior_settings(cx);
         }
@@ -2270,6 +2337,7 @@ impl MatchEvent for App {
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
         if self.poll_timer.is_timer(event).is_some() {
+            self.drain_global_hotkey_events(cx);
             self.poll_clipboard(cx);
         }
         #[cfg(target_os = "linux")]
@@ -2429,6 +2497,7 @@ impl App {
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
                 self.apply_runtime_theme(cx);
+                self.register_global_hotkeys();
                 let captured = self.capture_current_clipboard_if_enabled(cx);
                 self.refresh_history(cx);
                 if !captured {
@@ -2443,6 +2512,7 @@ impl App {
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
                 self.apply_runtime_theme(cx);
+                self.register_global_hotkeys();
                 let captured = self.capture_current_clipboard_if_enabled(cx);
                 self.refresh_history(cx);
                 if !captured {
@@ -2737,6 +2807,7 @@ impl App {
             ids!(max_history_input),
             ids!(capture_interval_input),
             ids!(lines_per_row_input),
+            ids!(paste_delay_input),
             ids!(transparency_input),
             ids!(server_input),
             ids!(token_input),
@@ -3030,6 +3101,7 @@ impl App {
             (ids!(quick_paste_title), "app.quick_paste_options"),
             (ids!(search_scope_label), "app.search_scope"),
             (ids!(lines_per_row_label), "app.lines_per_row"),
+            (ids!(paste_delay_label), "app.paste_delay"),
             (ids!(transparency_label), "app.transparency"),
             (
                 ids!(multi_paste_separator_label),
@@ -3396,6 +3468,14 @@ impl App {
                 messages.text("app.elevated_paste_off")
             },
         );
+        self.widget(cx, ids!(paste_active_window_button)).set_text(
+            cx,
+            if state.settings.quick_paste_paste_in_active_window {
+                messages.text("app.paste_active_on")
+            } else {
+                messages.text("app.paste_active_off")
+            },
+        );
         self.widget(cx, ids!(update_order_button)).set_text(
             cx,
             if state.settings.quick_paste_update_order_on_copy {
@@ -3516,6 +3596,8 @@ impl App {
             .set_text(cx, &state.settings.capture_interval_ms.to_string());
         self.widget(cx, ids!(lines_per_row_input))
             .set_text(cx, &state.settings.quick_paste_lines_per_row.to_string());
+        self.widget(cx, ids!(paste_delay_input))
+            .set_text(cx, &state.settings.quick_paste_paste_delay_ms.to_string());
         self.widget(cx, ids!(transparency_input)).set_text(
             cx,
             &state.settings.quick_paste_transparency_percent.to_string(),
@@ -4305,10 +4387,20 @@ impl App {
             .as_ref()
             .and_then(|state| state.groups.get(index))
             .map(|group| group.id);
-        self.active_group_id = if self.active_group_id == group_id {
+        if let Some(group_id) = group_id {
+            self.set_group_filter_by_id(cx, group_id);
+        } else {
+            self.active_group_id = None;
+            self.group_panel_visible = false;
+            self.refresh_history(cx);
+        }
+    }
+
+    fn set_group_filter_by_id(&mut self, cx: &mut Cx, group_id: i64) {
+        self.active_group_id = if self.active_group_id == Some(group_id) {
             None
         } else {
-            group_id
+            Some(group_id)
         };
         self.group_panel_visible = false;
         self.refresh_history(cx);
@@ -4372,6 +4464,7 @@ impl App {
         let result = self.with_state_mut(|state| state.set_group_hotkey(group_id, &hotkey));
         match result {
             Some(Ok(Some(_))) => {
+                self.register_global_hotkeys();
                 self.set_status(cx, "app.status_group_hotkey_saved");
                 self.refresh_history(cx);
             }
@@ -4437,6 +4530,7 @@ impl App {
         match result {
             Some(Ok(true)) => {
                 self.active_group_id = None;
+                self.register_global_hotkeys();
                 self.set_status(cx, "app.status_group_deleted");
                 self.refresh_history(cx);
             }
@@ -4638,14 +4732,14 @@ impl App {
             let result = self.with_state_mut(|state| state.copy_selected_merged(None));
             match result {
                 Some(Ok(count)) if count > 0 => {
-                    self.set_status_text(
+                    self.refresh_history(cx);
+                    self.set_paste_success_status(
                         cx,
-                        &self.template(
+                        self.template(
                             "app.status_copied_merged",
                             &[("{count}", count.to_string())],
                         ),
                     );
-                    self.refresh_history(cx);
                 }
                 Some(Ok(_)) => self.set_status(cx, "app.status_plain_text_unavailable"),
                 Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4656,13 +4750,51 @@ impl App {
         let result = self.with_state_mut(|state| state.copy_selected());
         match result {
             Some(Ok(true)) => {
-                self.set_status(cx, "app.status_copied_selected");
                 self.refresh_history(cx);
+                self.set_paste_success_status(cx, self.text("app.status_copied_selected"));
             }
             Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
         }
+    }
+
+    fn set_paste_success_status(&mut self, cx: &mut Cx, clipboard_status: String) {
+        match self.dispatch_paste_to_active_window(cx) {
+            PasteDispatch::Disabled => self.set_status_text(cx, &clipboard_status),
+            PasteDispatch::Scheduled => {
+                let message =
+                    self.template("app.status_paste_sent", &[("{status}", clipboard_status)]);
+                self.set_status_text(cx, &message);
+            }
+            PasteDispatch::Unavailable => {
+                let message = self.template(
+                    "app.status_paste_unavailable",
+                    &[("{status}", clipboard_status)],
+                );
+                self.set_status_text(cx, &message);
+            }
+        }
+    }
+
+    fn dispatch_paste_to_active_window(&mut self, cx: &mut Cx) -> PasteDispatch {
+        let Some(settings) = self.state.as_ref().map(|state| state.settings.clone()) else {
+            return PasteDispatch::Disabled;
+        };
+        if !settings.quick_paste_paste_in_active_window {
+            return PasteDispatch::Disabled;
+        }
+        if !platform_paste_command_available() {
+            return PasteDispatch::Unavailable;
+        }
+
+        self.menu_visible = false;
+        self.group_panel_visible = false;
+        self.editor_visible = false;
+        self.apply_page_visibility(cx);
+        self.minimize_main_window(cx);
+        spawn_platform_paste_command(settings.quick_paste_paste_delay_ms);
+        PasteDispatch::Scheduled
     }
 
     fn copy_selected_plain_text(&mut self, cx: &mut Cx) {
@@ -4677,8 +4809,8 @@ impl App {
         let result = self.with_state_mut(|state| state.copy_selected_plain_text());
         match result {
             Some(Ok(true)) => {
-                self.set_status(cx, "app.status_copied_plain_text");
                 self.refresh_history(cx);
+                self.set_paste_success_status(cx, self.text("app.status_copied_plain_text"));
             }
             Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4695,14 +4827,14 @@ impl App {
             let result = self.with_state_mut(|state| state.copy_selected_merged_keep_order(None));
             match result {
                 Some(Ok(count)) if count > 0 => {
-                    self.set_status_text(
+                    self.refresh_history(cx);
+                    self.set_paste_success_status(
                         cx,
-                        &self.template(
+                        self.template(
                             "app.status_copied_merged_keep_order",
                             &[("{count}", count.to_string())],
                         ),
                     );
-                    self.refresh_history(cx);
                 }
                 Some(Ok(_)) => self.set_status(cx, "app.status_plain_text_unavailable"),
                 Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4714,8 +4846,8 @@ impl App {
         let result = self.with_state_mut(ClientState::copy_selected_keep_order);
         match result {
             Some(Ok(true)) => {
-                self.set_status(cx, "app.status_copied_keep_order");
                 self.refresh_history(cx);
+                self.set_paste_success_status(cx, self.text("app.status_copied_keep_order"));
             }
             Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4732,14 +4864,14 @@ impl App {
             let result = self.with_state_mut(|state| state.copy_selected_merged(Some(transform)));
             match result {
                 Some(Ok(count)) if count > 0 => {
-                    self.set_status_text(
+                    self.refresh_history(cx);
+                    self.set_paste_success_status(
                         cx,
-                        &self.template(
+                        self.template(
                             "app.status_copied_merged",
                             &[("{count}", count.to_string())],
                         ),
                     );
-                    self.refresh_history(cx);
                 }
                 Some(Ok(_)) => self.set_status(cx, "app.status_plain_text_unavailable"),
                 Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4750,8 +4882,8 @@ impl App {
         let result = self.with_state_mut(|state| state.copy_selected_transformed(transform));
         match result {
             Some(Ok(true)) => {
-                self.set_status(cx, "app.status_copied_transformed");
                 self.refresh_history(cx);
+                self.set_paste_success_status(cx, self.text("app.status_copied_transformed"));
             }
             Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4763,14 +4895,14 @@ impl App {
         let result = self.with_state_mut(|state| state.copy_selected_images_merged(direction));
         match result {
             Some(Ok(count)) if count > 0 => {
-                self.set_status_text(
+                self.refresh_history(cx);
+                self.set_paste_success_status(
                     cx,
-                    &self.template(
+                    self.template(
                         "app.status_copied_images_merged",
                         &[("{count}", count.to_string())],
                     ),
                 );
-                self.refresh_history(cx);
             }
             Some(Ok(_)) => self.set_status(cx, "app.status_image_merge_unavailable"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4781,7 +4913,9 @@ impl App {
     fn copy_generated_guid(&mut self, cx: &mut Cx) {
         let result = self.with_state_mut(ClientState::copy_generated_guid);
         match result {
-            Some(Ok(())) => self.set_status(cx, "app.status_copied_transformed"),
+            Some(Ok(())) => {
+                self.set_paste_success_status(cx, self.text("app.status_copied_transformed"));
+            }
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
         }
@@ -4791,8 +4925,8 @@ impl App {
         let result = self.with_state_mut(|state| state.copy_clip_by_id(id));
         match result {
             Some(Ok(true)) => {
-                self.set_status(cx, "app.status_copied_selected");
                 self.refresh_history(cx);
+                self.set_paste_success_status(cx, self.text("app.status_copied_selected"));
             }
             Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4826,14 +4960,14 @@ impl App {
         let result = self.with_state_mut(|state| state.copy_buffer_to_clipboard(index));
         match result {
             Some(Ok(true)) => {
-                self.set_status_text(
+                self.refresh_history(cx);
+                self.set_paste_success_status(
                     cx,
-                    &self.template(
+                    self.template(
                         "app.status_copy_buffer_pasted",
                         &[("{index}", (index + 1).to_string())],
                     ),
                 );
-                self.refresh_history(cx);
             }
             Some(Ok(false)) => self.set_status_text(
                 cx,
@@ -5089,6 +5223,7 @@ impl App {
                             .with_state_mut(|state| state.assign_selected_to_group(Some(group_id)));
                     }
                     self.new_clip_mode = false;
+                    self.register_global_hotkeys();
                     self.set_status(cx, "app.status_new_clip_saved");
                     self.refresh_history(cx);
                 }
@@ -5122,6 +5257,7 @@ impl App {
             });
             match result {
                 Some(Ok(true)) => {
+                    self.register_global_hotkeys();
                     self.set_status(cx, "app.status_edit_saved");
                     self.refresh_history(cx);
                 }
@@ -5142,6 +5278,7 @@ impl App {
         });
         match result {
             Some(Ok(true)) => {
+                self.register_global_hotkeys();
                 self.set_status(cx, "app.status_edit_saved");
                 self.refresh_history(cx);
             }
@@ -5169,6 +5306,7 @@ impl App {
             self.with_state_mut(|state| state.set_selected_dont_auto_delete(dont_auto_delete));
         match result {
             Some(Ok(true)) => {
+                self.register_global_hotkeys();
                 self.set_status(cx, "app.status_quick_properties_updated");
                 self.refresh_history(cx);
             }
@@ -5579,12 +5717,21 @@ impl App {
                     return;
                 }
             };
+        let paste_delay_ms =
+            match parse_u32_setting(&self.widget(cx, ids!(paste_delay_input)).text()) {
+                Some(value) if value <= 5_000 => value,
+                _ => {
+                    self.set_status(cx, "app.status_invalid_number");
+                    return;
+                }
+            };
         let multi_paste_separator =
             parse_separator_input(&self.widget(cx, ids!(multi_paste_separator_input)).text());
 
         if let Some(state) = &mut self.state {
             state.settings.quick_paste_lines_per_row = lines_per_row;
             state.settings.quick_paste_transparency_percent = transparency_percent;
+            state.settings.quick_paste_paste_delay_ms = paste_delay_ms;
             state.settings.multi_paste_separator = multi_paste_separator;
             if let Err(error) = state.persist_settings() {
                 self.set_status_text(cx, &error.to_string());
@@ -5739,6 +5886,7 @@ impl App {
                 return;
             }
         }
+        self.register_global_hotkeys();
         self.set_status(cx, "app.status_settings_saved");
     }
 
@@ -5797,6 +5945,7 @@ impl App {
                 return;
             }
         }
+        self.register_global_hotkeys();
         self.apply_i18n(cx);
         self.set_status(cx, "app.status_settings_saved");
     }
@@ -6103,15 +6252,21 @@ impl App {
             for command in commands {
                 match command {
                     TrayCommand::Open => {
+                        self.restore_main_window(cx);
                         self.show_main_page(cx);
                         self.refresh_history(cx);
                     }
-                    TrayCommand::Settings => self.show_settings_page(cx),
+                    TrayCommand::Settings => {
+                        self.restore_main_window(cx);
+                        self.show_settings_page(cx);
+                    }
                     TrayCommand::KeyboardSettings => {
+                        self.restore_main_window(cx);
                         self.show_settings_page(cx);
                         self.show_settings_tab(cx, SettingsTab::Keyboard);
                     }
                     TrayCommand::Utilities => {
+                        self.restore_main_window(cx);
                         self.show_settings_page(cx);
                         self.show_settings_tab(cx, SettingsTab::Utilities);
                     }
@@ -6126,6 +6281,68 @@ impl App {
                     TrayCommand::Exit => std::process::exit(0),
                 }
             }
+        }
+    }
+
+    fn restore_main_window(&mut self, cx: &mut Cx) {
+        cx.push_unique_platform_op(CxOsOp::RestoreWindow(CxWindowPool::id_zero()));
+    }
+
+    fn minimize_main_window(&mut self, cx: &mut Cx) {
+        cx.push_unique_platform_op(CxOsOp::MinimizeWindow(CxWindowPool::id_zero()));
+    }
+
+    fn drain_global_hotkey_events(&mut self, cx: &mut Cx) {
+        let mut actions = Vec::new();
+        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+            if event.state() != HotKeyState::Pressed {
+                continue;
+            }
+            if let Some(action) = self
+                .global_hotkeys
+                .as_ref()
+                .and_then(|registry| registry.action_for(event.id()))
+            {
+                actions.push(action);
+            }
+        }
+
+        for action in actions {
+            self.handle_global_hotkey_action(cx, action);
+        }
+    }
+
+    fn handle_global_hotkey_action(&mut self, cx: &mut Cx, action: GlobalHotkeyAction) {
+        match action {
+            GlobalHotkeyAction::ShowHistory => {
+                self.restore_main_window(cx);
+                self.show_main_page(cx);
+            }
+            GlobalHotkeyAction::CaptureNow => self.capture_clipboard(cx),
+            GlobalHotkeyAction::SyncNow => self.sync_now(cx),
+            GlobalHotkeyAction::Clip(id) => self.copy_clip_by_id(cx, &id),
+            GlobalHotkeyAction::Group(id) => self.set_group_filter_by_id(cx, id),
+            GlobalHotkeyAction::CopyBufferCopy(index) => {
+                self.put_selected_on_copy_buffer(cx, index, false);
+            }
+            GlobalHotkeyAction::CopyBufferPaste(index) => self.copy_buffer_to_clipboard(cx, index),
+            GlobalHotkeyAction::CopyBufferCut(index) => {
+                self.put_selected_on_copy_buffer(cx, index, true);
+            }
+        }
+    }
+
+    fn register_global_hotkeys(&mut self) {
+        if let Some(existing) = self.global_hotkeys.take() {
+            existing.unregister_all();
+        }
+
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        match build_global_hotkey_registry(state) {
+            Ok(registry) => self.global_hotkeys = registry,
+            Err(error) => eprintln!("global hotkeys unavailable: {error}"),
         }
     }
 
@@ -7395,6 +7612,131 @@ fn current_source_application() -> Option<String> {
     None
 }
 
+fn spawn_platform_paste_command(delay_ms: u32) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(u64::from(delay_ms)));
+        let _ = run_platform_paste_command();
+    });
+}
+
+fn platform_paste_command_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if env::var_os("WAYLAND_DISPLAY").is_some() {
+            command_exists("wtype") || command_exists("ydotool") || command_exists("dotool")
+        } else {
+            command_exists("xdotool")
+                || command_exists("wtype")
+                || command_exists("ydotool")
+                || command_exists("dotool")
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        true
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+fn run_platform_paste_command() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        run_linux_paste_command()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("osascript")
+            .args([
+                "-e",
+                "tell application \"System Events\" to keystroke \"v\" using command down",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        anyhow::bail!("paste automation is not supported on this platform")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_paste_command() -> Result<()> {
+    if env::var_os("WAYLAND_DISPLAY").is_some() {
+        for command in [
+            paste_command("wtype", &["-M", "ctrl", "-P", "v", "-p", "v", "-m", "ctrl"]),
+            paste_command("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]),
+            paste_command("dotool", &["key", "ctrl+v"]),
+        ] {
+            if run_available_command(command)? {
+                return Ok(());
+            }
+        }
+    }
+
+    for command in [
+        paste_command("xdotool", &["key", "--clearmodifiers", "ctrl+v"]),
+        paste_command("wtype", &["-M", "ctrl", "-P", "v", "-p", "v", "-m", "ctrl"]),
+        paste_command("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]),
+        paste_command("dotool", &["key", "ctrl+v"]),
+    ] {
+        if run_available_command(command)? {
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("no supported Linux paste command found")
+}
+
+#[cfg(target_os = "linux")]
+fn paste_command(
+    program: &'static str,
+    args: &'static [&'static str],
+) -> (&'static str, &'static [&'static str]) {
+    (program, args)
+}
+
+#[cfg(target_os = "linux")]
+fn run_available_command(command: (&str, &[&str])) -> Result<bool> {
+    let (program, args) = command;
+    if !command_exists(program) {
+        return Ok(false);
+    }
+    let status = Command::new(program)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    Ok(status.success())
+}
+
+#[cfg(target_os = "linux")]
+fn command_exists(program: &str) -> bool {
+    Command::new("sh")
+        .args(["-c", "command -v \"$1\" >/dev/null 2>&1", "sh", program])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn try_play_notification_sound() {
     #[cfg(target_os = "linux")]
     {
@@ -8598,6 +8940,28 @@ impl Shortcut {
             self.primary, self.shift, self.alt, self.key_code
         )
     }
+
+    fn has_global_modifier(self) -> bool {
+        self.primary || self.shift || self.alt
+    }
+
+    fn is_function_key(self) -> bool {
+        matches!(
+            self.key_code,
+            KeyCode::F1
+                | KeyCode::F2
+                | KeyCode::F3
+                | KeyCode::F4
+                | KeyCode::F5
+                | KeyCode::F6
+                | KeyCode::F7
+                | KeyCode::F8
+                | KeyCode::F9
+                | KeyCode::F10
+                | KeyCode::F11
+                | KeyCode::F12
+        )
+    }
 }
 
 fn shortcut_canonical(value: &str) -> Option<String> {
@@ -8620,6 +8984,216 @@ fn first_shortcut_conflict<'a>(values: impl IntoIterator<Item = &'a str>) -> Opt
         }
     }
     None
+}
+
+fn build_global_hotkey_registry(state: &ClientState) -> Result<Option<RegisteredGlobalHotkeys>> {
+    let mut bindings = Vec::new();
+    let mut seen = HashSet::new();
+
+    add_global_hotkey(
+        &mut bindings,
+        &mut seen,
+        &state.settings.hotkey_show_history,
+        GlobalHotkeyAction::ShowHistory,
+    );
+    add_global_hotkey(
+        &mut bindings,
+        &mut seen,
+        &state.settings.hotkey_capture_now,
+        GlobalHotkeyAction::CaptureNow,
+    );
+    add_global_hotkey(
+        &mut bindings,
+        &mut seen,
+        &state.settings.hotkey_sync_now,
+        GlobalHotkeyAction::SyncNow,
+    );
+
+    for group in &state.groups {
+        if !group.hotkey.trim().is_empty() {
+            add_global_hotkey(
+                &mut bindings,
+                &mut seen,
+                &group.hotkey,
+                GlobalHotkeyAction::Group(group.id),
+            );
+        }
+    }
+
+    for (index, hotkey) in state.settings.copy_buffer_copy_hotkeys.iter().enumerate() {
+        add_global_hotkey(
+            &mut bindings,
+            &mut seen,
+            hotkey,
+            GlobalHotkeyAction::CopyBufferCopy(index),
+        );
+    }
+    for (index, hotkey) in state.settings.copy_buffer_paste_hotkeys.iter().enumerate() {
+        add_global_hotkey(
+            &mut bindings,
+            &mut seen,
+            hotkey,
+            GlobalHotkeyAction::CopyBufferPaste(index),
+        );
+    }
+    for (index, hotkey) in state.settings.copy_buffer_cut_hotkeys.iter().enumerate() {
+        add_global_hotkey(
+            &mut bindings,
+            &mut seen,
+            hotkey,
+            GlobalHotkeyAction::CopyBufferCut(index),
+        );
+    }
+
+    for clip in state.store.list_clips(UNLIMITED_HISTORY_QUERY_LIMIT)? {
+        if let Some(hotkey) = clip.hotkey.as_deref() {
+            add_global_hotkey(
+                &mut bindings,
+                &mut seen,
+                hotkey,
+                GlobalHotkeyAction::Clip(clip.id),
+            );
+        }
+    }
+
+    if bindings.is_empty() {
+        return Ok(None);
+    }
+
+    let manager = GlobalHotKeyManager::new()?;
+    let hotkeys = bindings
+        .iter()
+        .map(|binding| binding.hotkey)
+        .collect::<Vec<_>>();
+    manager.register_all(&hotkeys)?;
+    Ok(Some(RegisteredGlobalHotkeys { manager, bindings }))
+}
+
+fn add_global_hotkey(
+    bindings: &mut Vec<RegisteredGlobalHotkey>,
+    seen: &mut HashSet<u32>,
+    shortcut: &str,
+    action: GlobalHotkeyAction,
+) {
+    let Some(hotkey) = shortcut_to_global_hotkey(shortcut) else {
+        return;
+    };
+    if seen.insert(hotkey.id()) {
+        bindings.push(RegisteredGlobalHotkey { hotkey, action });
+    }
+}
+
+fn shortcut_to_global_hotkey(value: &str) -> Option<HotKey> {
+    let shortcut = Shortcut::parse(value)?;
+    if !shortcut.has_global_modifier() && !shortcut.is_function_key() {
+        return None;
+    }
+    let mut modifiers = GlobalHotKeyModifiers::empty();
+    if shortcut.primary {
+        modifiers |= global_primary_modifier();
+    }
+    if shortcut.shift {
+        modifiers |= GlobalHotKeyModifiers::SHIFT;
+    }
+    if shortcut.alt {
+        modifiers |= GlobalHotKeyModifiers::ALT;
+    }
+    Some(HotKey::new(
+        (!modifiers.is_empty()).then_some(modifiers),
+        key_code_to_global_hotkey_code(shortcut.key_code)?,
+    ))
+}
+
+fn global_primary_modifier() -> GlobalHotKeyModifiers {
+    #[cfg(target_os = "macos")]
+    {
+        GlobalHotKeyModifiers::SUPER
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        GlobalHotKeyModifiers::CONTROL
+    }
+}
+
+fn key_code_to_global_hotkey_code(key_code: KeyCode) -> Option<GlobalHotKeyCode> {
+    Some(match key_code {
+        KeyCode::ReturnKey => GlobalHotKeyCode::Enter,
+        KeyCode::NumpadEnter => GlobalHotKeyCode::NumpadEnter,
+        KeyCode::Delete => GlobalHotKeyCode::Delete,
+        KeyCode::Escape => GlobalHotKeyCode::Escape,
+        KeyCode::Backspace => GlobalHotKeyCode::Backspace,
+        KeyCode::Space => GlobalHotKeyCode::Space,
+        KeyCode::Tab => GlobalHotKeyCode::Tab,
+        KeyCode::Backtick => GlobalHotKeyCode::Backquote,
+        KeyCode::Insert => GlobalHotKeyCode::Insert,
+        KeyCode::Home => GlobalHotKeyCode::Home,
+        KeyCode::End => GlobalHotKeyCode::End,
+        KeyCode::PageUp => GlobalHotKeyCode::PageUp,
+        KeyCode::PageDown => GlobalHotKeyCode::PageDown,
+        KeyCode::ArrowUp => GlobalHotKeyCode::ArrowUp,
+        KeyCode::ArrowDown => GlobalHotKeyCode::ArrowDown,
+        KeyCode::ArrowLeft => GlobalHotKeyCode::ArrowLeft,
+        KeyCode::ArrowRight => GlobalHotKeyCode::ArrowRight,
+        KeyCode::F1 => GlobalHotKeyCode::F1,
+        KeyCode::F2 => GlobalHotKeyCode::F2,
+        KeyCode::F3 => GlobalHotKeyCode::F3,
+        KeyCode::F4 => GlobalHotKeyCode::F4,
+        KeyCode::F5 => GlobalHotKeyCode::F5,
+        KeyCode::F6 => GlobalHotKeyCode::F6,
+        KeyCode::F7 => GlobalHotKeyCode::F7,
+        KeyCode::F8 => GlobalHotKeyCode::F8,
+        KeyCode::F9 => GlobalHotKeyCode::F9,
+        KeyCode::F10 => GlobalHotKeyCode::F10,
+        KeyCode::F11 => GlobalHotKeyCode::F11,
+        KeyCode::F12 => GlobalHotKeyCode::F12,
+        KeyCode::Key0 => GlobalHotKeyCode::Digit0,
+        KeyCode::Key1 => GlobalHotKeyCode::Digit1,
+        KeyCode::Key2 => GlobalHotKeyCode::Digit2,
+        KeyCode::Key3 => GlobalHotKeyCode::Digit3,
+        KeyCode::Key4 => GlobalHotKeyCode::Digit4,
+        KeyCode::Key5 => GlobalHotKeyCode::Digit5,
+        KeyCode::Key6 => GlobalHotKeyCode::Digit6,
+        KeyCode::Key7 => GlobalHotKeyCode::Digit7,
+        KeyCode::Key8 => GlobalHotKeyCode::Digit8,
+        KeyCode::Key9 => GlobalHotKeyCode::Digit9,
+        KeyCode::Numpad0 => GlobalHotKeyCode::Numpad0,
+        KeyCode::Numpad1 => GlobalHotKeyCode::Numpad1,
+        KeyCode::Numpad2 => GlobalHotKeyCode::Numpad2,
+        KeyCode::Numpad3 => GlobalHotKeyCode::Numpad3,
+        KeyCode::Numpad4 => GlobalHotKeyCode::Numpad4,
+        KeyCode::Numpad5 => GlobalHotKeyCode::Numpad5,
+        KeyCode::Numpad6 => GlobalHotKeyCode::Numpad6,
+        KeyCode::Numpad7 => GlobalHotKeyCode::Numpad7,
+        KeyCode::Numpad8 => GlobalHotKeyCode::Numpad8,
+        KeyCode::Numpad9 => GlobalHotKeyCode::Numpad9,
+        KeyCode::KeyA => GlobalHotKeyCode::KeyA,
+        KeyCode::KeyB => GlobalHotKeyCode::KeyB,
+        KeyCode::KeyC => GlobalHotKeyCode::KeyC,
+        KeyCode::KeyD => GlobalHotKeyCode::KeyD,
+        KeyCode::KeyE => GlobalHotKeyCode::KeyE,
+        KeyCode::KeyF => GlobalHotKeyCode::KeyF,
+        KeyCode::KeyG => GlobalHotKeyCode::KeyG,
+        KeyCode::KeyH => GlobalHotKeyCode::KeyH,
+        KeyCode::KeyI => GlobalHotKeyCode::KeyI,
+        KeyCode::KeyJ => GlobalHotKeyCode::KeyJ,
+        KeyCode::KeyK => GlobalHotKeyCode::KeyK,
+        KeyCode::KeyL => GlobalHotKeyCode::KeyL,
+        KeyCode::KeyM => GlobalHotKeyCode::KeyM,
+        KeyCode::KeyN => GlobalHotKeyCode::KeyN,
+        KeyCode::KeyO => GlobalHotKeyCode::KeyO,
+        KeyCode::KeyP => GlobalHotKeyCode::KeyP,
+        KeyCode::KeyQ => GlobalHotKeyCode::KeyQ,
+        KeyCode::KeyR => GlobalHotKeyCode::KeyR,
+        KeyCode::KeyS => GlobalHotKeyCode::KeyS,
+        KeyCode::KeyT => GlobalHotKeyCode::KeyT,
+        KeyCode::KeyU => GlobalHotKeyCode::KeyU,
+        KeyCode::KeyV => GlobalHotKeyCode::KeyV,
+        KeyCode::KeyW => GlobalHotKeyCode::KeyW,
+        KeyCode::KeyX => GlobalHotKeyCode::KeyX,
+        KeyCode::KeyY => GlobalHotKeyCode::KeyY,
+        KeyCode::KeyZ => GlobalHotKeyCode::KeyZ,
+        _ => return None,
+    })
 }
 
 fn parse_key_code(value: &str) -> Option<KeyCode> {

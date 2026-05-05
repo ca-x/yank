@@ -134,6 +134,8 @@ pub struct Settings {
     pub quick_paste_always_show_scrollbar: bool,
     pub quick_paste_show_pasted_indicator: bool,
     pub quick_paste_elevated_paste: bool,
+    pub quick_paste_paste_in_active_window: bool,
+    pub quick_paste_paste_delay_ms: u32,
     pub quick_paste_update_order_on_copy: bool,
     pub quick_paste_multi_paste_reverse: bool,
     pub multi_paste_separator: String,
@@ -200,6 +202,8 @@ impl Default for Settings {
             quick_paste_always_show_scrollbar: false,
             quick_paste_show_pasted_indicator: true,
             quick_paste_elevated_paste: false,
+            quick_paste_paste_in_active_window: true,
+            quick_paste_paste_delay_ms: 120,
             quick_paste_update_order_on_copy: true,
             quick_paste_multi_paste_reverse: false,
             multi_paste_separator: "\n".to_owned(),
@@ -1594,6 +1598,14 @@ impl Store {
             "quick_paste_elevated_paste",
             settings.quick_paste_elevated_paste,
         )?;
+        settings.quick_paste_paste_in_active_window = self.get_bool_setting(
+            "quick_paste_paste_in_active_window",
+            settings.quick_paste_paste_in_active_window,
+        )?;
+        settings.quick_paste_paste_delay_ms = self.get_u32_setting(
+            "quick_paste_paste_delay_ms",
+            settings.quick_paste_paste_delay_ms,
+        )?;
         settings.quick_paste_update_order_on_copy = self.get_bool_setting(
             "quick_paste_update_order_on_copy",
             settings.quick_paste_update_order_on_copy,
@@ -1873,6 +1885,18 @@ impl Store {
             } else {
                 "false"
             },
+        )?;
+        self.set_setting(
+            "quick_paste_paste_in_active_window",
+            if settings.quick_paste_paste_in_active_window {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_paste_delay_ms",
+            &settings.quick_paste_paste_delay_ms.to_string(),
         )?;
         self.set_setting(
             "quick_paste_update_order_on_copy",
