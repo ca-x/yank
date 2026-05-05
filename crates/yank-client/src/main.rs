@@ -7110,9 +7110,21 @@ impl ClientState {
 
     fn capture_clipboard(&mut self, force: bool) -> Result<CaptureOutcome> {
         let settings = self.settings.clone();
-        let snapshot = {
-            let clipboard = self.clipboard_mut()?;
-            read_clipboard_snapshot(clipboard, &settings)?
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let snapshot = match read_clipboard_snapshot(self.clipboard.as_mut(), &settings) {
+            Ok(snapshot) => snapshot,
+            Err(first_error) => {
+                self.clipboard = Clipboard::new().ok();
+                read_clipboard_snapshot(self.clipboard.as_mut(), &settings).map_err(
+                    |retry_error| {
+                        anyhow::anyhow!(
+                            "{first_error}; retry after reopening clipboard failed: {retry_error}"
+                        )
+                    },
+                )?
+            }
         };
         let Some(snapshot) = snapshot else {
             return Ok(CaptureOutcome::Empty);
@@ -7157,16 +7169,10 @@ impl ClientState {
         let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
         };
-        let copied_hash = {
-            let clipboard = self.clipboard_mut()?;
-            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
-                Some(hash)
-            } else if restore_clip_to_clipboard(clipboard, &clip)? {
-                Some(clip.content_hash.clone())
-            } else {
-                None
-            }
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let copied_hash = restore_clip_to_clipboard_with_fallback(self.clipboard.as_mut(), &clip)?;
         if let Some(hash) = copied_hash {
             self.last_clipboard_hash = Some(hash);
             self.mark_clip_pasted(&clip.id);
@@ -7184,16 +7190,10 @@ impl ClientState {
         let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
         };
-        let copied_hash = {
-            let clipboard = self.clipboard_mut()?;
-            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
-                Some(hash)
-            } else if restore_clip_to_clipboard(clipboard, &clip)? {
-                Some(clip.content_hash.clone())
-            } else {
-                None
-            }
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let copied_hash = restore_clip_to_clipboard_with_fallback(self.clipboard.as_mut(), &clip)?;
         if let Some(hash) = copied_hash {
             self.last_clipboard_hash = Some(hash);
             self.mark_clip_pasted(&clip.id);
@@ -7212,13 +7212,13 @@ impl ClientState {
             return Ok(false);
         };
         let delay_ms = self.settings.text_only_paste_delay_ms;
-        let text = {
-            let clipboard = self.clipboard_mut()?;
-            let text = render_template_text_for_clip(&clip, text, clipboard);
-            apply_text_paste_delay(delay_ms);
-            clipboard.set_text(text.clone())?;
-            text
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let text =
+            render_template_text_for_clip_with_fallback(&clip, text, self.clipboard.as_mut());
+        apply_text_paste_delay(delay_ms);
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &text)?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
         if let Some(id) = self.selected_id.clone() {
             self.mark_clip_pasted(&id);
@@ -7231,14 +7231,13 @@ impl ClientState {
     }
 
     fn text_only_paste_current_clipboard(&mut self) -> Result<bool> {
-        let text = {
-            let clipboard = self.clipboard_mut()?;
-            let Some(text) = read_optional_clipboard(clipboard.get_text())? else {
-                return Ok(false);
-            };
-            clipboard.set_text(text.clone())?;
-            text
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let Some(text) = read_clipboard_text_with_fallback(self.clipboard.as_mut())? else {
+            return Ok(false);
         };
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &text)?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
         self.record_paste()?;
         Ok(true)
@@ -7252,14 +7251,14 @@ impl ClientState {
             return Ok(false);
         };
         let delay_ms = self.settings.text_only_paste_delay_ms;
-        let transformed = {
-            let clipboard = self.clipboard_mut()?;
-            let text = render_template_text_for_clip(&clip, text, clipboard);
-            let transformed = transform_text(&text, transform);
-            apply_text_paste_delay(delay_ms);
-            clipboard.set_text(transformed.clone())?;
-            transformed
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let text =
+            render_template_text_for_clip_with_fallback(&clip, text, self.clipboard.as_mut());
+        let transformed = transform_text(&text, transform);
+        apply_text_paste_delay(delay_ms);
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &transformed)?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&transformed)]));
         if let Some(id) = self.selected_id.clone() {
             self.mark_clip_pasted(&id);
@@ -7297,27 +7296,27 @@ impl ClientState {
 
         let separator = self.settings.multi_paste_separator.clone();
         let delay_ms = self.settings.text_only_paste_delay_ms;
-        let merged = {
-            let clipboard = self.clipboard_mut()?;
-            let mut texts = Vec::new();
-            for clip in &clips {
-                let Some(text) = plain_text_payload(clip) else {
-                    continue;
-                };
-                let text = render_template_text_for_clip(clip, text, clipboard);
-                let text = transform
-                    .map(|transform| transform_text(&text, transform))
-                    .unwrap_or(text);
-                texts.push(text);
-            }
-            if texts.is_empty() {
-                return Ok(0);
-            }
-            apply_text_paste_delay(delay_ms);
-            let merged = texts.join(&separator);
-            clipboard.set_text(merged.clone())?;
-            merged
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let mut texts = Vec::new();
+        for clip in &clips {
+            let Some(text) = plain_text_payload(clip) else {
+                continue;
+            };
+            let text =
+                render_template_text_for_clip_with_fallback(clip, text, self.clipboard.as_mut());
+            let text = transform
+                .map(|transform| transform_text(&text, transform))
+                .unwrap_or(text);
+            texts.push(text);
+        }
+        if texts.is_empty() {
+            return Ok(0);
+        }
+        apply_text_paste_delay(delay_ms);
+        let merged = texts.join(&separator);
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &merged)?;
 
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&merged)]));
         let ids = clips.iter().map(|clip| clip.id.clone()).collect::<Vec<_>>();
@@ -7375,8 +7374,10 @@ impl ClientState {
 
     fn copy_generated_guid(&mut self) -> Result<()> {
         let text = yank_core::new_id();
-        let clipboard = self.clipboard_mut()?;
-        clipboard.set_text(text.clone())?;
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &text)?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
         self.record_paste()?;
         Ok(())
@@ -7403,16 +7404,10 @@ impl ClientState {
         clip: Clip,
         update_order: bool,
     ) -> Result<bool> {
-        let copied_hash = {
-            let clipboard = self.clipboard_mut()?;
-            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
-                Some(hash)
-            } else if restore_clip_to_clipboard(clipboard, &clip)? {
-                Some(clip.content_hash.clone())
-            } else {
-                None
-            }
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let copied_hash = restore_clip_to_clipboard_with_fallback(self.clipboard.as_mut(), &clip)?;
         if let Some(hash) = copied_hash {
             self.last_clipboard_hash = Some(hash);
             self.selected_id = Some(clip.id.clone());
@@ -7437,13 +7432,13 @@ impl ClientState {
             return Ok(false);
         };
         let delay_ms = self.settings.text_only_paste_delay_ms;
-        let text = {
-            let clipboard = self.clipboard_mut()?;
-            let text = render_template_text_for_clip(&clip, text, clipboard);
-            apply_text_paste_delay(delay_ms);
-            clipboard.set_text(text.clone())?;
-            text
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let text =
+            render_template_text_for_clip_with_fallback(&clip, text, self.clipboard.as_mut());
+        apply_text_paste_delay(delay_ms);
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &text)?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
         self.selected_id = Some(clip.id.clone());
         self.selected_ids.clear();
@@ -7477,16 +7472,10 @@ impl ClientState {
         let Some(clip) = self.store.copy_buffer_clip_including_deleted(index)? else {
             return Ok(false);
         };
-        let copied_hash = {
-            let clipboard = self.clipboard_mut()?;
-            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
-                Some(hash)
-            } else if restore_clip_to_clipboard(clipboard, &clip)? {
-                Some(clip.content_hash.clone())
-            } else {
-                None
-            }
-        };
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        let copied_hash = restore_clip_to_clipboard_with_fallback(self.clipboard.as_mut(), &clip)?;
         if let Some(hash) = copied_hash {
             self.last_clipboard_hash = Some(hash);
             self.selected_id = Some(clip.id.clone());
@@ -7504,8 +7493,10 @@ impl ClientState {
 
     fn copy_device_id(&mut self) -> Result<()> {
         let device_id = self.settings.device_id.clone();
-        let clipboard = self.clipboard_mut()?;
-        clipboard.set_text(device_id)?;
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &device_id)?;
         Ok(())
     }
 
@@ -7809,8 +7800,10 @@ impl ClientState {
             return Ok(false);
         };
         let comparison = format_clip_comparison(&left, &left_text, &right, &right_text);
-        let clipboard = self.clipboard_mut()?;
-        clipboard.set_text(comparison.clone())?;
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        write_clipboard_text_with_fallback(self.clipboard.as_mut(), &comparison)?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&comparison)]));
         self.record_paste()?;
         Ok(true)
@@ -7973,57 +7966,15 @@ struct ClipboardSnapshot {
 }
 
 fn read_clipboard_snapshot(
-    clipboard: &mut Clipboard,
+    mut clipboard: Option<&mut Clipboard>,
     settings: &Settings,
 ) -> Result<Option<ClipboardSnapshot>> {
     let mut formats = Vec::new();
     let mut primary_text = None;
     let mut description = None;
 
-    if settings.capture_files_enabled
-        && let Some(paths) = read_optional_clipboard_format(clipboard.get().file_list())?
-    {
-        let paths = paths
-            .into_iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .filter(|path| !path.trim().is_empty())
-            .collect::<Vec<_>>();
-        if !paths.is_empty() {
-            let searchable = paths.join("\n");
-            primary_text.get_or_insert(searchable);
-            description.get_or_insert_with(|| summarize_paths(&paths));
-            formats.push(ClipFormat::file_list(&paths));
-        }
-    }
-
-    if settings.capture_image_enabled
-        && let Some(image) = read_optional_clipboard_format(clipboard.get_image())?
-    {
-        let bytes = image.bytes.into_owned();
-        let expected_len = image.width.saturating_mul(image.height).saturating_mul(4);
-        if expected_len == bytes.len() {
-            description.get_or_insert_with(|| format!("{}x{}", image.width, image.height));
-            formats.push(ClipFormat::image_rgba(image.width, image.height, bytes));
-        }
-    }
-
-    if settings.capture_html_enabled
-        && let Some(html) = read_optional_clipboard_format(clipboard.get().html())?
-        && !html.trim().is_empty()
-    {
-        let searchable = html_to_text(&html);
-        let searchable = if searchable.is_empty() {
-            html.clone()
-        } else {
-            searchable
-        };
-        primary_text.get_or_insert(searchable.clone());
-        description.get_or_insert_with(|| yank_core::summarize_text(&searchable));
-        formats.push(ClipFormat::html(&html));
-    }
-
     if settings.capture_text_enabled
-        && let Some(text) = read_optional_clipboard(clipboard.get_text())?
+        && let Some(text) = read_clipboard_text_with_fallback(clipboard.as_deref_mut())?
         && !text.trim().is_empty()
     {
         if let Some(rtf) = detect_rtf_value(&text) {
@@ -8038,6 +7989,51 @@ fn read_clipboard_snapshot(
         }
         if let Some(color) = detect_color_value(&text) {
             formats.push(ClipFormat::color(&color));
+        }
+    }
+
+    if settings.capture_html_enabled
+        && let Some(clipboard) = clipboard.as_mut()
+        && let Some(html) = read_optional_clipboard_probe(clipboard.get().html())
+        && !html.trim().is_empty()
+    {
+        let searchable = html_to_text(&html);
+        let searchable = if searchable.is_empty() {
+            html.clone()
+        } else {
+            searchable
+        };
+        primary_text.get_or_insert(searchable.clone());
+        description.get_or_insert_with(|| yank_core::summarize_text(&searchable));
+        formats.push(ClipFormat::html(&html));
+    }
+
+    if settings.capture_image_enabled
+        && let Some(clipboard) = clipboard.as_mut()
+        && let Some(image) = read_optional_clipboard_probe(clipboard.get_image())
+    {
+        let bytes = image.bytes.into_owned();
+        let expected_len = image.width.saturating_mul(image.height).saturating_mul(4);
+        if expected_len == bytes.len() {
+            description.get_or_insert_with(|| format!("{}x{}", image.width, image.height));
+            formats.push(ClipFormat::image_rgba(image.width, image.height, bytes));
+        }
+    }
+
+    if settings.capture_files_enabled
+        && let Some(clipboard) = clipboard.as_mut()
+        && let Some(paths) = read_optional_clipboard_probe(clipboard.get().file_list())
+    {
+        let paths = paths
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .filter(|path| !path.trim().is_empty())
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            let searchable = paths.join("\n");
+            primary_text.get_or_insert(searchable);
+            description.get_or_insert_with(|| summarize_paths(&paths));
+            formats.push(ClipFormat::file_list(&paths));
         }
     }
 
@@ -8058,17 +8054,23 @@ fn read_clipboard_snapshot(
     }))
 }
 
-fn read_optional_clipboard<T>(result: std::result::Result<T, ClipboardError>) -> Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(ClipboardError::ContentNotAvailable | ClipboardError::ConversionFailure) => Ok(None),
-        Err(error) => Err(anyhow::anyhow!("{error}")),
+fn read_clipboard_text_with_fallback(clipboard: Option<&mut Clipboard>) -> Result<Option<String>> {
+    if let Some(clipboard) = clipboard {
+        match read_optional_clipboard(clipboard.get_text()) {
+            Ok(Some(text)) => return Ok(Some(text)),
+            Ok(None) => {}
+            Err(error) => {
+                if let Some(text) = read_platform_clipboard_text_fallback()? {
+                    return Ok(Some(text));
+                }
+                return Err(error);
+            }
+        }
     }
+    read_platform_clipboard_text_fallback()
 }
 
-fn read_optional_clipboard_format<T>(
-    result: std::result::Result<T, ClipboardError>,
-) -> Result<Option<T>> {
+fn read_optional_clipboard<T>(result: std::result::Result<T, ClipboardError>) -> Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
         Err(
@@ -8078,6 +8080,123 @@ fn read_optional_clipboard_format<T>(
         ) => Ok(None),
         Err(error) => Err(anyhow::anyhow!("{error}")),
     }
+}
+
+fn read_optional_clipboard_probe<T>(result: std::result::Result<T, ClipboardError>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(
+            ClipboardError::ContentNotAvailable
+            | ClipboardError::ConversionFailure
+            | ClipboardError::ClipboardNotSupported,
+        ) => None,
+        Err(error) => {
+            eprintln!("optional clipboard format probe failed: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_platform_clipboard_text_fallback() -> Result<Option<String>> {
+    for (program, args) in [
+        ("wl-paste", &["--type", "text/plain"][..]),
+        ("xclip", &["-selection", "clipboard", "-out"][..]),
+        ("xsel", &["--clipboard", "--output"][..]),
+    ] {
+        if let Some(text) = read_text_from_command(program, args)? {
+            return Ok(Some(text));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_platform_clipboard_text_fallback() -> Result<Option<String>> {
+    Ok(None)
+}
+
+fn write_clipboard_text_with_fallback(clipboard: Option<&mut Clipboard>, text: &str) -> Result<()> {
+    let mut clipboard_error = None;
+    if let Some(clipboard) = clipboard {
+        match clipboard.set_text(text.to_owned()) {
+            Ok(()) => return Ok(()),
+            Err(error) => clipboard_error = Some(error),
+        }
+    }
+
+    if write_platform_clipboard_text_fallback(text)? {
+        return Ok(());
+    }
+
+    if let Some(error) = clipboard_error {
+        Err(anyhow::anyhow!("{error}"))
+    } else {
+        anyhow::bail!("clipboard is unavailable")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn write_platform_clipboard_text_fallback(text: &str) -> Result<bool> {
+    for (program, args) in [
+        ("wl-copy", &["--type", "text/plain;charset=utf-8"][..]),
+        ("xclip", &["-selection", "clipboard"][..]),
+        ("xsel", &["--clipboard", "--input"][..]),
+    ] {
+        if write_text_to_command(program, args, text)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn write_platform_clipboard_text_fallback(_text: &str) -> Result<bool> {
+    Ok(false)
+}
+
+#[cfg(target_os = "linux")]
+fn read_text_from_command(program: &str, args: &[&str]) -> Result<Option<String>> {
+    if !command_exists(program) {
+        return Ok(None);
+    }
+    let Ok(output) = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Ok(None);
+    };
+    if !output.status.success() || output.stdout.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
+
+#[cfg(target_os = "linux")]
+fn write_text_to_command(program: &str, args: &[&str], text: &str) -> Result<bool> {
+    if !command_exists(program) {
+        return Ok(false);
+    }
+    let Ok(mut child) = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Ok(false);
+    };
+    let Some(stdin) = child.stdin.as_mut() else {
+        let _ = child.kill();
+        return Ok(false);
+    };
+    if std::io::Write::write_all(stdin, text.as_bytes()).is_err() {
+        let _ = child.kill();
+        return Ok(false);
+    }
+    Ok(child.wait().is_ok_and(|status| status.success()))
 }
 
 fn detect_color_value(text: &str) -> Option<String> {
@@ -8573,16 +8692,36 @@ fn restore_clip_to_clipboard(clipboard: &mut Clipboard, clip: &Clip) -> Result<b
     Ok(false)
 }
 
-fn restore_template_to_clipboard(clipboard: &mut Clipboard, clip: &Clip) -> Result<Option<String>> {
-    if clip.group_id.is_none() {
-        return Ok(None);
+fn restore_clip_to_clipboard_with_fallback(
+    mut clipboard: Option<&mut Clipboard>,
+    clip: &Clip,
+) -> Result<Option<String>> {
+    if let Some(text) = plain_text_payload(clip)
+        .filter(|text| clip.group_id.is_some() && has_template_placeholder(text))
+    {
+        let rendered =
+            render_template_text_for_clip_with_fallback(clip, text, clipboard.as_deref_mut());
+        write_clipboard_text_with_fallback(clipboard, &rendered)?;
+        return Ok(Some(content_hash(&[ClipFormat::text(&rendered)])));
     }
-    let Some(text) = plain_text_payload(clip).filter(|text| has_template_placeholder(text)) else {
-        return Ok(None);
-    };
-    let rendered = render_template_text_for_clip(clip, text, clipboard);
-    clipboard.set_text(rendered.clone())?;
-    Ok(Some(content_hash(&[ClipFormat::text(&rendered)])))
+
+    if let Some(clipboard) = clipboard.as_deref_mut() {
+        match restore_clip_to_clipboard(clipboard, clip) {
+            Ok(true) => return Ok(Some(clip.content_hash.clone())),
+            Ok(false) => {}
+            Err(error) if plain_text_payload(clip).is_none() => return Err(error),
+            Err(_) => {}
+        }
+    }
+
+    if let Some(text) = plain_text_payload(clip) {
+        let rendered =
+            render_template_text_for_clip_with_fallback(clip, text, clipboard.as_deref_mut());
+        write_clipboard_text_with_fallback(clipboard, &rendered)?;
+        return Ok(Some(content_hash(&[ClipFormat::text(&rendered)])));
+    }
+
+    Ok(None)
 }
 
 fn image_rgba_payload(format: &ClipFormat) -> Option<(usize, usize, Vec<u8>)> {
@@ -8780,9 +8919,15 @@ fn has_template_placeholder(text: &str) -> bool {
         .any(|placeholder| text.contains(placeholder))
 }
 
-fn render_template_text_for_clip(clip: &Clip, text: String, clipboard: &mut Clipboard) -> String {
+fn render_template_text_for_clip_with_fallback(
+    clip: &Clip,
+    text: String,
+    clipboard: Option<&mut Clipboard>,
+) -> String {
     if clip.group_id.is_some() && has_template_placeholder(&text) {
-        let current_clipboard = clipboard.get_text().ok();
+        let current_clipboard = clipboard
+            .and_then(|clipboard| clipboard.get_text().ok())
+            .or_else(|| read_platform_clipboard_text_fallback().ok().flatten());
         render_template_text(&text, current_clipboard.as_deref().unwrap_or_default())
     } else {
         text
