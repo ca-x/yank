@@ -402,7 +402,7 @@ script_mod! {
 
                             editor_panel := View{
                                 width: Fill
-                                height: 160
+                                height: 218
                                 visible: false
                                 flow: Right
                                 spacing: theme.space_1
@@ -420,6 +420,14 @@ script_mod! {
                                         spacing: theme.space_1
                                         quick_paste_alias_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner}
                                         quick_paste_alias_input := TextInput{width: Fill height: 32 empty_text: ""}
+                                    }
+                                    clip_hotkey_row := View{
+                                        width: Fill
+                                        height: Fit
+                                        flow: Right
+                                        spacing: theme.space_1
+                                        clip_hotkey_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner}
+                                        clip_hotkey_input := TextInput{width: Fill height: 32 empty_text: ""}
                                     }
                                     edit_label := SectionTitle{text: ""}
                                     edit_input := TextInput{
@@ -453,6 +461,16 @@ script_mod! {
                                 spacing: theme.space_1
                                 menu_copy_button := MenuButton{text: ""}
                                 menu_paste_plain_button := MenuButton{text: ""}
+                                menu_paste_no_order_button := MenuButton{text: ""}
+                                menu_view_full_button := MenuButton{text: ""}
+                            }
+                            menu_row_a2 := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_multi_image_h_button := MenuButton{text: ""}
+                                menu_multi_image_v_button := MenuButton{text: ""}
                                 menu_edit_button := MenuButton{text: ""}
                                 menu_delete_button := MenuButton{text: ""}
                             }
@@ -546,8 +564,69 @@ script_mod! {
                                 flow: Right
                                 spacing: theme.space_1
                                 menu_export_button := MenuButton{text: ""}
+                                menu_export_text_button := MenuButton{text: ""}
                                 menu_import_button := MenuButton{text: ""}
+                                menu_import_file_contents_button := MenuButton{text: ""}
                                 menu_delete_non_pinned_button := MenuButton{text: ""}
+                            }
+                            menu_row_j2 := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_export_google_translate_button := MenuButton{text: ""}
+                                menu_export_web_search_button := MenuButton{text: ""}
+                                menu_export_qr_button := MenuButton{text: ""}
+                                menu_email_body_button := MenuButton{text: ""}
+                            }
+                            menu_row_k := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_compare_left_button := MenuButton{text: ""}
+                                menu_compare_against_button := MenuButton{text: ""}
+                                menu_compare_button := MenuButton{text: ""}
+                            }
+                            menu_row_l := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_never_auto_delete_button := MenuButton{text: ""}
+                                menu_auto_delete_button := MenuButton{text: ""}
+                                menu_remove_hotkey_button := MenuButton{text: ""}
+                                menu_remove_quick_paste_button := MenuButton{text: ""}
+                            }
+                            menu_row_m := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_make_top_sticky_button := MenuButton{text: ""}
+                                menu_make_last_sticky_button := MenuButton{text: ""}
+                                menu_replace_top_sticky_button := MenuButton{text: ""}
+                                menu_remove_sticky_button := MenuButton{text: ""}
+                            }
+                            menu_row_n := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_search_description_button := MenuButton{text: ""}
+                                menu_search_full_text_button := MenuButton{text: ""}
+                                menu_search_quick_paste_button := MenuButton{text: ""}
+                            }
+                            menu_row_o := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_search_simple_button := MenuButton{text: ""}
+                                menu_search_regex_button := MenuButton{text: ""}
+                                menu_search_wildcard_button := MenuButton{text: ""}
+                                menu_toggle_search_method_button := MenuButton{text: ""}
+                                menu_apply_last_search_button := MenuButton{text: ""}
                             }
                         }
 
@@ -730,6 +809,7 @@ script_mod! {
                                         FieldRow{
                                             search_scope_all_button := DenseButton{text: ""}
                                             search_scope_description_button := DenseButton{text: ""}
+                                            search_scope_quick_paste_button := DenseButton{text: ""}
                                             search_scope_text_button := DenseButton{text: ""}
                                             search_scope_source_button := DenseButton{text: ""}
                                             search_scope_date_button := DenseButton{text: ""}
@@ -794,6 +874,11 @@ script_mod! {
                                         export_history_button := ActionButton{text: ""}
                                         clear_history_button := DenseButton{text: ""}
                                         delete_non_pinned_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        backup_database_button := DenseButton{text: ""}
+                                        compact_database_button := DenseButton{text: ""}
+                                        verify_database_button := DenseButton{text: ""}
                                     }
                                     FieldGroup{
                                         import_path_label := Label{text: "" draw_text.color: theme.color_label_inner}
@@ -874,6 +959,10 @@ pub struct App {
     #[rust]
     pending_clear_history: bool,
     #[rust]
+    compare_left_id: Option<String>,
+    #[rust]
+    last_search_query: String,
+    #[rust]
     initialized: bool,
     #[rust]
     poll_timer: Timer,
@@ -944,6 +1033,7 @@ enum SearchScope {
     #[default]
     All,
     Description,
+    QuickPaste,
     Text,
     Source,
     Date,
@@ -956,7 +1046,8 @@ impl SearchScope {
 
     fn parse(value: &str) -> Self {
         match value {
-            "description" | "quick_paste" => Self::Description,
+            "description" => Self::Description,
+            "quick_paste" => Self::QuickPaste,
             "text" | "full_text" => Self::Text,
             "source" => Self::Source,
             "date" | "time" => Self::Date,
@@ -968,6 +1059,7 @@ impl SearchScope {
         match self {
             Self::All => "all",
             Self::Description => "description",
+            Self::QuickPaste => "quick_paste",
             Self::Text => "text",
             Self::Source => "source",
             Self::Date => "date",
@@ -1035,13 +1127,31 @@ enum ClipMove {
     Last,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImageMergeDirection {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExternalAction {
+    GoogleTranslate,
+    WebSearch,
+    QrCode,
+    EmailBody,
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrayCommand {
     Open,
     Settings,
+    KeyboardSettings,
+    Utilities,
     CaptureNow,
     SyncNow,
+    NewClip,
+    DeleteNonPinned,
     ToggleCapture,
     Exit,
 }
@@ -1093,6 +1203,10 @@ struct TrayLabels {
     title: String,
     open: String,
     options: String,
+    hotkeys: String,
+    utilities: String,
+    new_clip: String,
+    delete_non_pinned: String,
     capture: String,
     sync: String,
     pause: String,
@@ -1107,6 +1221,10 @@ impl TrayLabels {
             title: messages.text("app.title").to_owned(),
             open: messages.text("app.tray_open").to_owned(),
             options: messages.text("app.tray_options").to_owned(),
+            hotkeys: messages.text("app.hotkeys").to_owned(),
+            utilities: messages.text("app.settings_utilities").to_owned(),
+            new_clip: messages.text("app.new_clip").to_owned(),
+            delete_non_pinned: messages.text("app.delete_non_pinned").to_owned(),
             capture: messages.text("app.tray_capture").to_owned(),
             sync: messages.text("app.tray_sync").to_owned(),
             pause: messages.text("app.tray_pause").to_owned(),
@@ -1160,8 +1278,12 @@ impl ksni::Tray for YankTray {
 
         let open = self.sender.clone();
         let settings = self.sender.clone();
+        let keyboard = self.sender.clone();
+        let utilities = self.sender.clone();
         let capture = self.sender.clone();
         let sync = self.sender.clone();
+        let new_clip = self.sender.clone();
+        let delete_non_pinned = self.sender.clone();
         let toggle = self.sender.clone();
         let exit = self.sender.clone();
 
@@ -1184,6 +1306,24 @@ impl ksni::Tray for YankTray {
                 ..Default::default()
             }
             .into(),
+            StandardItem {
+                label: self.labels.hotkeys.clone(),
+                icon_name: "preferences-desktop-keyboard".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = keyboard.send(TrayCommand::KeyboardSettings);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: self.labels.utilities.clone(),
+                icon_name: "document-open".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = utilities.send(TrayCommand::Utilities);
+                }),
+                ..Default::default()
+            }
+            .into(),
             ksni::MenuItem::Separator,
             StandardItem {
                 label: self.labels.capture.clone(),
@@ -1199,6 +1339,24 @@ impl ksni::Tray for YankTray {
                 icon_name: "view-refresh".to_owned(),
                 activate: Box::new(move |_| {
                     let _ = sync.send(TrayCommand::SyncNow);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: self.labels.new_clip.clone(),
+                icon_name: "document-new".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = new_clip.send(TrayCommand::NewClip);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: self.labels.delete_non_pinned.clone(),
+                icon_name: "edit-delete".to_owned(),
+                activate: Box::new(move |_| {
+                    let _ = delete_non_pinned.send(TrayCommand::DeleteNonPinned);
                 }),
                 ..Default::default()
             }
@@ -1347,6 +1505,9 @@ impl AppMain for App {
 impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         if let Some(query) = self.text_input(cx, ids!(search_input)).changed(actions) {
+            if !query.trim().is_empty() {
+                self.last_search_query = query.clone();
+            }
             if let Some(state) = &mut self.state {
                 state.query = query;
             }
@@ -1495,6 +1656,30 @@ impl MatchEvent for App {
         {
             self.copy_selected_plain_text(cx);
         }
+        if self
+            .button(cx, ids!(menu_paste_no_order_button))
+            .clicked(actions)
+        {
+            self.copy_selected_without_order_update(cx);
+        }
+        if self
+            .button(cx, ids!(menu_view_full_button))
+            .clicked(actions)
+        {
+            self.show_editor(cx);
+        }
+        if self
+            .button(cx, ids!(menu_multi_image_h_button))
+            .clicked(actions)
+        {
+            self.copy_selected_images_merged(cx, ImageMergeDirection::Horizontal);
+        }
+        if self
+            .button(cx, ids!(menu_multi_image_v_button))
+            .clicked(actions)
+        {
+            self.copy_selected_images_merged(cx, ImageMergeDirection::Vertical);
+        }
         if self.button(cx, ids!(menu_edit_button)).clicked(actions) {
             self.show_editor(cx);
         }
@@ -1642,14 +1827,161 @@ impl MatchEvent for App {
         if self.button(cx, ids!(menu_export_button)).clicked(actions) {
             self.export_history(cx);
         }
+        if self
+            .button(cx, ids!(menu_export_text_button))
+            .clicked(actions)
+        {
+            self.export_selected_text_files(cx);
+        }
         if self.button(cx, ids!(menu_import_button)).clicked(actions) {
             self.import_history(cx);
+        }
+        if self
+            .button(cx, ids!(menu_import_file_contents_button))
+            .clicked(actions)
+        {
+            self.import_selected_file_contents(cx);
+        }
+        if self
+            .button(cx, ids!(menu_export_google_translate_button))
+            .clicked(actions)
+        {
+            self.open_selected_external(cx, ExternalAction::GoogleTranslate);
+        }
+        if self
+            .button(cx, ids!(menu_export_web_search_button))
+            .clicked(actions)
+        {
+            self.open_selected_external(cx, ExternalAction::WebSearch);
+        }
+        if self
+            .button(cx, ids!(menu_export_qr_button))
+            .clicked(actions)
+        {
+            self.open_selected_external(cx, ExternalAction::QrCode);
+        }
+        if self
+            .button(cx, ids!(menu_email_body_button))
+            .clicked(actions)
+        {
+            self.open_selected_external(cx, ExternalAction::EmailBody);
         }
         if self
             .button(cx, ids!(menu_delete_non_pinned_button))
             .clicked(actions)
         {
             self.delete_non_pinned(cx);
+        }
+        if self
+            .button(cx, ids!(menu_compare_left_button))
+            .clicked(actions)
+        {
+            self.select_compare_left(cx);
+        }
+        if self
+            .button(cx, ids!(menu_compare_against_button))
+            .clicked(actions)
+        {
+            self.compare_against_left(cx);
+        }
+        if self.button(cx, ids!(menu_compare_button)).clicked(actions) {
+            self.compare_selected(cx);
+        }
+        if self
+            .button(cx, ids!(menu_never_auto_delete_button))
+            .clicked(actions)
+        {
+            self.set_selected_dont_auto_delete(cx, true);
+        }
+        if self
+            .button(cx, ids!(menu_auto_delete_button))
+            .clicked(actions)
+        {
+            self.set_selected_dont_auto_delete(cx, false);
+        }
+        if self
+            .button(cx, ids!(menu_remove_hotkey_button))
+            .clicked(actions)
+        {
+            self.remove_selected_hotkey(cx);
+        }
+        if self
+            .button(cx, ids!(menu_remove_quick_paste_button))
+            .clicked(actions)
+        {
+            self.remove_selected_quick_paste(cx);
+        }
+        if self
+            .button(cx, ids!(menu_make_top_sticky_button))
+            .clicked(actions)
+        {
+            self.set_selected_sticky_position(cx, 1);
+        }
+        if self
+            .button(cx, ids!(menu_make_last_sticky_button))
+            .clicked(actions)
+        {
+            self.set_selected_sticky_position(cx, -1);
+        }
+        if self
+            .button(cx, ids!(menu_replace_top_sticky_button))
+            .clicked(actions)
+        {
+            self.replace_top_sticky_clip(cx);
+        }
+        if self
+            .button(cx, ids!(menu_remove_sticky_button))
+            .clicked(actions)
+        {
+            self.set_selected_sticky_position(cx, 0);
+        }
+        if self
+            .button(cx, ids!(menu_search_description_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::Description);
+        }
+        if self
+            .button(cx, ids!(menu_search_full_text_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::Text);
+        }
+        if self
+            .button(cx, ids!(menu_search_quick_paste_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::QuickPaste);
+        }
+        if self
+            .button(cx, ids!(menu_search_simple_button))
+            .clicked(actions)
+        {
+            self.set_search_mode(cx, SearchMode::Simple);
+        }
+        if self
+            .button(cx, ids!(menu_search_regex_button))
+            .clicked(actions)
+        {
+            self.set_search_mode(cx, SearchMode::Regex);
+        }
+        if self
+            .button(cx, ids!(menu_search_wildcard_button))
+            .clicked(actions)
+        {
+            self.set_search_mode(cx, SearchMode::Wildcard);
+        }
+        if self
+            .button(cx, ids!(menu_toggle_search_method_button))
+            .clicked(actions)
+        {
+            self.toggle_search_method(cx);
+        }
+        if self
+            .button(cx, ids!(menu_apply_last_search_button))
+            .clicked(actions)
+        {
+            self.apply_last_search(cx);
         }
         if self.button(cx, ids!(back_to_main_button)).clicked(actions) {
             self.show_main_page(cx);
@@ -1762,6 +2094,12 @@ impl MatchEvent for App {
             .clicked(actions)
         {
             self.set_search_scope(cx, SearchScope::Description);
+        }
+        if self
+            .button(cx, ids!(search_scope_quick_paste_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::QuickPaste);
         }
         if self
             .button(cx, ids!(search_scope_text_button))
@@ -1891,6 +2229,24 @@ impl MatchEvent for App {
         if self.button(cx, ids!(reset_counts_button)).clicked(actions) {
             self.reset_trip_counts(cx);
         }
+        if self
+            .button(cx, ids!(backup_database_button))
+            .clicked(actions)
+        {
+            self.backup_database(cx);
+        }
+        if self
+            .button(cx, ids!(compact_database_button))
+            .clicked(actions)
+        {
+            self.compact_database(cx);
+        }
+        if self
+            .button(cx, ids!(verify_database_button))
+            .clicked(actions)
+        {
+            self.verify_database(cx);
+        }
         if self.button(cx, ids!(update_order_button)).clicked(actions) {
             self.toggle_bool_setting(cx, |settings| {
                 &mut settings.quick_paste_update_order_on_copy
@@ -2012,6 +2368,10 @@ impl MatchEvent for App {
         }
 
         if !self.text_entry_has_focus(cx) {
+            if let Some(id) = self.clip_hotkey_matches(event) {
+                self.copy_clip_by_id(cx, &id);
+                return;
+            }
             if let Some(index) = self.group_hotkey_matches(event) {
                 self.set_group_filter_by_index(cx, index);
                 return;
@@ -2109,7 +2469,9 @@ impl App {
         let Event::MouseDown(mouse) = event else {
             return false;
         };
-        if self.active_page != ClientPage::Main || mouse.button != MouseButton::SECONDARY {
+        if self.active_page != ClientPage::Main
+            || (mouse.button != MouseButton::SECONDARY && mouse.button != MouseButton::MIDDLE)
+        {
             return false;
         }
 
@@ -2117,10 +2479,14 @@ impl App {
             let row = self.widget(cx, row_id(index));
             if row.visible() && row.point_hits_area(cx, mouse.abs) {
                 self.select_clip_by_index(cx, index);
-                self.menu_visible = true;
-                self.group_panel_visible = false;
-                self.editor_visible = false;
-                self.apply_page_visibility(cx);
+                if mouse.button == MouseButton::MIDDLE {
+                    self.toggle_multi_select_by_index(cx, index);
+                } else {
+                    self.menu_visible = true;
+                    self.group_panel_visible = false;
+                    self.editor_visible = false;
+                    self.apply_page_visibility(cx);
+                }
                 self.widget(cx, row_id(index)).set_key_focus(cx);
                 return true;
             }
@@ -2178,6 +2544,29 @@ impl App {
                 return true;
             }
             return false;
+        }
+
+        if search_focus && self.query_is_empty() {
+            match event.key_code {
+                KeyCode::KeyC if event.modifiers.is_primary() => {
+                    self.copy_selected(cx);
+                    return true;
+                }
+                KeyCode::KeyX if event.modifiers.is_primary() => {
+                    self.copy_selected(cx);
+                    self.delete_selected(cx);
+                    return true;
+                }
+                KeyCode::Delete => {
+                    self.delete_selected(cx);
+                    return true;
+                }
+                KeyCode::F3 => {
+                    self.show_editor(cx);
+                    return true;
+                }
+                _ => {}
+            }
         }
 
         if self.query_is_empty()
@@ -2261,6 +2650,10 @@ impl App {
                 self.copy_selected(cx);
                 true
             }
+            KeyCode::F2 if event.modifiers.is_primary() && !search_focus => {
+                self.compare_selected(cx);
+                true
+            }
             KeyCode::KeyF if event.modifiers.is_primary() => {
                 self.widget(cx, ids!(search_input)).set_key_focus(cx);
                 true
@@ -2339,6 +2732,7 @@ impl App {
             ids!(search_input),
             ids!(edit_input),
             ids!(quick_paste_alias_input),
+            ids!(clip_hotkey_input),
             ids!(device_id_value),
             ids!(max_history_input),
             ids!(capture_interval_input),
@@ -2550,6 +2944,7 @@ impl App {
             (ids!(history_title), "app.latest"),
             (ids!(selected_title), "app.no_selection"),
             (ids!(quick_paste_alias_label), "app.quick_paste_alias"),
+            (ids!(clip_hotkey_label), "app.clip_hotkey"),
             (ids!(edit_label), "app.edit_text"),
             (ids!(copy_selected_button), "app.copy_selected"),
             (ids!(save_edit_button), "app.save_edit"),
@@ -2606,6 +3001,13 @@ impl App {
             (ids!(system_menu_button), "app.menu"),
             (ids!(menu_copy_button), "app.copy_selected"),
             (ids!(menu_paste_plain_button), "app.paste_plain"),
+            (ids!(menu_paste_no_order_button), "app.paste_no_order"),
+            (ids!(menu_view_full_button), "app.view_full_description"),
+            (
+                ids!(menu_multi_image_h_button),
+                "app.multi_image_horizontal",
+            ),
+            (ids!(menu_multi_image_v_button), "app.multi_image_vertical"),
             (ids!(menu_edit_button), "app.edit"),
             (ids!(menu_refresh_button), "app.refresh"),
             (ids!(menu_delete_button), "app.delete"),
@@ -2660,8 +3062,57 @@ impl App {
             (ids!(menu_copy_selection_button), "app.copy_selection"),
             (ids!(menu_clear_history_button), "app.clear_history"),
             (ids!(menu_export_button), "app.export_history"),
+            (ids!(menu_export_text_button), "app.export_text_files"),
             (ids!(menu_import_button), "app.import_history"),
+            (
+                ids!(menu_import_file_contents_button),
+                "app.import_file_contents",
+            ),
+            (
+                ids!(menu_export_google_translate_button),
+                "app.export_google_translate",
+            ),
+            (ids!(menu_export_web_search_button), "app.export_web_search"),
+            (ids!(menu_export_qr_button), "app.export_qr_code"),
+            (ids!(menu_email_body_button), "app.email_body"),
             (ids!(menu_delete_non_pinned_button), "app.delete_non_pinned"),
+            (ids!(menu_compare_left_button), "app.compare_select_left"),
+            (
+                ids!(menu_compare_against_button),
+                "app.compare_against_left",
+            ),
+            (ids!(menu_compare_button), "app.compare"),
+            (ids!(menu_never_auto_delete_button), "app.never_auto_delete"),
+            (ids!(menu_auto_delete_button), "app.auto_delete"),
+            (ids!(menu_remove_hotkey_button), "app.remove_hotkey"),
+            (
+                ids!(menu_remove_quick_paste_button),
+                "app.remove_quick_paste",
+            ),
+            (ids!(menu_make_top_sticky_button), "app.make_top_sticky"),
+            (ids!(menu_make_last_sticky_button), "app.make_last_sticky"),
+            (
+                ids!(menu_replace_top_sticky_button),
+                "app.replace_top_sticky",
+            ),
+            (ids!(menu_remove_sticky_button), "app.remove_sticky"),
+            (
+                ids!(menu_search_description_button),
+                "app.search_scope_description",
+            ),
+            (ids!(menu_search_full_text_button), "app.search_scope_text"),
+            (
+                ids!(menu_search_quick_paste_button),
+                "app.search_scope_quick_paste",
+            ),
+            (ids!(menu_search_simple_button), "app.search_simple"),
+            (ids!(menu_search_regex_button), "app.search_regex"),
+            (ids!(menu_search_wildcard_button), "app.search_wildcard"),
+            (
+                ids!(menu_toggle_search_method_button),
+                "app.toggle_search_method",
+            ),
+            (ids!(menu_apply_last_search_button), "app.apply_last_search"),
             (ids!(about_title), "app.settings_about"),
             (ids!(copy_buffers_title), "app.settings_copy_buffers"),
             (ids!(copy_buffers_status), "app.copy_buffers_status"),
@@ -2673,6 +3124,9 @@ impl App {
             (ids!(export_history_button), "app.export_history"),
             (ids!(clear_history_button), "app.clear_history"),
             (ids!(delete_non_pinned_button), "app.delete_non_pinned"),
+            (ids!(backup_database_button), "app.backup_database"),
+            (ids!(compact_database_button), "app.compact_database"),
+            (ids!(verify_database_button), "app.verify_database"),
             (ids!(import_path_label), "app.import_path"),
             (ids!(import_history_button), "app.import_history"),
             (ids!(advanced_title), "app.settings_advanced"),
@@ -2832,6 +3286,13 @@ impl App {
             messages,
             "app.search_scope_description",
             search_scope == SearchScope::Description,
+        );
+        self.set_choice_button_text(
+            cx,
+            ids!(search_scope_quick_paste_button),
+            messages,
+            "app.search_scope_quick_paste",
+            search_scope == SearchScope::QuickPaste,
         );
         self.set_choice_button_text(
             cx,
@@ -3014,6 +3475,8 @@ impl App {
                     .text("app.quick_paste_alias_placeholder")
                     .to_owned(),
             );
+        self.text_input(cx, ids!(clip_hotkey_input))
+            .set_empty_text(cx, messages.text("app.clip_hotkey_placeholder").to_owned());
         self.text_input(cx, ids!(server_input))
             .set_empty_text(cx, messages.text("app.server_placeholder").to_owned());
         self.text_input(cx, ids!(token_input))
@@ -3557,6 +4020,22 @@ impl App {
         } else {
             String::new()
         };
+        let protect = if clip.dont_auto_delete {
+            self.text("app.never_auto_delete_marker")
+        } else {
+            String::new()
+        };
+        let sticky = match clip.sticky_position {
+            value if value > 0 => self.text("app.sticky_top_marker"),
+            value if value < 0 => self.text("app.sticky_last_marker"),
+            _ => String::new(),
+        };
+        let clip_hotkey = clip
+            .hotkey
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| self.template("app.clip_hotkey_marker", &[("{value}", value.to_owned())]))
+            .unwrap_or_default();
         let pasted = if self.clip_was_pasted(clip) {
             self.text("app.pasted_marker")
         } else {
@@ -3593,6 +4072,9 @@ impl App {
             &[
                 ("{index}", self.row_hotkey_text(index)),
                 ("{pin}", pin),
+                ("{protect}", protect),
+                ("{sticky}", sticky),
+                ("{shortcut}", clip_hotkey),
                 ("{pasted}", pasted),
                 ("{multi}", multi),
                 ("{quick}", quick),
@@ -3736,9 +4218,29 @@ impl App {
                                 .clone()
                                 .unwrap_or_else(|| "-".to_owned()),
                         ),
+                        (
+                            "{hotkey}",
+                            clip.hotkey.clone().unwrap_or_else(|| "-".to_owned()),
+                        ),
                         ("{created}", format_timestamp(clip.created_at)),
                         ("{updated}", format_timestamp(clip.updated_at)),
                         ("{pin}", pin),
+                        (
+                            "{delete}",
+                            if clip.dont_auto_delete {
+                                self.text("app.never_auto_delete")
+                            } else {
+                                self.text("app.auto_delete")
+                            },
+                        ),
+                        (
+                            "{sticky}",
+                            match clip.sticky_position {
+                                value if value > 0 => self.text("app.sticky_top"),
+                                value if value < 0 => self.text("app.sticky_last"),
+                                _ => self.text("app.not_sticky"),
+                            },
+                        ),
                     ],
                 ),
             );
@@ -3747,6 +4249,8 @@ impl App {
                 .set_text(cx, editable_text);
             self.widget(cx, ids!(quick_paste_alias_input))
                 .set_text(cx, clip.quick_paste_text.as_deref().unwrap_or_default());
+            self.widget(cx, ids!(clip_hotkey_input))
+                .set_text(cx, clip.hotkey.as_deref().unwrap_or_default());
             let pin_label = if clip.pinned {
                 self.text("app.unpin")
             } else {
@@ -3763,6 +4267,7 @@ impl App {
                 self.widget(cx, ids!(edit_input)).set_text(cx, "");
                 self.widget(cx, ids!(quick_paste_alias_input))
                     .set_text(cx, "");
+                self.widget(cx, ids!(clip_hotkey_input)).set_text(cx, "");
             }
             self.widget(cx, ids!(pin_button))
                 .set_text(cx, &self.text("app.pin"));
@@ -3773,6 +4278,9 @@ impl App {
 
     fn clear_search(&mut self, cx: &mut Cx) {
         if let Some(state) = &mut self.state {
+            if !state.query.trim().is_empty() {
+                self.last_search_query = state.query.clone();
+            }
             state.query.clear();
         }
         self.widget(cx, ids!(search_input)).set_text(cx, "");
@@ -4178,6 +4686,43 @@ impl App {
         }
     }
 
+    fn copy_selected_without_order_update(&mut self, cx: &mut Cx) {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(ClientState::multi_selection_active)
+        {
+            let result = self.with_state_mut(|state| state.copy_selected_merged_keep_order(None));
+            match result {
+                Some(Ok(count)) if count > 0 => {
+                    self.set_status_text(
+                        cx,
+                        &self.template(
+                            "app.status_copied_merged_keep_order",
+                            &[("{count}", count.to_string())],
+                        ),
+                    );
+                    self.refresh_history(cx);
+                }
+                Some(Ok(_)) => self.set_status(cx, "app.status_plain_text_unavailable"),
+                Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+                None => self.set_status(cx, "app.status_clipboard_unavailable"),
+            }
+            return;
+        }
+
+        let result = self.with_state_mut(ClientState::copy_selected_keep_order);
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_copied_keep_order");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
     fn copy_selected_transformed(&mut self, cx: &mut Cx, transform: TextTransform) {
         if self
             .state
@@ -4214,10 +4759,42 @@ impl App {
         }
     }
 
+    fn copy_selected_images_merged(&mut self, cx: &mut Cx, direction: ImageMergeDirection) {
+        let result = self.with_state_mut(|state| state.copy_selected_images_merged(direction));
+        match result {
+            Some(Ok(count)) if count > 0 => {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_copied_images_merged",
+                        &[("{count}", count.to_string())],
+                    ),
+                );
+                self.refresh_history(cx);
+            }
+            Some(Ok(_)) => self.set_status(cx, "app.status_image_merge_unavailable"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
     fn copy_generated_guid(&mut self, cx: &mut Cx) {
         let result = self.with_state_mut(ClientState::copy_generated_guid);
         match result {
             Some(Ok(())) => self.set_status(cx, "app.status_copied_transformed"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
+    fn copy_clip_by_id(&mut self, cx: &mut Cx, id: &str) {
+        let result = self.with_state_mut(|state| state.copy_clip_by_id(id));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_copied_selected");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
         }
@@ -4284,6 +4861,7 @@ impl App {
             .set_text(cx, &self.text("app.new_clip_meta"));
         self.widget(cx, ids!(quick_paste_alias_input))
             .set_text(cx, "");
+        self.widget(cx, ids!(clip_hotkey_input)).set_text(cx, "");
         self.widget(cx, ids!(edit_input)).set_text(cx, "");
         self.widget(cx, ids!(edit_input)).set_key_focus(cx);
     }
@@ -4393,6 +4971,64 @@ impl App {
         }
     }
 
+    fn export_selected_text_files(&mut self, cx: &mut Cx) {
+        let path = self.widget(cx, ids!(export_path_input)).text();
+        let result = self.with_state_mut(|state| state.export_selected_text_files(&path));
+        match result {
+            Some(Ok((count, path))) if count > 0 => {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_exported_selected_text",
+                        &[("{count}", count.to_string()), ("{path}", path)],
+                    ),
+                );
+                self.apply_i18n(cx);
+            }
+            Some(Ok(_)) => self.set_status(cx, "app.status_plain_text_unavailable"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn import_selected_file_contents(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::import_selected_file_contents);
+        match result {
+            Some(Ok(count)) if count > 0 => {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_imported_file_contents",
+                        &[("{count}", count.to_string())],
+                    ),
+                );
+                self.refresh_history(cx);
+            }
+            Some(Ok(_)) => self.set_status(cx, "app.status_file_import_unavailable"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn open_selected_external(&mut self, cx: &mut Cx, action: ExternalAction) {
+        let text = self
+            .state
+            .as_ref()
+            .and_then(selected_text_for_action)
+            .filter(|text| !text.trim().is_empty());
+        let Some(text) = text else {
+            self.set_status(cx, "app.status_plain_text_unavailable");
+            return;
+        };
+
+        let email_subject = self.text("app.email_subject");
+        let result = open_external_action(action, &text, &email_subject);
+        match result {
+            Ok(()) => self.set_status(cx, "app.status_external_action_opened"),
+            Err(error) => self.set_status_text(cx, &error.to_string()),
+        }
+    }
+
     fn move_selected_clip(&mut self, cx: &mut Cx, direction: ClipMove) {
         let result = self.with_state_mut(|state| state.move_selected_clip(direction));
         match result {
@@ -4411,13 +5047,41 @@ impl App {
         let quick_paste_alias = self.widget(cx, ids!(quick_paste_alias_input)).text();
         let quick_paste_alias = quick_paste_alias.trim();
         let quick_paste_alias = (!quick_paste_alias.is_empty()).then_some(quick_paste_alias);
+        let clip_hotkey = self.widget(cx, ids!(clip_hotkey_input)).text();
+        let clip_hotkey = clip_hotkey.trim();
+        let clip_hotkey = (!clip_hotkey.is_empty()).then_some(clip_hotkey);
+        if let Some(hotkey) = clip_hotkey
+            && Shortcut::parse(hotkey).is_none()
+        {
+            self.set_status_text(
+                cx,
+                &self.template(
+                    "app.status_hotkey_invalid",
+                    &[("{value}", hotkey.to_owned())],
+                ),
+            );
+            return;
+        }
         if self.new_clip_mode {
             if text.trim().is_empty() {
                 self.set_status(cx, "app.status_clipboard_empty");
                 return;
             }
-            let result =
-                self.with_state_mut(|state| state.create_text_clip(&text, quick_paste_alias));
+            if let Some(hotkey) = clip_hotkey
+                && self.clip_hotkey_conflicts(None, hotkey)
+            {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_hotkey_conflict",
+                        &[("{value}", hotkey.to_owned())],
+                    ),
+                );
+                return;
+            }
+            let result = self.with_state_mut(|state| {
+                state.create_text_clip(&text, quick_paste_alias, clip_hotkey)
+            });
             match result {
                 Some(Ok(true)) => {
                     if let Some(group_id) = self.active_group_id {
@@ -4439,9 +5103,23 @@ impl App {
             self.set_status(cx, "app.status_no_selection");
             return;
         };
+        let selected_id = selected.id.clone();
+        if let Some(hotkey) = clip_hotkey
+            && self.clip_hotkey_conflicts(Some(&selected_id), hotkey)
+        {
+            self.set_status_text(
+                cx,
+                &self.template(
+                    "app.status_hotkey_conflict",
+                    &[("{value}", hotkey.to_owned())],
+                ),
+            );
+            return;
+        }
         if editable_text(selected).is_none() {
-            let result = self
-                .with_state_mut(|state| state.update_selected_quick_paste_text(quick_paste_alias));
+            let result = self.with_state_mut(|state| {
+                state.update_selected_metadata(quick_paste_alias, clip_hotkey)
+            });
             match result {
                 Some(Ok(true)) => {
                     self.set_status(cx, "app.status_edit_saved");
@@ -4459,8 +5137,9 @@ impl App {
             return;
         }
 
-        let result =
-            self.with_state_mut(|state| state.update_selected_text(&text, quick_paste_alias));
+        let result = self.with_state_mut(|state| {
+            state.update_selected_text(&text, quick_paste_alias, clip_hotkey)
+        });
         match result {
             Some(Ok(true)) => {
                 self.set_status(cx, "app.status_edit_saved");
@@ -4482,6 +5161,152 @@ impl App {
             Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn set_selected_dont_auto_delete(&mut self, cx: &mut Cx, dont_auto_delete: bool) {
+        let result =
+            self.with_state_mut(|state| state.set_selected_dont_auto_delete(dont_auto_delete));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_quick_properties_updated");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn set_selected_sticky_position(&mut self, cx: &mut Cx, sticky_position: i32) {
+        let result =
+            self.with_state_mut(|state| state.set_selected_sticky_position(sticky_position));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_sticky_updated");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn replace_top_sticky_clip(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::replace_top_sticky_clip);
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_sticky_updated");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn toggle_search_method(&mut self, cx: &mut Cx) {
+        let next = self
+            .state
+            .as_ref()
+            .map(|state| match SearchMode::from_settings(&state.settings) {
+                SearchMode::Simple => SearchMode::Regex,
+                SearchMode::Regex => SearchMode::Wildcard,
+                SearchMode::Wildcard => SearchMode::Simple,
+            })
+            .unwrap_or(SearchMode::Simple);
+        self.set_search_mode(cx, next);
+    }
+
+    fn apply_last_search(&mut self, cx: &mut Cx) {
+        let query = self.last_search_query.trim().to_owned();
+        if query.is_empty() {
+            self.set_status(cx, "app.status_no_last_search");
+            return;
+        }
+        if let Some(state) = &mut self.state {
+            state.query = query.clone();
+        }
+        self.widget(cx, ids!(search_input)).set_text(cx, &query);
+        self.widget(cx, ids!(search_input)).set_key_focus(cx);
+        self.refresh_history(cx);
+        self.set_status(cx, "app.status_last_search_applied");
+    }
+
+    fn remove_selected_hotkey(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(|state| state.update_selected_hotkey(None));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_quick_properties_updated");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn remove_selected_quick_paste(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(|state| state.update_selected_quick_paste_text(None));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_quick_properties_updated");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn select_compare_left(&mut self, cx: &mut Cx) {
+        let Some(id) = self
+            .state
+            .as_ref()
+            .and_then(|state| state.selected_id.clone())
+        else {
+            self.set_status(cx, "app.status_no_selection");
+            return;
+        };
+        self.compare_left_id = Some(id);
+        self.set_status(cx, "app.status_compare_left_selected");
+    }
+
+    fn compare_against_left(&mut self, cx: &mut Cx) {
+        let Some(left_id) = self.compare_left_id.clone() else {
+            self.set_status(cx, "app.status_compare_left_missing");
+            return;
+        };
+        let Some(right_id) = self
+            .state
+            .as_ref()
+            .and_then(|state| state.selected_id.clone())
+        else {
+            self.set_status(cx, "app.status_no_selection");
+            return;
+        };
+        self.compare_clip_ids(cx, &left_id, &right_id);
+    }
+
+    fn compare_selected(&mut self, cx: &mut Cx) {
+        if let Some(ids) = self
+            .state
+            .as_ref()
+            .and_then(ClientState::selected_compare_pair)
+        {
+            self.compare_clip_ids(cx, &ids.0, &ids.1);
+            return;
+        }
+        self.compare_against_left(cx);
+    }
+
+    fn compare_clip_ids(&mut self, cx: &mut Cx, left_id: &str, right_id: &str) {
+        let result = self.with_state_mut(|state| state.copy_clip_comparison(left_id, right_id));
+        match result {
+            Some(Ok(true)) => self.set_status(cx, "app.status_compare_copied"),
+            Some(Ok(false)) => self.set_status(cx, "app.status_compare_unavailable"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_compare_unavailable"),
         }
     }
 
@@ -4537,6 +5362,41 @@ impl App {
                 self.refresh_stats(cx);
                 self.set_status(cx, "app.status_stats_reset");
             }
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+    }
+
+    fn backup_database(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::backup_database_now);
+        match result {
+            Some(Ok(path)) => self.set_status_text(
+                cx,
+                &self.template("app.status_database_backup", &[("{path}", path)]),
+            ),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+        self.apply_i18n(cx);
+    }
+
+    fn compact_database(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::compact_database);
+        match result {
+            Some(Ok(())) => {
+                self.refresh_stats(cx);
+                self.set_status(cx, "app.status_database_compacted");
+            }
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+    }
+
+    fn verify_database(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::verify_database);
+        match result {
+            Some(Ok(true)) => self.set_status(cx, "app.status_database_ok"),
+            Some(Ok(false)) => self.set_status(cx, "app.status_database_check_failed"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_no_clip"),
         }
@@ -5091,6 +5951,66 @@ impl App {
         })
     }
 
+    fn clip_hotkey_matches(&self, event: &KeyEvent) -> Option<String> {
+        let state = self.state.as_ref()?;
+        state
+            .store
+            .list_clips(history_query_limit(&state.settings))
+            .ok()?
+            .into_iter()
+            .find(|clip| {
+                clip.hotkey
+                    .as_deref()
+                    .and_then(Shortcut::parse)
+                    .map(|shortcut| shortcut.matches(event))
+                    .unwrap_or(false)
+            })
+            .map(|clip| clip.id)
+    }
+
+    fn clip_hotkey_conflicts(&self, exclude_clip_id: Option<&str>, value: &str) -> bool {
+        let Some(canonical) = shortcut_canonical(value) else {
+            return false;
+        };
+        let Some(state) = self.state.as_ref() else {
+            return false;
+        };
+
+        let setting_hotkeys = [
+            &state.settings.hotkey_show_history,
+            &state.settings.hotkey_search,
+            &state.settings.hotkey_copy_selected,
+            &state.settings.hotkey_delete_selected,
+            &state.settings.hotkey_toggle_pin,
+            &state.settings.hotkey_edit_selected,
+            &state.settings.hotkey_capture_now,
+            &state.settings.hotkey_sync_now,
+        ];
+        setting_hotkeys
+            .iter()
+            .any(|hotkey| shortcut_canonical(hotkey).as_deref() == Some(canonical.as_str()))
+            || state
+                .settings
+                .copy_buffer_copy_hotkeys
+                .iter()
+                .chain(state.settings.copy_buffer_paste_hotkeys.iter())
+                .chain(state.settings.copy_buffer_cut_hotkeys.iter())
+                .any(|hotkey| shortcut_canonical(hotkey).as_deref() == Some(canonical.as_str()))
+            || state.groups.iter().any(|group| {
+                shortcut_canonical(&group.hotkey).as_deref() == Some(canonical.as_str())
+            })
+            || state
+                .store
+                .list_clips(history_query_limit(&state.settings))
+                .unwrap_or_default()
+                .into_iter()
+                .any(|clip| {
+                    exclude_clip_id != Some(clip.id.as_str())
+                        && shortcut_canonical(clip.hotkey.as_deref().unwrap_or_default()).as_deref()
+                            == Some(canonical.as_str())
+                })
+    }
+
     fn hotkey_conflicts(&self, exclude_group_id: i64, value: &str) -> bool {
         let Some(canonical) = shortcut_canonical(value) else {
             return false;
@@ -5123,6 +6043,15 @@ impl App {
                 group.id != exclude_group_id
                     && shortcut_canonical(&group.hotkey).as_deref() == Some(canonical.as_str())
             })
+            || state
+                .store
+                .list_clips(history_query_limit(&state.settings))
+                .unwrap_or_default()
+                .iter()
+                .any(|clip| {
+                    shortcut_canonical(clip.hotkey.as_deref().unwrap_or_default()).as_deref()
+                        == Some(canonical.as_str())
+                })
     }
 
     fn restart_poll_timer(&mut self, cx: &mut Cx) {
@@ -5178,8 +6107,21 @@ impl App {
                         self.refresh_history(cx);
                     }
                     TrayCommand::Settings => self.show_settings_page(cx),
+                    TrayCommand::KeyboardSettings => {
+                        self.show_settings_page(cx);
+                        self.show_settings_tab(cx, SettingsTab::Keyboard);
+                    }
+                    TrayCommand::Utilities => {
+                        self.show_settings_page(cx);
+                        self.show_settings_tab(cx, SettingsTab::Utilities);
+                    }
                     TrayCommand::CaptureNow => self.capture_clipboard(cx),
                     TrayCommand::SyncNow => self.sync_now(cx),
+                    TrayCommand::NewClip => {
+                        self.show_main_page(cx);
+                        self.show_new_clip_editor(cx);
+                    }
+                    TrayCommand::DeleteNonPinned => self.delete_non_pinned(cx),
                     TrayCommand::ToggleCapture => self.toggle_capture(cx),
                     TrayCommand::Exit => std::process::exit(0),
                 }
@@ -5368,6 +6310,15 @@ impl ClientState {
             .collect()
     }
 
+    fn selected_compare_pair(&self) -> Option<(String, String)> {
+        let selected = self.selected_multi_clips();
+        if selected.len() >= 2 {
+            Some((selected[0].id.clone(), selected[1].id.clone()))
+        } else {
+            None
+        }
+    }
+
     fn capture_clipboard(&mut self, force: bool) -> Result<CaptureOutcome> {
         let settings = self.settings.clone();
         let snapshot = {
@@ -5440,6 +6391,30 @@ impl ClientState {
         }
     }
 
+    fn copy_selected_keep_order(&mut self) -> Result<bool> {
+        let Some(clip) = self.selected_clip().cloned() else {
+            return Ok(false);
+        };
+        let copied_hash = {
+            let clipboard = self.clipboard_mut()?;
+            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
+                Some(hash)
+            } else if restore_clip_to_clipboard(clipboard, &clip)? {
+                Some(clip.content_hash.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(hash) = copied_hash {
+            self.last_clipboard_hash = Some(hash);
+            self.mark_clip_pasted(&clip.id);
+            self.record_paste()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     fn copy_selected_plain_text(&mut self) -> Result<bool> {
         let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
@@ -5494,6 +6469,21 @@ impl ClientState {
     }
 
     fn copy_selected_merged(&mut self, transform: Option<TextTransform>) -> Result<usize> {
+        self.copy_selected_merged_impl(transform, true)
+    }
+
+    fn copy_selected_merged_keep_order(
+        &mut self,
+        transform: Option<TextTransform>,
+    ) -> Result<usize> {
+        self.copy_selected_merged_impl(transform, false)
+    }
+
+    fn copy_selected_merged_impl(
+        &mut self,
+        transform: Option<TextTransform>,
+        update_order: bool,
+    ) -> Result<usize> {
         let mut clips = self.selected_multi_clips();
         if clips.len() < 2 {
             return Ok(0);
@@ -5531,6 +6521,46 @@ impl ClientState {
         for id in &ids {
             self.mark_clip_pasted(id);
         }
+        if update_order && self.settings.quick_paste_update_order_on_copy {
+            for id in ids.iter().rev() {
+                let _ = self.store.move_clip_to_top(id)?;
+            }
+        }
+        self.record_paste()?;
+        Ok(ids.len())
+    }
+
+    fn copy_selected_images_merged(&mut self, direction: ImageMergeDirection) -> Result<usize> {
+        let images = self
+            .selected_multi_clips()
+            .into_iter()
+            .filter_map(|clip| {
+                let (width, height, bytes) = clip.formats.iter().find_map(image_rgba_payload)?;
+                Some((clip.id, width, height, bytes))
+            })
+            .collect::<Vec<_>>();
+        if images.len() < 2 {
+            return Ok(0);
+        }
+
+        let Some((width, height, bytes)) = compose_rgba_images(&images, direction) else {
+            return Ok(0);
+        };
+        let format = ClipFormat::image_rgba(width, height, bytes.clone());
+        let clipboard = self.clipboard_mut()?;
+        clipboard.set_image(ImageData {
+            width,
+            height,
+            bytes: Cow::Owned(bytes),
+        })?;
+        self.last_clipboard_hash = Some(content_hash(&[format]));
+        let ids = images
+            .iter()
+            .map(|(id, _, _, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in &ids {
+            self.mark_clip_pasted(id);
+        }
         if self.settings.quick_paste_update_order_on_copy {
             for id in ids.iter().rev() {
                 let _ = self.store.move_clip_to_top(id)?;
@@ -5547,6 +6577,42 @@ impl ClientState {
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
         self.record_paste()?;
         Ok(())
+    }
+
+    fn copy_clip_by_id(&mut self, id: &str) -> Result<bool> {
+        let Some(clip) = self.store.get_clip(id)? else {
+            return Ok(false);
+        };
+        if clip.deleted_at.is_some() {
+            return Ok(false);
+        }
+        self.copy_clip_to_clipboard(clip)
+    }
+
+    fn copy_clip_to_clipboard(&mut self, clip: Clip) -> Result<bool> {
+        let copied_hash = {
+            let clipboard = self.clipboard_mut()?;
+            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
+                Some(hash)
+            } else if restore_clip_to_clipboard(clipboard, &clip)? {
+                Some(clip.content_hash.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(hash) = copied_hash {
+            self.last_clipboard_hash = Some(hash);
+            self.selected_id = Some(clip.id.clone());
+            self.selected_ids.clear();
+            self.mark_clip_pasted(&clip.id);
+            if self.settings.quick_paste_update_order_on_copy && clip.deleted_at.is_none() {
+                let _ = self.store.move_clip_to_top(&clip.id)?;
+            }
+            self.record_paste()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     fn put_selected_on_copy_buffer(&mut self, index: usize, cut: bool) -> Result<bool> {
@@ -5620,6 +6686,21 @@ impl ClientState {
         self.persist_settings()
     }
 
+    fn backup_database_now(&mut self) -> Result<String> {
+        let path = backup_database_now(&self.settings.backup_path)?;
+        self.settings.backup_path = path.clone();
+        self.persist_settings()?;
+        Ok(path)
+    }
+
+    fn compact_database(&mut self) -> yank_core::Result<()> {
+        self.store.vacuum()
+    }
+
+    fn verify_database(&mut self) -> yank_core::Result<bool> {
+        self.store.integrity_check()
+    }
+
     fn clipboard_mut(&mut self) -> Result<&mut Clipboard> {
         if self.clipboard.is_none() {
             self.clipboard = Clipboard::new().ok();
@@ -5633,7 +6714,12 @@ impl ClientState {
             .expect("clipboard availability was checked"))
     }
 
-    fn update_selected_text(&mut self, text: &str, quick_paste_text: Option<&str>) -> Result<bool> {
+    fn update_selected_text(
+        &mut self,
+        text: &str,
+        quick_paste_text: Option<&str>,
+        hotkey: Option<&str>,
+    ) -> Result<bool> {
         let Some(id) = self.selected_id.clone() else {
             return Ok(false);
         };
@@ -5645,6 +6731,9 @@ impl ClientState {
             .store
             .update_clip_quick_paste_text(&id, quick_paste_text)?
         {
+            clip = updated;
+        }
+        if let Some(updated) = self.store.update_clip_hotkey(&id, hotkey)? {
             clip = updated;
         }
         if let Some(sync) = self.sync_client() {
@@ -5670,13 +6759,60 @@ impl ClientState {
         Ok(true)
     }
 
-    fn create_text_clip(&mut self, text: &str, quick_paste_text: Option<&str>) -> Result<bool> {
+    fn update_selected_hotkey(&mut self, hotkey: Option<&str>) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        self.selected_ids.clear();
+        let Some(clip) = self.store.update_clip_hotkey(&id, hotkey)? else {
+            return Ok(false);
+        };
+        if let Some(sync) = self.sync_client() {
+            let _ = sync.push_clip(clip)?;
+        }
+        Ok(true)
+    }
+
+    fn update_selected_metadata(
+        &mut self,
+        quick_paste_text: Option<&str>,
+        hotkey: Option<&str>,
+    ) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        self.selected_ids.clear();
+        let Some(mut clip) = self
+            .store
+            .update_clip_quick_paste_text(&id, quick_paste_text)?
+        else {
+            return Ok(false);
+        };
+        if let Some(updated) = self.store.update_clip_hotkey(&id, hotkey)? {
+            clip = updated;
+        }
+        if let Some(sync) = self.sync_client() {
+            let _ = sync.push_clip(clip)?;
+        }
+        Ok(true)
+    }
+
+    fn create_text_clip(
+        &mut self,
+        text: &str,
+        quick_paste_text: Option<&str>,
+        hotkey: Option<&str>,
+    ) -> Result<bool> {
         if text.trim().is_empty() {
             return Ok(false);
         }
         let mut clip = Clip::from_text(&self.settings.device_id, text);
         clip.group_id = None;
         clip.quick_paste_text = quick_paste_text
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        clip.hotkey = hotkey
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
@@ -5741,6 +6877,56 @@ impl ClientState {
         Ok(true)
     }
 
+    fn set_selected_dont_auto_delete(&mut self, dont_auto_delete: bool) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        let Some(clip) = self
+            .store
+            .set_clip_dont_auto_delete(&id, dont_auto_delete)?
+        else {
+            return Ok(false);
+        };
+        if let Some(sync) = self.sync_client() {
+            let _ = sync.push_clip(clip)?;
+        }
+        Ok(true)
+    }
+
+    fn set_selected_sticky_position(&mut self, sticky_position: i32) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        let Some(clip) = self.store.set_clip_sticky_position(&id, sticky_position)? else {
+            return Ok(false);
+        };
+        if let Some(sync) = self.sync_client() {
+            let _ = sync.push_clip(clip)?;
+        }
+        Ok(true)
+    }
+
+    fn replace_top_sticky_clip(&mut self) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        if let Some(first) = self.store.list_clips(1)?.into_iter().next()
+            && first.sticky_position > 0
+            && let Some(clip) = self.store.set_clip_sticky_position(&first.id, 0)?
+            && let Some(sync) = self.sync_client()
+        {
+            let _ = sync.push_clip(clip)?;
+        }
+
+        let Some(clip) = self.store.set_clip_sticky_position(&id, 1)? else {
+            return Ok(false);
+        };
+        if let Some(sync) = self.sync_client() {
+            let _ = sync.push_clip(clip)?;
+        }
+        Ok(true)
+    }
+
     fn delete_selected(&mut self) -> Result<bool> {
         let Some(id) = self.selected_id.clone() else {
             return Ok(false);
@@ -5769,6 +6955,27 @@ impl ClientState {
         self.store.delete_non_pinned_clips()
     }
 
+    fn copy_clip_comparison(&mut self, left_id: &str, right_id: &str) -> Result<bool> {
+        let Some(left) = self.store.get_clip(left_id)? else {
+            return Ok(false);
+        };
+        let Some(right) = self.store.get_clip(right_id)? else {
+            return Ok(false);
+        };
+        let Some(left_text) = plain_text_payload(&left) else {
+            return Ok(false);
+        };
+        let Some(right_text) = plain_text_payload(&right) else {
+            return Ok(false);
+        };
+        let comparison = format_clip_comparison(&left, &left_text, &right, &right_text);
+        let clipboard = self.clipboard_mut()?;
+        clipboard.set_text(comparison.clone())?;
+        self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&comparison)]));
+        self.record_paste()?;
+        Ok(true)
+    }
+
     fn export_history(&mut self, path: &str) -> Result<(usize, String)> {
         let path = resolve_history_path(path, "yank-export.json")?;
         let count = self.store.export_active_clips(&path)?;
@@ -5784,6 +6991,80 @@ impl ClientState {
         self.persist_settings()?;
         self.store.enforce_max_history(self.settings.max_history)?;
         Ok((count, self.settings.import_path.clone()))
+    }
+
+    fn export_selected_text_files(&mut self, path: &str) -> Result<(usize, String)> {
+        let clips = selected_clips_for_action(self);
+        let text_clips = clips
+            .iter()
+            .filter_map(|clip| plain_text_payload(clip).map(|text| (clip, text)))
+            .collect::<Vec<_>>();
+        if text_clips.is_empty() {
+            return Ok((0, String::new()));
+        }
+
+        let path = resolve_history_path(path, "yank-clip.txt")?;
+        if text_clips.len() == 1 {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, &text_clips[0].1)?;
+        } else {
+            let dir = if path.extension().is_some() {
+                path.parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("."))
+            } else {
+                path.clone()
+            };
+            fs::create_dir_all(&dir)?;
+            for (index, (clip, text)) in text_clips.iter().enumerate() {
+                let name = format!(
+                    "{:02}-{}.txt",
+                    index + 1,
+                    safe_file_stem(&clip.description, &clip.id)
+                );
+                fs::write(dir.join(name), text)?;
+            }
+        }
+
+        self.settings.export_path = path.to_string_lossy().into_owned();
+        self.persist_settings()?;
+        Ok((text_clips.len(), self.settings.export_path.clone()))
+    }
+
+    fn import_selected_file_contents(&mut self) -> Result<usize> {
+        let clips = selected_clips_for_action(self);
+        let paths = clips
+            .iter()
+            .flat_map(|clip| clip.formats.iter().filter_map(ClipFormat::file_list_paths))
+            .flatten()
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            return Ok(0);
+        }
+
+        let mut count = 0;
+        for path in paths {
+            let path = PathBuf::from(path);
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let mut clip = Clip::from_text(&self.settings.device_id, text);
+            clip.source_app = Some(path.to_string_lossy().into_owned());
+            let saved = self.store.save_clip_deduplicated(&clip, true)?;
+            if let Some(sync) = self.sync_client() {
+                let _ = sync.push_clip(saved)?;
+            }
+            count += 1;
+        }
+        if count > 0 {
+            self.store.enforce_max_history(self.settings.max_history)?;
+        }
+        Ok(count)
     }
 
     fn run_storage_maintenance(&mut self) -> Result<AdvancedMaintenance> {
@@ -6263,6 +7544,50 @@ fn image_rgba_payload(format: &ClipFormat) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
+fn compose_rgba_images(
+    images: &[(String, usize, usize, Vec<u8>)],
+    direction: ImageMergeDirection,
+) -> Option<(usize, usize, Vec<u8>)> {
+    let (width, height) = match direction {
+        ImageMergeDirection::Horizontal => (
+            images
+                .iter()
+                .try_fold(0usize, |acc, (_, width, _, _)| acc.checked_add(*width))?,
+            images.iter().map(|(_, _, height, _)| *height).max()?,
+        ),
+        ImageMergeDirection::Vertical => (
+            images.iter().map(|(_, width, _, _)| *width).max()?,
+            images
+                .iter()
+                .try_fold(0usize, |acc, (_, _, height, _)| acc.checked_add(*height))?,
+        ),
+    };
+    let output_len = width.checked_mul(height)?.checked_mul(4)?;
+    let mut output = vec![0u8; output_len];
+    let mut cursor_x = 0usize;
+    let mut cursor_y = 0usize;
+    for (_, image_width, image_height, bytes) in images {
+        let row_len = image_width.checked_mul(4)?;
+        for row in 0..*image_height {
+            let source_start = row.checked_mul(row_len)?;
+            let source_end = source_start.checked_add(row_len)?;
+            let target_start = (cursor_y + row)
+                .checked_mul(width)?
+                .checked_add(cursor_x)?
+                .checked_mul(4)?;
+            let target_end = target_start.checked_add(row_len)?;
+            output
+                .get_mut(target_start..target_end)?
+                .copy_from_slice(bytes.get(source_start..source_end)?);
+        }
+        match direction {
+            ImageMergeDirection::Horizontal => cursor_x = cursor_x.checked_add(*image_width)?,
+            ImageMergeDirection::Vertical => cursor_y = cursor_y.checked_add(*image_height)?,
+        }
+    }
+    Some((width, height, output))
+}
+
 fn editable_text(clip: &Clip) -> Option<&str> {
     clip.formats.iter().find_map(ClipFormat::text_value)
 }
@@ -6303,6 +7628,101 @@ fn plain_text_payload(clip: &Clip) -> Option<String> {
         .map(|paths| paths.join("\n"))
 }
 
+fn selected_clips_for_action(state: &ClientState) -> Vec<Clip> {
+    let clips = state.selected_multi_clips();
+    if clips.is_empty() {
+        state.selected_clip().cloned().into_iter().collect()
+    } else {
+        clips
+    }
+}
+
+fn selected_text_for_action(state: &ClientState) -> Option<String> {
+    let clips = selected_clips_for_action(state);
+    let texts = clips
+        .iter()
+        .filter_map(plain_text_payload)
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>();
+    if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join(&state.settings.multi_paste_separator))
+    }
+}
+
+fn safe_file_stem(description: &str, id: &str) -> String {
+    let stem = description
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        .take(48)
+        .collect::<String>();
+    if stem.is_empty() { short_id(id) } else { stem }
+}
+
+fn open_external_action(action: ExternalAction, text: &str, email_subject: &str) -> Result<()> {
+    let encoded = percent_encode_utf8(text);
+    let url = match action {
+        ExternalAction::GoogleTranslate => {
+            format!("https://translate.google.com/?sl=auto&tl=auto&text={encoded}&op=translate")
+        }
+        ExternalAction::WebSearch => format!("https://www.google.com/search?q={encoded}"),
+        ExternalAction::QrCode => format!("https://quickchart.io/qr?size=320&text={encoded}"),
+        ExternalAction::EmailBody => {
+            format!(
+                "mailto:?subject={}&body={encoded}",
+                percent_encode_utf8(email_subject)
+            )
+        }
+    };
+    open_url(&url)
+}
+
+fn open_url(url: &str) -> Result<()> {
+    let mut command = external_open_command(url);
+    command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn external_open_command(url: &str) -> Command {
+    let mut command = Command::new("cmd");
+    command.args(["/C", "start", "", url]);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn external_open_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
+    command
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn external_open_command(url: &str) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
+}
+
+fn percent_encode_utf8(text: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = String::with_capacity(text.len());
+    for byte in text.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.' | b'~') {
+            output.push(*byte as char);
+        } else {
+            output.push('%');
+            output.push(HEX[(byte >> 4) as usize] as char);
+            output.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    output
+}
+
 fn has_template_placeholder(text: &str) -> bool {
     ["{date}", "{time}", "{datetime}", "{clipboard}"]
         .iter()
@@ -6324,6 +7744,48 @@ fn render_template_text(text: &str, clipboard_text: &str) -> String {
         .replace("{time}", &now.format("%H:%M:%S").to_string())
         .replace("{datetime}", &now.format("%Y-%m-%d %H:%M:%S").to_string())
         .replace("{clipboard}", clipboard_text)
+}
+
+fn format_clip_comparison(left: &Clip, left_text: &str, right: &Clip, right_text: &str) -> String {
+    let mut output = format!(
+        "--- {} {}\n+++ {} {}\n",
+        short_id(&left.id),
+        left.description,
+        short_id(&right.id),
+        right.description
+    );
+    let left_lines = left_text.lines().collect::<Vec<_>>();
+    let right_lines = right_text.lines().collect::<Vec<_>>();
+    let max_len = left_lines.len().max(right_lines.len());
+    for index in 0..max_len {
+        match (left_lines.get(index), right_lines.get(index)) {
+            (Some(left), Some(right)) if left == right => {
+                output.push(' ');
+                output.push_str(left);
+                output.push('\n');
+            }
+            (Some(left), Some(right)) => {
+                output.push('-');
+                output.push_str(left);
+                output.push('\n');
+                output.push('+');
+                output.push_str(right);
+                output.push('\n');
+            }
+            (Some(left), None) => {
+                output.push('-');
+                output.push_str(left);
+                output.push('\n');
+            }
+            (None, Some(right)) => {
+                output.push('+');
+                output.push_str(right);
+                output.push('\n');
+            }
+            (None, None) => {}
+        }
+    }
+    output
 }
 
 fn rtf_to_text(rtf: &str) -> String {
@@ -6671,7 +8133,7 @@ fn query_history_clips(
 fn search_scope_and_query<'a>(settings: &Settings, query: &'a str) -> (SearchScope, &'a str) {
     let trimmed = query.trim();
     if let Some(rest) = strip_search_prefix(trimmed, 'q') {
-        return (SearchScope::Description, rest.trim());
+        return (SearchScope::QuickPaste, rest.trim());
     }
     if let Some(rest) = strip_search_prefix(trimmed, 'f') {
         return (SearchScope::Text, rest.trim());
@@ -6719,11 +8181,8 @@ fn searchable_clip_text_for_scope(clip: &Clip, scope: SearchScope) -> String {
             &format_timestamp(clip.updated_at),
         ]
         .join("\n"),
-        SearchScope::Description => [
-            clip.description.as_str(),
-            clip.quick_paste_text.as_deref().unwrap_or_default(),
-        ]
-        .join("\n"),
+        SearchScope::Description => clip.description.clone(),
+        SearchScope::QuickPaste => clip.quick_paste_text.clone().unwrap_or_default(),
         SearchScope::Text => clip
             .primary_text
             .clone()
@@ -6839,13 +8298,25 @@ fn backup_database_if_configured(value: &str) -> Result<Option<String>> {
     if trimmed.is_empty() {
         return Ok(None);
     }
+    backup_database_to(trimmed).map(Some)
+}
 
+fn backup_database_now(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        backup_database_to("backups")
+    } else {
+        backup_database_to(trimmed)
+    }
+}
+
+fn backup_database_to(value: &str) -> Result<String> {
     let source = paths::database_path()?;
     if !source.exists() {
-        return Ok(None);
+        return Ok(String::new());
     }
 
-    let requested = PathBuf::from(trimmed);
+    let requested = PathBuf::from(value);
     let target = if requested.extension().is_none() {
         let directory = if requested.is_absolute() {
             requested
@@ -6867,7 +8338,7 @@ fn backup_database_if_configured(value: &str) -> Result<Option<String>> {
         fs::create_dir_all(parent)?;
     }
     fs::copy(&source, &target)?;
-    Ok(Some(target.to_string_lossy().into_owned()))
+    Ok(target.to_string_lossy().into_owned())
 }
 
 fn enforce_database_size_limit(store: &Store, max_bytes: u64) -> Result<usize> {
@@ -7243,6 +8714,7 @@ fn number_key_index(key_code: KeyCode) -> Option<usize> {
         KeyCode::Key7 | KeyCode::Numpad7 => Some(6),
         KeyCode::Key8 | KeyCode::Numpad8 => Some(7),
         KeyCode::Key9 | KeyCode::Numpad9 => Some(8),
+        KeyCode::Key0 | KeyCode::Numpad0 => Some(9),
         _ => None,
     }
 }
@@ -7620,7 +9092,7 @@ mod tests {
 
         assert_eq!(
             search_scope_and_query(&settings, "/qalias"),
-            (SearchScope::Description, "alias")
+            (SearchScope::QuickPaste, "alias")
         );
         assert_eq!(
             search_scope_and_query(&settings, "\\f body"),
@@ -7634,5 +9106,56 @@ mod tests {
             search_scope_and_query(&settings, "/d 2026-05"),
             (SearchScope::Date, "2026-05")
         );
+    }
+
+    #[test]
+    fn zero_number_key_targets_tenth_quick_paste_row() {
+        assert_eq!(number_key_index(KeyCode::Key0), Some(9));
+        assert_eq!(number_key_index(KeyCode::Numpad0), Some(9));
+        assert_eq!(paste_position_key_index(KeyCode::Key0), Some(9));
+    }
+
+    #[test]
+    fn external_action_urls_percent_encode_clip_text() {
+        assert_eq!(
+            percent_encode_utf8("hello world+中文"),
+            "hello%20world%2B%E4%B8%AD%E6%96%87"
+        );
+    }
+
+    #[test]
+    fn comparison_output_marks_changed_lines() {
+        let left = Clip::from_text("device-a", "same\nold\nleft-only");
+        let right = Clip::from_text("device-a", "same\nnew\nright-only");
+        let output = format_clip_comparison(
+            &left,
+            "same\nold\nleft-only",
+            &right,
+            "same\nnew\nright-only",
+        );
+
+        assert!(output.contains(" same\n"));
+        assert!(output.contains("-old\n"));
+        assert!(output.contains("+new\n"));
+    }
+
+    #[test]
+    fn compose_rgba_images_merges_horizontally_and_vertically() {
+        let red = vec![255, 0, 0, 255];
+        let green = vec![0, 255, 0, 255];
+        let images = vec![
+            ("a".to_owned(), 1, 1, red.clone()),
+            ("b".to_owned(), 1, 1, green.clone()),
+        ];
+
+        let (width, height, bytes) =
+            compose_rgba_images(&images, ImageMergeDirection::Horizontal).unwrap();
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(bytes, [red.clone(), green.clone()].concat());
+
+        let (width, height, bytes) =
+            compose_rgba_images(&images, ImageMergeDirection::Vertical).unwrap();
+        assert_eq!((width, height), (1, 2));
+        assert_eq!(bytes, [red, green].concat());
     }
 }

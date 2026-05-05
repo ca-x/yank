@@ -378,12 +378,18 @@ pub struct Clip {
     pub primary_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_paste_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotkey: Option<String>,
     pub formats: Vec<ClipFormat>,
     pub created_at: i64,
     pub updated_at: i64,
     pub deleted_at: Option<i64>,
     pub content_hash: String,
     pub pinned: bool,
+    #[serde(default)]
+    pub dont_auto_delete: bool,
+    #[serde(default)]
+    pub sticky_position: i32,
     pub source_app: Option<String>,
     pub group_id: Option<i64>,
 }
@@ -414,12 +420,15 @@ impl Clip {
             description: description.into(),
             primary_text,
             quick_paste_text: None,
+            hotkey: None,
             formats,
             created_at: now,
             updated_at: now,
             deleted_at: None,
             content_hash,
             pinned: false,
+            dont_auto_delete: false,
+            sticky_position: 0,
             source_app: None,
             group_id: None,
         }
@@ -525,6 +534,9 @@ impl Store {
                 deleted_at INTEGER,
                 content_hash TEXT NOT NULL,
                 pinned INTEGER NOT NULL DEFAULT 0,
+                dont_auto_delete INTEGER NOT NULL DEFAULT 0,
+                sticky_position INTEGER NOT NULL DEFAULT 0,
+                hotkey TEXT,
                 source_app TEXT,
                 group_id INTEGER
             );
@@ -580,6 +592,21 @@ impl Store {
             "quick_paste_text",
             "ALTER TABLE clips ADD COLUMN quick_paste_text TEXT",
         )?;
+        self.ensure_column(
+            "clips",
+            "dont_auto_delete",
+            "ALTER TABLE clips ADD COLUMN dont_auto_delete INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column(
+            "clips",
+            "hotkey",
+            "ALTER TABLE clips ADD COLUMN hotkey TEXT",
+        )?;
+        self.ensure_column(
+            "clips",
+            "sticky_position",
+            "ALTER TABLE clips ADD COLUMN sticky_position INTEGER NOT NULL DEFAULT 0",
+        )?;
         Ok(())
     }
 
@@ -589,21 +616,24 @@ impl Store {
         tx.execute(
             r#"
             INSERT INTO clips (
-                id, device_id, description, primary_text, quick_paste_text,
-                created_at, updated_at, deleted_at, content_hash, pinned,
-                source_app, group_id
+                id, device_id, description, primary_text, quick_paste_text, hotkey,
+                created_at, updated_at, deleted_at, content_hash, pinned, dont_auto_delete,
+                sticky_position, source_app, group_id
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(id) DO UPDATE SET
                 device_id = excluded.device_id,
                 description = excluded.description,
                 primary_text = excluded.primary_text,
                 quick_paste_text = excluded.quick_paste_text,
+                hotkey = excluded.hotkey,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at,
                 content_hash = excluded.content_hash,
                 pinned = excluded.pinned,
+                dont_auto_delete = excluded.dont_auto_delete,
+                sticky_position = excluded.sticky_position,
                 source_app = excluded.source_app,
                 group_id = excluded.group_id
             "#,
@@ -613,11 +643,14 @@ impl Store {
                 clip.description,
                 clip.primary_text,
                 clip.quick_paste_text,
+                clip.hotkey,
                 clip.created_at,
                 clip.updated_at,
                 clip.deleted_at,
                 clip.content_hash,
                 clip.pinned as i64,
+                clip.dont_auto_delete as i64,
+                clip.sticky_position,
                 clip.source_app,
                 clip.group_id,
             ],
@@ -668,6 +701,11 @@ impl Store {
                 existing.updated_at = now_ts();
                 self.save_clip(&existing)?;
             }
+            if clip.hotkey.is_some() && existing.hotkey != clip.hotkey {
+                existing.hotkey = clip.hotkey;
+                existing.updated_at = now_ts();
+                self.save_clip(&existing)?;
+            }
             return Ok(existing);
         }
         self.save_clip(&clip)
@@ -676,11 +714,12 @@ impl Store {
     pub fn list_clips(&self, limit: u32) -> Result<Vec<Clip>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
-                   deleted_at, content_hash, pinned, source_app, group_id
+            SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
+                   deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
             FROM clips
             WHERE deleted_at IS NULL
-            ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
+            ORDER BY CASE WHEN sticky_position > 0 THEN 0 WHEN sticky_position < 0 THEN 2 ELSE 1 END ASC,
+                     pinned DESC, updated_at DESC, created_at DESC, id DESC
             LIMIT ?1
             "#,
         )?;
@@ -701,16 +740,18 @@ impl Store {
         let pattern = format!("%{}%", escape_like(query));
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
-                   deleted_at, content_hash, pinned, source_app, group_id
+            SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
+                   deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
             FROM clips
             WHERE deleted_at IS NULL
               AND (
                   description LIKE ?1 ESCAPE '\'
                   OR primary_text LIKE ?1 ESCAPE '\'
                   OR quick_paste_text LIKE ?1 ESCAPE '\'
+                  OR hotkey LIKE ?1 ESCAPE '\'
               )
-            ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
+            ORDER BY CASE WHEN sticky_position > 0 THEN 0 WHEN sticky_position < 0 THEN 2 ELSE 1 END ASC,
+                     pinned DESC, updated_at DESC, created_at DESC, id DESC
             LIMIT ?2
             "#,
         )?;
@@ -725,8 +766,8 @@ impl Store {
     pub fn list_clips_since(&self, since: i64, limit: u32) -> Result<Vec<Clip>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
-                   deleted_at, content_hash, pinned, source_app, group_id
+            SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
+                   deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
             FROM clips
             WHERE updated_at > ?1
             ORDER BY updated_at ASC, created_at ASC, id ASC
@@ -746,8 +787,8 @@ impl Store {
             .conn
             .query_row(
                 r#"
-                SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
-                       deleted_at, content_hash, pinned, source_app, group_id
+                SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
+                       deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
                 FROM clips
                 WHERE id = ?1
                 "#,
@@ -790,6 +831,41 @@ impl Store {
             return Ok(None);
         };
         self.set_clip_pinned(id, !clip.pinned)
+    }
+
+    pub fn set_clip_dont_auto_delete(
+        &self,
+        id: &str,
+        dont_auto_delete: bool,
+    ) -> Result<Option<Clip>> {
+        let Some(mut clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        if clip.deleted_at.is_some() {
+            return Ok(None);
+        }
+        clip.dont_auto_delete = dont_auto_delete;
+        clip.updated_at = now_ts();
+        self.save_clip(&clip).map(Some)
+    }
+
+    pub fn toggle_clip_dont_auto_delete(&self, id: &str) -> Result<Option<Clip>> {
+        let Some(clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        self.set_clip_dont_auto_delete(id, !clip.dont_auto_delete)
+    }
+
+    pub fn set_clip_sticky_position(&self, id: &str, sticky_position: i32) -> Result<Option<Clip>> {
+        let Some(mut clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        if clip.deleted_at.is_some() {
+            return Ok(None);
+        }
+        clip.sticky_position = sticky_position.clamp(-1, 1);
+        clip.updated_at = now_ts();
+        self.save_clip(&clip).map(Some)
     }
 
     pub fn move_clip_to_top(&self, id: &str) -> Result<bool> {
@@ -1004,20 +1080,46 @@ impl Store {
 
     pub fn clear_all_clips(&self) -> Result<usize> {
         let deleted_at = now_ts();
-        let changed = self.conn.execute(
+        let ids = self.active_clip_ids_for_delete("deleted_at IS NULL")?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "UPDATE clips SET deleted_at = ?1, updated_at = ?1 WHERE deleted_at IS NULL",
             params![deleted_at],
         )?;
-        Ok(changed)
+        for id in &ids {
+            tx.execute(
+                "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
+                params![id, "delete", deleted_at],
+            )?;
+        }
+        tx.commit()?;
+        Ok(ids.len())
     }
 
     pub fn delete_non_pinned_clips(&self) -> Result<usize> {
         let deleted_at = now_ts();
-        let changed = self.conn.execute(
-            "UPDATE clips SET deleted_at = ?1, updated_at = ?1 WHERE deleted_at IS NULL AND pinned = 0",
+        let ids = self.active_clip_ids_for_delete(
+            "deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0",
+        )?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE clips SET deleted_at = ?1, updated_at = ?1 WHERE deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0",
             params![deleted_at],
         )?;
-        Ok(changed)
+        for id in &ids {
+            tx.execute(
+                "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
+                params![id, "delete", deleted_at],
+            )?;
+        }
+        tx.commit()?;
+        Ok(ids.len())
     }
 
     pub fn set_copy_buffer_clip(&self, slot: usize, clip_id: &str) -> Result<bool> {
@@ -1049,8 +1151,8 @@ impl Store {
             .conn
             .query_row(
                 r#"
-                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.created_at, c.updated_at,
-                       c.deleted_at, c.content_hash, c.pinned, c.source_app, c.group_id
+                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.hotkey, c.created_at, c.updated_at,
+                       c.deleted_at, c.content_hash, c.pinned, c.dont_auto_delete, c.sticky_position, c.source_app, c.group_id
                 FROM copy_buffers b
                 INNER JOIN clips c ON c.id = b.clip_id
                 WHERE b.slot = ?1 AND c.deleted_at IS NULL
@@ -1067,8 +1169,8 @@ impl Store {
             .conn
             .query_row(
                 r#"
-                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.created_at, c.updated_at,
-                       c.deleted_at, c.content_hash, c.pinned, c.source_app, c.group_id
+                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.hotkey, c.created_at, c.updated_at,
+                       c.deleted_at, c.content_hash, c.pinned, c.dont_auto_delete, c.sticky_position, c.source_app, c.group_id
                 FROM copy_buffers b
                 INNER JOIN clips c ON c.id = b.clip_id
                 WHERE b.slot = ?1
@@ -1104,16 +1206,17 @@ impl Store {
                 fs::write(path, text)?;
             }
             Some(ext) if ext.eq_ignore_ascii_case("csv") => {
-                let mut csv =
-                    "id,created_at,updated_at,pinned,source_app,group_id,description,text\n"
-                        .to_owned();
+                let mut csv = "id,created_at,updated_at,pinned,dont_auto_delete,sticky_position,hotkey,source_app,group_id,description,text\n".to_owned();
                 for clip in &clips {
                     csv.push_str(&format!(
-                        "{},{},{},{},{},{},{},{}\n",
+                        "{},{},{},{},{},{},{},{},{},{},{}\n",
                         csv_escape(&clip.id),
                         clip.created_at,
                         clip.updated_at,
                         clip.pinned as i64,
+                        clip.dont_auto_delete as i64,
+                        clip.sticky_position,
+                        csv_escape(clip.hotkey.as_deref().unwrap_or_default()),
                         csv_escape(clip.source_app.as_deref().unwrap_or_default()),
                         clip.group_id.map(|id| id.to_string()).unwrap_or_default(),
                         csv_escape(&clip.description),
@@ -1147,7 +1250,7 @@ impl Store {
             r#"
             UPDATE clips
             SET deleted_at = ?1, updated_at = ?1
-            WHERE deleted_at IS NULL AND pinned = 0 AND updated_at < ?2
+            WHERE deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0 AND updated_at < ?2
             "#,
             params![deleted_at, cutoff_updated_at],
         )?;
@@ -1164,7 +1267,7 @@ impl Store {
             WHERE id IN (
                 SELECT id
                 FROM clips
-                WHERE pinned = 0
+                WHERE pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0
                 ORDER BY updated_at ASC, created_at ASC, id ASC
                 LIMIT ?1
             )
@@ -1177,6 +1280,13 @@ impl Store {
     pub fn vacuum(&self) -> Result<()> {
         self.conn.execute_batch("VACUUM")?;
         Ok(())
+    }
+
+    pub fn integrity_check(&self) -> Result<bool> {
+        let result: String = self
+            .conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        Ok(result == "ok")
     }
 
     fn get_group(&self, id: i64) -> Result<Option<Group>> {
@@ -1195,6 +1305,18 @@ impl Store {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    fn active_clip_ids_for_delete(&self, predicate: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT id FROM clips WHERE {predicate}"))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        Ok(ids)
     }
 
     fn find_group_by_name(&self, name: &str) -> Result<Option<Group>> {
@@ -1263,6 +1385,46 @@ impl Store {
         self.save_clip(&clip).map(Some)
     }
 
+    pub fn update_clip_hotkey(&self, id: &str, hotkey: Option<&str>) -> Result<Option<Clip>> {
+        let Some(mut clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        if clip.deleted_at.is_some() {
+            return Ok(None);
+        }
+
+        clip.hotkey = hotkey
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        clip.updated_at = now_ts();
+        self.save_clip(&clip).map(Some)
+    }
+
+    pub fn find_active_by_hotkey(&self, hotkey: &str) -> Result<Option<Clip>> {
+        let hotkey = hotkey.trim();
+        if hotkey.is_empty() {
+            return Ok(None);
+        }
+
+        let clip = self
+            .conn
+            .query_row(
+                r#"
+                SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
+                       deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
+                FROM clips
+                WHERE deleted_at IS NULL AND lower(hotkey) = lower(?1)
+                ORDER BY updated_at DESC, created_at DESC, id DESC
+                LIMIT 1
+                "#,
+                params![hotkey],
+                |row| self.clip_from_row(row),
+            )
+            .optional()?;
+        clip.map(|clip| self.with_formats(clip)).transpose()
+    }
+
     pub fn find_active_by_content_hash(&self, hash: &str) -> Result<Option<Clip>> {
         self.find_active_by_hash(hash)
     }
@@ -1277,7 +1439,7 @@ impl Store {
                 r#"
                 SELECT id
                 FROM clips
-                WHERE deleted_at IS NULL AND pinned = 0
+                WHERE deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0
                 ORDER BY updated_at DESC, created_at DESC, id DESC
                 LIMIT -1 OFFSET ?1
                 "#,
@@ -1856,8 +2018,8 @@ impl Store {
             .conn
             .query_row(
                 r#"
-                SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
-                       deleted_at, content_hash, pinned, source_app, group_id
+                SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
+                       deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
                 FROM clips
                 WHERE content_hash = ?1 AND deleted_at IS NULL
                 ORDER BY updated_at DESC, created_at DESC, id DESC
@@ -1896,13 +2058,16 @@ impl Store {
             description: row.get(2)?,
             primary_text: row.get(3)?,
             quick_paste_text: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
-            deleted_at: row.get(7)?,
-            content_hash: row.get(8)?,
-            pinned: row.get::<_, i64>(9)? != 0,
-            source_app: row.get(10)?,
-            group_id: row.get(11)?,
+            hotkey: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            deleted_at: row.get(8)?,
+            content_hash: row.get(9)?,
+            pinned: row.get::<_, i64>(10)? != 0,
+            dont_auto_delete: row.get::<_, i64>(11)? != 0,
+            sticky_position: row.get(12)?,
+            source_app: row.get(13)?,
+            group_id: row.get(14)?,
             formats: Vec::new(),
         })
     }
@@ -2064,6 +2229,26 @@ mod tests {
     }
 
     #[test]
+    fn stores_clip_hotkeys_and_finds_them_case_insensitively() {
+        let store = Store::open_memory().unwrap();
+        let clip = store.save_text_clip("device-a", "hotkey text").unwrap();
+        let updated = store
+            .update_clip_hotkey(&clip.id, Some("Ctrl+Alt+K"))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.hotkey.as_deref(), Some("Ctrl+Alt+K"));
+        assert_eq!(
+            store
+                .find_active_by_hotkey("ctrl+alt+k")
+                .unwrap()
+                .unwrap()
+                .id,
+            clip.id
+        );
+    }
+
+    #[test]
     fn moves_clip_order_like_quick_paste_actions() {
         let store = Store::open_memory().unwrap();
         let first = store.save_text_clip("device-a", "first").unwrap();
@@ -2208,6 +2393,126 @@ mod tests {
         assert!(store.get_clip(&edit.id).unwrap().is_none());
         assert!(store.get_clip(&old.id).unwrap().is_none());
         assert!(store.get_clip(&keep.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn never_auto_delete_clips_survive_automatic_cleanup() {
+        let store = Store::open_memory().unwrap();
+        let keep = store.save_text_clip("device-a", "keep protected").unwrap();
+        let old = store.save_text_clip("device-a", "old unprotected").unwrap();
+        let newest = store
+            .save_text_clip("device-a", "newest unprotected")
+            .unwrap();
+
+        let protected = store
+            .set_clip_dont_auto_delete(&keep.id, true)
+            .unwrap()
+            .unwrap();
+        assert!(protected.dont_auto_delete);
+
+        assert_eq!(store.enforce_max_history(1).unwrap(), 1);
+        assert!(
+            store
+                .get_clip(&keep.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_none()
+        );
+        assert!(
+            store
+                .get_clip(&newest.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_none()
+        );
+        assert!(
+            store
+                .get_clip(&old.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_some()
+        );
+
+        assert_eq!(store.delete_non_pinned_clips().unwrap(), 1);
+        assert!(
+            store
+                .get_clip(&keep.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_none()
+        );
+        assert!(
+            store
+                .get_clip(&newest.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_some()
+        );
+
+        assert_eq!(store.purge_oldest_non_pinned_clips(10).unwrap(), 2);
+        assert!(store.get_clip(&keep.id).unwrap().is_some());
+        assert!(store.get_clip(&newest.id).unwrap().is_none());
+        assert!(store.get_clip(&old.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn sticky_clips_sort_and_survive_cleanup() {
+        let store = Store::open_memory().unwrap();
+        let top = store.save_text_clip("device-a", "top sticky").unwrap();
+        let normal = store.save_text_clip("device-a", "normal").unwrap();
+        let last = store.save_text_clip("device-a", "last sticky").unwrap();
+
+        assert_eq!(
+            store
+                .set_clip_sticky_position(&top.id, 1)
+                .unwrap()
+                .unwrap()
+                .sticky_position,
+            1
+        );
+        assert_eq!(
+            store
+                .set_clip_sticky_position(&last.id, -1)
+                .unwrap()
+                .unwrap()
+                .sticky_position,
+            -1
+        );
+
+        let clips = store.list_clips(20).unwrap();
+        assert_eq!(clips.first().unwrap().id, top.id);
+        assert_eq!(clips.last().unwrap().id, last.id);
+
+        assert_eq!(store.delete_non_pinned_clips().unwrap(), 1);
+        assert!(
+            store
+                .get_clip(&normal.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_some()
+        );
+        assert!(
+            store
+                .get_clip(&top.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_none()
+        );
+        assert!(
+            store
+                .get_clip(&last.id)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_none()
+        );
     }
 
     #[test]
