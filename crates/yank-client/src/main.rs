@@ -16,7 +16,7 @@ use yank_client::{
     sync::{SyncClient, SyncConfig},
 };
 use yank_core::{
-    Clip, ClipFormat, Settings, Store, Theme, content_hash,
+    Clip, ClipFormat, Group, Settings, Store, Theme, content_hash,
     i18n::{self, I18nBundle},
 };
 
@@ -26,6 +26,7 @@ use ksni::blocking::TrayMethods as _;
 use std::sync::mpsc;
 
 const HISTORY_ROWS: usize = 20;
+const GROUP_ROWS: usize = 5;
 const HISTORY_PAGE_STEP: usize = 10;
 const MIN_CAPTURE_INTERVAL_MS: u64 = 250;
 
@@ -145,6 +146,21 @@ script_mod! {
         }
     }
 
+    let SettingsTabButton = ButtonFlat{
+        width: Fill
+        height: 34
+        margin: 0.
+        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        align: Align{x: 0.0 y: 0.5}
+        draw_bg +: {
+            border_radius: 2.0
+            border_size: 1.0
+        }
+        draw_text +: {
+            text_style +: {font_size: theme.font_size_p}
+        }
+    }
+
     let ActionButton = Button{
         height: 32
         margin: 0.
@@ -210,7 +226,7 @@ script_mod! {
             main_window := Window{
                 pass.clear_color: theme.color_bg_app
                 window.title: "yank"
-                window.inner_size: vec2(460, 590)
+                window.inner_size: vec2(760, 680)
                 body +: {
                     width: Fill
                     height: Fill
@@ -316,6 +332,29 @@ script_mod! {
                                     spacing: theme.space_1
                                     group_image_button := MenuButton{text: ""}
                                     group_files_button := MenuButton{text: ""}
+                                }
+                                group_named_title := MutedLabel{text: ""}
+                                group_filter_row_c := View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: theme.space_1
+                                    group_slot_0 := MenuButton{text: ""}
+                                    group_slot_1 := MenuButton{text: ""}
+                                    group_slot_2 := MenuButton{text: ""}
+                                    group_slot_3 := MenuButton{text: ""}
+                                    group_slot_4 := MenuButton{text: ""}
+                                }
+                                group_filter_row_d := View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: theme.space_1
+                                    group_name_input := TextInput{width: Fill height: 32 empty_text: ""}
+                                    group_new_button := MenuButton{text: ""}
+                                    group_assign_button := MenuButton{text: ""}
+                                    group_clear_button := MenuButton{text: ""}
+                                    group_delete_button := MenuButton{text: ""}
                                 }
                             }
                             rows := ScrollYView{
@@ -429,9 +468,62 @@ script_mod! {
                                 spacing: theme.space_1
                                 menu_upper_button := MenuButton{text: ""}
                                 menu_lower_button := MenuButton{text: ""}
+                                menu_capitalize_button := MenuButton{text: ""}
+                                menu_sentence_button := MenuButton{text: ""}
+                                menu_invert_button := MenuButton{text: ""}
+                            }
+                            menu_row_f := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
                                 menu_trim_button := MenuButton{text: ""}
                                 menu_no_lf_button := MenuButton{text: ""}
+                                menu_add_lf_button := MenuButton{text: ""}
+                                menu_add_2lf_button := MenuButton{text: ""}
                                 menu_camel_button := MenuButton{text: ""}
+                            }
+                            menu_row_g := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_slug_button := MenuButton{text: ""}
+                                menu_posix_button := MenuButton{text: ""}
+                                menu_ascii_button := MenuButton{text: ""}
+                                menu_typo_button := MenuButton{text: ""}
+                                menu_time_button := MenuButton{text: ""}
+                                menu_guid_button := MenuButton{text: ""}
+                            }
+                            menu_row_h := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_move_top_button := MenuButton{text: ""}
+                                menu_move_up_button := MenuButton{text: ""}
+                                menu_move_down_button := MenuButton{text: ""}
+                                menu_move_last_button := MenuButton{text: ""}
+                            }
+                            menu_row_i := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_new_clip_button := MenuButton{text: ""}
+                                menu_properties_button := MenuButton{text: ""}
+                                menu_filter_clip_button := MenuButton{text: ""}
+                                menu_copy_selection_button := MenuButton{text: ""}
+                                menu_clear_history_button := MenuButton{text: ""}
+                            }
+                            menu_row_j := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: theme.space_1
+                                menu_export_button := MenuButton{text: ""}
+                                menu_import_button := MenuButton{text: ""}
+                                menu_delete_non_pinned_button := MenuButton{text: ""}
                             }
                         }
 
@@ -449,19 +541,21 @@ script_mod! {
                         }
                     }
 
-                    settings_page := ScrollYView{
+                    settings_page := View{
                         width: Fill
                         height: Fill
                         visible: false
                         flow: Down
-                        spacing: theme.space_2
-                        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
+                        spacing: 0.
 
-                        settings_header := AppCard{
+                        settings_header := SolidView{
                             width: Fill
+                            height: Fit
                             flow: Right
                             spacing: theme.space_2
+                            padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_1, bottom: theme.space_1}
                             align: Align{y: 0.5}
+                            draw_bg.color: theme.color_bg_container
                             settings_title_group := View{
                                 width: Fill
                                 height: Fit
@@ -473,157 +567,234 @@ script_mod! {
                             back_to_main_button := DenseButton{text: ""}
                         }
 
-                        settings_tabs := AppCard{
+                        settings_body := View{
                             width: Fill
-                            flow: Down
-                            spacing: theme.space_1
-                            tab_row_1 := View{
-                                width: Fill
-                                height: Fit
-                                flow: Right
+                            height: Fill
+                            flow: Right
+                            spacing: theme.space_2
+                            padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
+
+                            settings_tabs := AppCard{
+                                width: 158
+                                height: Fill
                                 spacing: theme.space_1
-                                settings_general_tab := TabButton{text: ""}
-                                settings_types_tab := TabButton{text: ""}
-                                settings_keyboard_tab := TabButton{text: ""}
+                                settings_general_tab := SettingsTabButton{text: ""}
+                                settings_types_tab := SettingsTabButton{text: ""}
+                                settings_keyboard_tab := SettingsTabButton{text: ""}
+                                settings_copy_buffers_tab := SettingsTabButton{text: ""}
+                                settings_quick_paste_tab := SettingsTabButton{text: ""}
+                                settings_sync_tab := SettingsTabButton{text: ""}
+                                settings_stats_tab := SettingsTabButton{text: ""}
+                                settings_utilities_tab := SettingsTabButton{text: ""}
+                                settings_advanced_tab := SettingsTabButton{text: ""}
+                                settings_about_tab := SettingsTabButton{text: ""}
                             }
-                            tab_row_2 := View{
+
+                            settings_content := ScrollYView{
                                 width: Fill
-                                height: Fit
-                                flow: Right
-                                spacing: theme.space_1
-                                settings_quick_paste_tab := TabButton{text: ""}
-                                settings_sync_tab := TabButton{text: ""}
-                                settings_about_tab := TabButton{text: ""}
-                            }
-                        }
-
-                        appearance_settings := AppCard{
-                            width: Fill
-                            appearance_title := SectionTitle{text: ""}
-                            FieldRow{
-                                language_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                language_button := DenseButton{text: ""}
-                                theme_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                theme_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                start_on_login_button := DenseButton{text: ""}
-                                show_tray_button := DenseButton{text: ""}
-                                show_taskbar_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                popup_position_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                popup_position_button := DenseButton{text: ""}
-                            }
-                        }
-
-                        behavior_settings := AppCard{
-                            width: Fill
-                            behavior_title := SectionTitle{text: ""}
-                            local_status := TextBox{width: Fill height: Fit text: ""}
-                            FieldRow{
-                                device_id_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                device_id_value := TextInput{width: Fill height: 34 empty_text: "" is_read_only: true}
-                                copy_device_id_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                duplicate_policy_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                duplicate_policy_button := DenseButton{text: ""}
-                            }
-                            FieldGroup{
-                                capture_formats_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                FieldRow{
-                                    capture_text_button := DenseButton{text: ""}
-                                    capture_html_button := DenseButton{text: ""}
-                                    capture_image_button := DenseButton{text: ""}
-                                    capture_files_button := DenseButton{text: ""}
-                                }
-                            }
-                            FieldRow{
-                                max_history_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                max_history_input := TextInput{width: 120 height: 34 empty_text: ""}
-                                save_behavior_button := ActionButton{text: ""}
-                            }
-                            FieldRow{
-                                capture_interval_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                capture_interval_input := TextInput{width: 120 height: 34 empty_text: ""}
-                            }
-                        }
-
-                        quick_paste_settings := AppCard{
-                            width: Fill
-                            quick_paste_title := SectionTitle{text: ""}
-                            FieldRow{
-                                show_hotkey_text_button := DenseButton{text: ""}
-                                show_leading_ws_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                find_as_you_type_button := DenseButton{text: ""}
-                                show_thumbnails_button := DenseButton{text: ""}
-                                draw_rtf_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                ensure_visible_button := DenseButton{text: ""}
-                                show_groups_main_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                prompt_delete_button := DenseButton{text: ""}
-                                always_show_scrollbar_button := DenseButton{text: ""}
-                                show_pasted_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                elevated_paste_button := DenseButton{text: ""}
-                            }
-                            FieldRow{
-                                lines_per_row_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                lines_per_row_input := TextInput{width: 90 height: 34 empty_text: ""}
-                                save_quick_paste_button := ActionButton{text: ""}
-                            }
-                            FieldRow{
-                                transparency_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                transparency_input := TextInput{width: 90 height: 34 empty_text: ""}
-                            }
-                        }
-
-                        sync_settings := AppCard{
-                            width: Fill
-                            sync_settings_title := SectionTitle{text: ""}
-                            FieldGroup{
-                                server_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                server_input := TextInput{width: Fill height: 34 empty_text: ""}
-                            }
-                            FieldGroup{
-                                token_label := Label{text: "" draw_text.color: theme.color_label_inner}
-                                token_input := TextInput{width: Fill height: 34 empty_text: "" is_password: true}
-                            }
-                            save_settings_button := ActionButton{width: Fit text: ""}
-                        }
-
-                        hotkeys_settings := AppCard{
-                            width: Fill
-                            hotkeys_title := SectionTitle{text: ""}
-                            hotkeys_status := MutedLabel{text: ""}
-                            hotkey_grid := View{
-                                width: Fill
-                                height: Fit
+                                height: Fill
                                 flow: Down
                                 spacing: theme.space_2
-                                FieldRow{hotkey_show_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_show_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldRow{hotkey_search_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_search_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldRow{hotkey_copy_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_copy_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldRow{hotkey_delete_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_delete_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldRow{hotkey_pin_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_pin_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldRow{hotkey_edit_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_edit_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldRow{hotkey_capture_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_capture_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                                FieldRow{hotkey_sync_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_sync_input := TextInput{width: Fill height: 34 empty_text: ""}}
-                            }
-                            save_hotkeys_button := ActionButton{width: Fit text: ""}
-                        }
+                                padding: theme.mspace_1
 
-                        about_settings := AppCard{
-                            width: Fill
-                            about_title := SectionTitle{text: ""}
-                            about_text := MutedLabel{text: ""}
+                                appearance_settings := AppCard{
+                                    width: Fill
+                                    appearance_title := SectionTitle{text: ""}
+                                    FieldRow{
+                                        language_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        language_button := DenseButton{text: ""}
+                                        theme_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        theme_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        start_on_login_button := DenseButton{text: ""}
+                                        show_tray_button := DenseButton{text: ""}
+                                        show_taskbar_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        popup_position_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        popup_position_button := DenseButton{text: ""}
+                                    }
+                                }
+
+                                behavior_settings := AppCard{
+                                    width: Fill
+                                    behavior_title := SectionTitle{text: ""}
+                                    local_status := TextBox{width: Fill height: Fit text: ""}
+                                    FieldRow{
+                                        device_id_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        device_id_value := TextInput{width: Fill height: 34 empty_text: "" is_read_only: true}
+                                        copy_device_id_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        duplicate_policy_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        duplicate_policy_button := DenseButton{text: ""}
+                                    }
+                                    FieldGroup{
+                                        capture_formats_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        FieldRow{
+                                            capture_text_button := DenseButton{text: ""}
+                                            capture_html_button := DenseButton{text: ""}
+                                            capture_image_button := DenseButton{text: ""}
+                                            capture_files_button := DenseButton{text: ""}
+                                        }
+                                    }
+                                    FieldRow{
+                                        max_history_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        max_history_input := TextInput{width: 120 height: 34 empty_text: ""}
+                                        save_behavior_button := ActionButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        capture_interval_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        capture_interval_input := TextInput{width: 120 height: 34 empty_text: ""}
+                                    }
+                                }
+
+                                hotkeys_settings := AppCard{
+                                    width: Fill
+                                    hotkeys_title := SectionTitle{text: ""}
+                                    hotkeys_status := MutedLabel{text: ""}
+                                    hotkey_grid := View{
+                                        width: Fill
+                                        height: Fit
+                                        flow: Down
+                                        spacing: theme.space_2
+                                        FieldRow{hotkey_show_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_show_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_search_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_search_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_copy_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_copy_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_delete_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_delete_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_pin_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_pin_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_edit_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_edit_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_capture_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_capture_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_sync_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_sync_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                    }
+                                    save_hotkeys_button := ActionButton{width: Fit text: ""}
+                                }
+
+                                copy_buffers_settings := AppCard{
+                                    width: Fill
+                                    copy_buffers_title := SectionTitle{text: ""}
+                                    copy_buffers_status := MutedLabel{text: ""}
+                                    copy_buffer_row_1 := FieldRow{copy_buffer_1_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner} copy_buffer_1_copy_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_1_paste_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_1_cut_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_1_sound_button := DenseButton{text: ""}}
+                                    copy_buffer_row_2 := FieldRow{copy_buffer_2_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner} copy_buffer_2_copy_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_2_paste_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_2_cut_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_2_sound_button := DenseButton{text: ""}}
+                                    copy_buffer_row_3 := FieldRow{copy_buffer_3_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner} copy_buffer_3_copy_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_3_paste_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_3_cut_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_3_sound_button := DenseButton{text: ""}}
+                                    copy_buffer_row_4 := FieldRow{copy_buffer_4_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner} copy_buffer_4_copy_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_4_paste_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_4_cut_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_4_sound_button := DenseButton{text: ""}}
+                                    copy_buffer_row_5 := FieldRow{copy_buffer_5_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner} copy_buffer_5_copy_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_5_paste_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_5_cut_input := TextInput{width: Fill height: 34 empty_text: ""} copy_buffer_5_sound_button := DenseButton{text: ""}}
+                                    save_copy_buffers_button := ActionButton{width: Fit text: ""}
+                                }
+
+                                quick_paste_settings := AppCard{
+                                    width: Fill
+                                    quick_paste_title := SectionTitle{text: ""}
+                                    FieldRow{
+                                        show_hotkey_text_button := DenseButton{text: ""}
+                                        show_leading_ws_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        find_as_you_type_button := DenseButton{text: ""}
+                                        show_thumbnails_button := DenseButton{text: ""}
+                                        draw_rtf_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        ensure_visible_button := DenseButton{text: ""}
+                                        show_groups_main_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        prompt_delete_button := DenseButton{text: ""}
+                                        always_show_scrollbar_button := DenseButton{text: ""}
+                                        show_pasted_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        elevated_paste_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        lines_per_row_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        lines_per_row_input := TextInput{width: 90 height: 34 empty_text: ""}
+                                        save_quick_paste_button := ActionButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        transparency_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        transparency_input := TextInput{width: 90 height: 34 empty_text: ""}
+                                    }
+                                }
+
+                                sync_settings := AppCard{
+                                    width: Fill
+                                    sync_settings_title := SectionTitle{text: ""}
+                                    FieldGroup{
+                                        server_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        server_input := TextInput{width: Fill height: 34 empty_text: ""}
+                                    }
+                                    FieldGroup{
+                                        token_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        token_input := TextInput{width: Fill height: 34 empty_text: "" is_password: true}
+                                    }
+                                    save_settings_button := ActionButton{width: Fit text: ""}
+                                }
+
+                                stats_settings := AppCard{
+                                    width: Fill
+                                    stats_title := SectionTitle{text: ""}
+                                    stats_text := MutedLabel{text: ""}
+                                    reset_counts_button := DenseButton{text: ""}
+                                }
+
+                                utilities_settings := AppCard{
+                                    width: Fill
+                                    utilities_title := SectionTitle{text: ""}
+                                    FieldGroup{
+                                        export_path_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        export_path_input := TextInput{width: Fill height: 34 empty_text: ""}
+                                    }
+                                    FieldRow{
+                                        export_history_button := ActionButton{text: ""}
+                                        clear_history_button := DenseButton{text: ""}
+                                        delete_non_pinned_button := DenseButton{text: ""}
+                                    }
+                                    FieldGroup{
+                                        import_path_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        import_path_input := TextInput{width: Fill height: 34 empty_text: ""}
+                                    }
+                                    import_history_button := ActionButton{width: Fit text: ""}
+                                }
+
+                                advanced_settings := AppCard{
+                                    width: Fill
+                                    advanced_title := SectionTitle{text: ""}
+                                    FieldRow{
+                                        update_order_button := DenseButton{text: ""}
+                                        multi_paste_reverse_button := DenseButton{text: ""}
+                                        word_wrap_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        text_delay_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        text_delay_input := TextInput{width: 90 height: 34 empty_text: ""}
+                                        expire_days_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        expire_days_input := TextInput{width: 90 height: 34 empty_text: ""}
+                                        max_db_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        max_db_input := TextInput{width: 90 height: 34 empty_text: ""}
+                                    }
+                                    FieldGroup{
+                                        backup_path_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        backup_path_input := TextInput{width: Fill height: 34 empty_text: ""}
+                                    }
+                                    FieldGroup{
+                                        privacy_app_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        privacy_app_input := TextInput{width: Fill height: 34 empty_text: ""}
+                                    }
+                                    FieldGroup{
+                                        privacy_content_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        privacy_content_input := TextInput{width: Fill height: 34 empty_text: ""}
+                                    }
+                                    save_advanced_button := ActionButton{width: Fit text: ""}
+                                }
+
+                                about_settings := AppCard{
+                                    width: Fill
+                                    about_title := SectionTitle{text: ""}
+                                    about_text := MutedLabel{text: ""}
+                                }
+                            }
                         }
                     }
                 }
@@ -645,13 +816,19 @@ pub struct App {
     #[rust]
     clip_filter: ClipFilter,
     #[rust]
+    active_group_id: Option<i64>,
+    #[rust]
     menu_visible: bool,
     #[rust]
     group_panel_visible: bool,
     #[rust]
     editor_visible: bool,
     #[rust]
+    new_clip_mode: bool,
+    #[rust]
     pending_delete_id: Option<String>,
+    #[rust]
+    pending_clear_history: bool,
     #[rust]
     initialized: bool,
     #[rust]
@@ -678,8 +855,12 @@ enum SettingsTab {
     General,
     Types,
     Keyboard,
+    CopyBuffers,
     QuickPaste,
     Sync,
+    Stats,
+    Utilities,
+    Advanced,
     About,
 }
 
@@ -730,9 +911,27 @@ impl QuickPastePosition {
 enum TextTransform {
     Upper,
     Lower,
+    Capitalize,
+    SentenceCase,
+    InvertCase,
     Trim,
     RemoveLineFeeds,
+    AddOneLineFeed,
+    AddTwoLineFeeds,
     CamelCase,
+    Slugify,
+    PosixifyPaths,
+    AsciiOnly,
+    Typoglycemia,
+    AddCurrentTime,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClipMove {
+    Top,
+    Up,
+    Down,
+    Last,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -743,6 +942,48 @@ enum TrayCommand {
     SyncNow,
     ToggleCapture,
     Exit,
+}
+
+#[derive(Clone, Copy)]
+struct AppPalette {
+    app_bg: Vec4,
+    header_bg: Vec4,
+    surface: Vec4,
+    inset: Vec4,
+    border: Vec4,
+    row: Vec4,
+    row_hover: Vec4,
+    row_focus: Vec4,
+    accent: Vec4,
+}
+
+impl AppPalette {
+    fn for_theme(theme: Theme) -> Self {
+        match theme {
+            Theme::Light => Self {
+                app_bg: vec4(0.91, 0.92, 0.94, 1.0),
+                header_bg: vec4(0.84, 0.86, 0.89, 1.0),
+                surface: vec4(0.97, 0.98, 0.99, 1.0),
+                inset: vec4(0.90, 0.92, 0.95, 1.0),
+                border: vec4(0.66, 0.69, 0.74, 1.0),
+                row: vec4(0.98, 0.99, 1.0, 1.0),
+                row_hover: vec4(0.87, 0.91, 0.98, 1.0),
+                row_focus: vec4(0.73, 0.82, 0.98, 1.0),
+                accent: vec4(0.22, 0.38, 0.74, 1.0),
+            },
+            Theme::Dark => Self {
+                app_bg: vec4(0.12, 0.13, 0.15, 1.0),
+                header_bg: vec4(0.16, 0.17, 0.20, 1.0),
+                surface: vec4(0.18, 0.19, 0.22, 1.0),
+                inset: vec4(0.10, 0.11, 0.13, 1.0),
+                border: vec4(0.31, 0.33, 0.38, 1.0),
+                row: vec4(0.15, 0.16, 0.19, 1.0),
+                row_hover: vec4(0.22, 0.25, 0.31, 1.0),
+                row_focus: vec4(0.23, 0.32, 0.48, 1.0),
+                accent: vec4(0.47, 0.60, 0.92, 1.0),
+            },
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -988,6 +1229,10 @@ impl AppMain for App {
 
         self.drain_tray_commands(cx);
 
+        if self.handle_secondary_mouse_down(cx, event) {
+            return;
+        }
+
         if self.handle_type_to_search(cx, event) {
             return;
         }
@@ -1023,8 +1268,13 @@ impl MatchEvent for App {
         }
 
         for index in 0..HISTORY_ROWS {
-            if self.button(cx, row_id(index)).clicked(actions) {
+            if let Some(modifiers) = self.button(cx, row_id(index)).clicked_modifiers(actions) {
                 self.select_clip_by_index(cx, index);
+                if modifiers.shift {
+                    self.copy_selected_plain_text(cx);
+                } else {
+                    self.copy_selected(cx);
+                }
             }
         }
 
@@ -1066,6 +1316,23 @@ impl MatchEvent for App {
         }
         if self.button(cx, ids!(group_files_button)).clicked(actions) {
             self.set_clip_filter(cx, ClipFilter::Files);
+        }
+        for index in 0..GROUP_ROWS {
+            if self.button(cx, group_slot_id(index)).clicked(actions) {
+                self.set_group_filter_by_index(cx, index);
+            }
+        }
+        if self.button(cx, ids!(group_new_button)).clicked(actions) {
+            self.create_group_from_input(cx);
+        }
+        if self.button(cx, ids!(group_assign_button)).clicked(actions) {
+            self.assign_selected_to_active_group(cx);
+        }
+        if self.button(cx, ids!(group_clear_button)).clicked(actions) {
+            self.clear_selected_group(cx);
+        }
+        if self.button(cx, ids!(group_delete_button)).clicked(actions) {
+            self.delete_active_group(cx);
         }
         if self
             .button(cx, ids!(copy_device_id_button))
@@ -1115,6 +1382,7 @@ impl MatchEvent for App {
             self.show_editor(cx);
         }
         if self.button(cx, ids!(menu_refresh_button)).clicked(actions) {
+            self.capture_current_clipboard_if_enabled(cx);
             self.refresh_history(cx);
             self.set_status(cx, "app.status_refreshed");
         }
@@ -1164,14 +1432,107 @@ impl MatchEvent for App {
         if self.button(cx, ids!(menu_lower_button)).clicked(actions) {
             self.copy_selected_transformed(cx, TextTransform::Lower);
         }
+        if self
+            .button(cx, ids!(menu_capitalize_button))
+            .clicked(actions)
+        {
+            self.copy_selected_transformed(cx, TextTransform::Capitalize);
+        }
+        if self.button(cx, ids!(menu_sentence_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::SentenceCase);
+        }
+        if self.button(cx, ids!(menu_invert_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::InvertCase);
+        }
         if self.button(cx, ids!(menu_trim_button)).clicked(actions) {
             self.copy_selected_transformed(cx, TextTransform::Trim);
         }
         if self.button(cx, ids!(menu_no_lf_button)).clicked(actions) {
             self.copy_selected_transformed(cx, TextTransform::RemoveLineFeeds);
         }
+        if self.button(cx, ids!(menu_add_lf_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::AddOneLineFeed);
+        }
+        if self.button(cx, ids!(menu_add_2lf_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::AddTwoLineFeeds);
+        }
         if self.button(cx, ids!(menu_camel_button)).clicked(actions) {
             self.copy_selected_transformed(cx, TextTransform::CamelCase);
+        }
+        if self.button(cx, ids!(menu_slug_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::Slugify);
+        }
+        if self.button(cx, ids!(menu_posix_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::PosixifyPaths);
+        }
+        if self.button(cx, ids!(menu_ascii_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::AsciiOnly);
+        }
+        if self.button(cx, ids!(menu_typo_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::Typoglycemia);
+        }
+        if self.button(cx, ids!(menu_time_button)).clicked(actions) {
+            self.copy_selected_transformed(cx, TextTransform::AddCurrentTime);
+        }
+        if self.button(cx, ids!(menu_guid_button)).clicked(actions) {
+            self.copy_generated_guid(cx);
+        }
+        if self.button(cx, ids!(menu_move_top_button)).clicked(actions) {
+            self.move_selected_clip(cx, ClipMove::Top);
+        }
+        if self.button(cx, ids!(menu_move_up_button)).clicked(actions) {
+            self.move_selected_clip(cx, ClipMove::Up);
+        }
+        if self
+            .button(cx, ids!(menu_move_down_button))
+            .clicked(actions)
+        {
+            self.move_selected_clip(cx, ClipMove::Down);
+        }
+        if self
+            .button(cx, ids!(menu_move_last_button))
+            .clicked(actions)
+        {
+            self.move_selected_clip(cx, ClipMove::Last);
+        }
+        if self.button(cx, ids!(menu_new_clip_button)).clicked(actions) {
+            self.show_new_clip_editor(cx);
+        }
+        if self
+            .button(cx, ids!(menu_properties_button))
+            .clicked(actions)
+        {
+            self.show_editor(cx);
+        }
+        if self
+            .button(cx, ids!(menu_filter_clip_button))
+            .clicked(actions)
+        {
+            self.filter_on_selected_clip(cx);
+        }
+        if self
+            .button(cx, ids!(menu_copy_selection_button))
+            .clicked(actions)
+        {
+            self.copy_selected(cx);
+        }
+        if self
+            .button(cx, ids!(menu_clear_history_button))
+            .clicked(actions)
+        {
+            self.clear_history(cx);
+        }
+        if self.button(cx, ids!(menu_export_button)).clicked(actions) {
+            self.export_history(cx);
+        }
+        if self.button(cx, ids!(menu_import_button)).clicked(actions) {
+            self.import_history(cx);
+        }
+        if self
+            .button(cx, ids!(menu_delete_non_pinned_button))
+            .clicked(actions)
+        {
+            self.delete_non_pinned(cx);
         }
         if self.button(cx, ids!(back_to_main_button)).clicked(actions) {
             self.show_main_page(cx);
@@ -1189,6 +1550,12 @@ impl MatchEvent for App {
             self.show_settings_tab(cx, SettingsTab::Keyboard);
         }
         if self
+            .button(cx, ids!(settings_copy_buffers_tab))
+            .clicked(actions)
+        {
+            self.show_settings_tab(cx, SettingsTab::CopyBuffers);
+        }
+        if self
             .button(cx, ids!(settings_quick_paste_tab))
             .clicked(actions)
         {
@@ -1196,6 +1563,21 @@ impl MatchEvent for App {
         }
         if self.button(cx, ids!(settings_sync_tab)).clicked(actions) {
             self.show_settings_tab(cx, SettingsTab::Sync);
+        }
+        if self.button(cx, ids!(settings_stats_tab)).clicked(actions) {
+            self.show_settings_tab(cx, SettingsTab::Stats);
+        }
+        if self
+            .button(cx, ids!(settings_utilities_tab))
+            .clicked(actions)
+        {
+            self.show_settings_tab(cx, SettingsTab::Utilities);
+        }
+        if self
+            .button(cx, ids!(settings_advanced_tab))
+            .clicked(actions)
+        {
+            self.show_settings_tab(cx, SettingsTab::Advanced);
         }
         if self.button(cx, ids!(settings_about_tab)).clicked(actions) {
             self.show_settings_tab(cx, SettingsTab::About);
@@ -1303,6 +1685,63 @@ impl MatchEvent for App {
         if self.button(cx, ids!(save_hotkeys_button)).clicked(actions) {
             self.save_hotkey_settings(cx);
         }
+        for index in 0..GROUP_ROWS {
+            if self
+                .button(cx, copy_buffer_sound_id(index))
+                .clicked(actions)
+            {
+                self.toggle_copy_buffer_sound(cx, index);
+            }
+        }
+        if self
+            .button(cx, ids!(save_copy_buffers_button))
+            .clicked(actions)
+        {
+            self.save_copy_buffer_settings(cx);
+        }
+        if self
+            .button(cx, ids!(export_history_button))
+            .clicked(actions)
+        {
+            self.export_history(cx);
+        }
+        if self
+            .button(cx, ids!(import_history_button))
+            .clicked(actions)
+        {
+            self.import_history(cx);
+        }
+        if self.button(cx, ids!(clear_history_button)).clicked(actions) {
+            self.clear_history(cx);
+        }
+        if self
+            .button(cx, ids!(delete_non_pinned_button))
+            .clicked(actions)
+        {
+            self.delete_non_pinned(cx);
+        }
+        if self.button(cx, ids!(reset_counts_button)).clicked(actions) {
+            self.set_status(cx, "app.status_stats_reset");
+        }
+        if self.button(cx, ids!(update_order_button)).clicked(actions) {
+            self.toggle_bool_setting(cx, |settings| {
+                &mut settings.quick_paste_update_order_on_copy
+            });
+        }
+        if self
+            .button(cx, ids!(multi_paste_reverse_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_multi_paste_reverse);
+        }
+        if self.button(cx, ids!(word_wrap_button)).clicked(actions) {
+            self.toggle_bool_setting(cx, |settings| {
+                &mut settings.quick_paste_description_word_wrap
+            });
+        }
+        if self.button(cx, ids!(save_advanced_button)).clicked(actions) {
+            self.save_advanced_settings(cx);
+        }
     }
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
@@ -1311,6 +1750,12 @@ impl MatchEvent for App {
         }
         if self.tray_timer.is_timer(event).is_some() {
             self.drain_tray_commands(cx);
+        }
+    }
+
+    fn handle_window_got_focus(&mut self, cx: &mut Cx, _window_id: &WindowId) {
+        if self.capture_current_clipboard_if_enabled(cx) {
+            self.refresh_history(cx);
         }
     }
 
@@ -1429,8 +1874,12 @@ impl App {
                 self.restart_tray_timer(cx);
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
+                self.apply_runtime_theme(cx);
+                let captured = self.capture_current_clipboard_if_enabled(cx);
                 self.refresh_history(cx);
-                self.set_status(cx, "app.status_local_ready");
+                if !captured {
+                    self.set_initial_status(cx);
+                }
                 self.apply_page_visibility(cx);
             }
             Err(error) => {
@@ -1439,8 +1888,12 @@ impl App {
                 self.restart_tray_timer(cx);
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
+                self.apply_runtime_theme(cx);
+                let captured = self.capture_current_clipboard_if_enabled(cx);
                 self.refresh_history(cx);
-                self.set_status(cx, "app.status_startup_fallback");
+                if !captured {
+                    self.set_status(cx, "app.status_startup_fallback");
+                }
                 self.apply_page_visibility(cx);
             }
         }
@@ -1456,6 +1909,30 @@ impl App {
 
     fn widget(&self, cx: &Cx, id: &[LiveId]) -> WidgetRef {
         self.ui.widget(cx, id)
+    }
+
+    fn handle_secondary_mouse_down(&mut self, cx: &mut Cx, event: &Event) -> bool {
+        let Event::MouseDown(mouse) = event else {
+            return false;
+        };
+        if self.active_page != ClientPage::Main || mouse.button != MouseButton::SECONDARY {
+            return false;
+        }
+
+        for index in 0..HISTORY_ROWS {
+            let row = self.widget(cx, row_id(index));
+            if row.visible() && row.point_hits_area(cx, mouse.abs) {
+                self.select_clip_by_index(cx, index);
+                self.menu_visible = true;
+                self.group_panel_visible = false;
+                self.editor_visible = false;
+                self.apply_page_visibility(cx);
+                self.widget(cx, row_id(index)).set_key_focus(cx);
+                return true;
+            }
+        }
+
+        false
     }
 
     fn handle_type_to_search(&mut self, cx: &mut Cx, event: &Event) -> bool {
@@ -1509,8 +1986,30 @@ impl App {
             return false;
         }
 
+        if self.query_is_empty()
+            && !event.modifiers.is_primary()
+            && !event.modifiers.alt
+            && let Some(index) = number_key_index(event.key_code)
+        {
+            self.select_clip_by_index(cx, index);
+            if event.modifiers.shift {
+                self.copy_selected_plain_text(cx);
+            } else {
+                self.copy_selected(cx);
+            }
+            return true;
+        }
+
         match event.key_code {
             KeyCode::Escape => {
+                if self.menu_visible || self.group_panel_visible || self.editor_visible {
+                    self.menu_visible = false;
+                    self.group_panel_visible = false;
+                    self.editor_visible = false;
+                    self.apply_page_visibility(cx);
+                    self.widget(cx, ids!(search_input)).set_key_focus(cx);
+                    return true;
+                }
                 if self.query_is_empty() {
                     self.set_status(cx, "app.status_ready");
                 } else {
@@ -1520,12 +2019,23 @@ impl App {
                 self.widget(cx, ids!(search_input)).set_key_focus(cx);
                 true
             }
-            KeyCode::ReturnKey if event.modifiers.shift => {
+            KeyCode::ReturnKey | KeyCode::NumpadEnter if event.modifiers.shift => {
                 self.copy_selected_plain_text(cx);
                 true
             }
-            KeyCode::ReturnKey if !event.modifiers.is_primary() && !event.modifiers.alt => {
+            KeyCode::ReturnKey | KeyCode::NumpadEnter
+                if !event.modifiers.is_primary() && !event.modifiers.alt =>
+            {
                 self.copy_selected(cx);
+                true
+            }
+            KeyCode::ReturnKey | KeyCode::NumpadEnter if event.modifiers.alt => {
+                self.show_editor(cx);
+                true
+            }
+            KeyCode::KeyC if event.modifiers.alt => {
+                self.clear_search(cx);
+                self.set_status(cx, "app.status_filter_cleared");
                 true
             }
             KeyCode::Delete if !search_focus => {
@@ -1556,6 +2066,36 @@ impl App {
             }
             KeyCode::KeyF if event.modifiers.is_primary() => {
                 self.widget(cx, ids!(search_input)).set_key_focus(cx);
+                true
+            }
+            KeyCode::KeyN if event.modifiers.is_primary() => {
+                self.show_new_clip_editor(cx);
+                true
+            }
+            KeyCode::KeyG if event.modifiers.is_primary() && !search_focus => {
+                self.toggle_group_panel(cx);
+                true
+            }
+            KeyCode::KeyN
+                if !search_focus && !event.modifiers.is_primary() && !event.modifiers.alt =>
+            {
+                self.select_relative_clip(cx, 1);
+                self.show_editor(cx);
+                true
+            }
+            KeyCode::KeyP
+                if !search_focus && !event.modifiers.is_primary() && !event.modifiers.alt =>
+            {
+                self.select_relative_clip(cx, -1);
+                self.show_editor(cx);
+                true
+            }
+            KeyCode::F3 if !search_focus => {
+                self.show_editor(cx);
+                true
+            }
+            KeyCode::F7 if !search_focus => {
+                self.toggle_group_panel(cx);
                 true
             }
             _ => false,
@@ -1589,6 +2129,30 @@ impl App {
             ids!(hotkey_edit_input),
             ids!(hotkey_capture_input),
             ids!(hotkey_sync_input),
+            ids!(group_name_input),
+            ids!(export_path_input),
+            ids!(import_path_input),
+            ids!(text_delay_input),
+            ids!(expire_days_input),
+            ids!(max_db_input),
+            ids!(backup_path_input),
+            ids!(privacy_app_input),
+            ids!(privacy_content_input),
+            ids!(copy_buffer_1_copy_input),
+            ids!(copy_buffer_1_paste_input),
+            ids!(copy_buffer_1_cut_input),
+            ids!(copy_buffer_2_copy_input),
+            ids!(copy_buffer_2_paste_input),
+            ids!(copy_buffer_2_cut_input),
+            ids!(copy_buffer_3_copy_input),
+            ids!(copy_buffer_3_paste_input),
+            ids!(copy_buffer_3_cut_input),
+            ids!(copy_buffer_4_copy_input),
+            ids!(copy_buffer_4_paste_input),
+            ids!(copy_buffer_4_cut_input),
+            ids!(copy_buffer_5_copy_input),
+            ids!(copy_buffer_5_paste_input),
+            ids!(copy_buffer_5_cut_input),
         ]
         .into_iter()
         .any(|id| self.widget(cx, id).key_focus(cx))
@@ -1620,6 +2184,9 @@ impl App {
         self.active_page = ClientPage::Main;
         self.menu_visible = false;
         self.group_panel_visible = false;
+        self.new_clip_mode = false;
+        self.capture_current_clipboard_if_enabled(cx);
+        self.refresh_history(cx);
         self.apply_page_visibility(cx);
         self.widget(cx, ids!(search_input)).set_key_focus(cx);
     }
@@ -1663,10 +2230,18 @@ impl App {
             .set_visible(cx, matches!(tab, SettingsTab::Types));
         self.widget(cx, ids!(hotkeys_settings))
             .set_visible(cx, matches!(tab, SettingsTab::Keyboard));
+        self.widget(cx, ids!(copy_buffers_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::CopyBuffers));
         self.widget(cx, ids!(quick_paste_settings))
             .set_visible(cx, matches!(tab, SettingsTab::QuickPaste));
         self.widget(cx, ids!(sync_settings))
             .set_visible(cx, matches!(tab, SettingsTab::Sync));
+        self.widget(cx, ids!(stats_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::Stats));
+        self.widget(cx, ids!(utilities_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::Utilities));
+        self.widget(cx, ids!(advanced_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::Advanced));
         self.widget(cx, ids!(about_settings))
             .set_visible(cx, matches!(tab, SettingsTab::About));
         self.ui.redraw(cx);
@@ -1689,6 +2264,7 @@ impl App {
     }
 
     fn show_editor(&mut self, cx: &mut Cx) {
+        self.new_clip_mode = false;
         self.editor_visible = true;
         self.apply_page_visibility(cx);
         self.widget(cx, ids!(edit_input)).set_key_focus(cx);
@@ -1767,6 +2343,11 @@ impl App {
             (ids!(group_text_button), "app.filter_text"),
             (ids!(group_image_button), "app.filter_images"),
             (ids!(group_files_button), "app.filter_files"),
+            (ids!(group_named_title), "app.named_groups"),
+            (ids!(group_new_button), "app.new_group"),
+            (ids!(group_assign_button), "app.assign_group"),
+            (ids!(group_clear_button), "app.clear_group"),
+            (ids!(group_delete_button), "app.delete_group"),
             (ids!(system_menu_button), "app.menu"),
             (ids!(menu_copy_button), "app.copy_selected"),
             (ids!(menu_paste_plain_button), "app.paste_plain"),
@@ -1781,8 +2362,12 @@ impl App {
             (ids!(settings_general_tab), "app.settings_general"),
             (ids!(settings_types_tab), "app.settings_types"),
             (ids!(settings_keyboard_tab), "app.settings_keyboard"),
+            (ids!(settings_copy_buffers_tab), "app.settings_copy_buffers"),
             (ids!(settings_quick_paste_tab), "app.settings_quick_paste"),
             (ids!(settings_sync_tab), "app.sync_settings"),
+            (ids!(settings_stats_tab), "app.settings_stats"),
+            (ids!(settings_utilities_tab), "app.settings_utilities"),
+            (ids!(settings_advanced_tab), "app.settings_advanced"),
             (ids!(settings_about_tab), "app.settings_about"),
             (ids!(popup_position_label), "app.popup_position"),
             (ids!(quick_paste_title), "app.quick_paste_options"),
@@ -1791,10 +2376,53 @@ impl App {
             (ids!(save_quick_paste_button), "app.save_quick_paste"),
             (ids!(menu_upper_button), "app.special_upper"),
             (ids!(menu_lower_button), "app.special_lower"),
+            (ids!(menu_capitalize_button), "app.special_capitalize"),
+            (ids!(menu_sentence_button), "app.special_sentence"),
+            (ids!(menu_invert_button), "app.special_invert"),
             (ids!(menu_trim_button), "app.special_trim"),
             (ids!(menu_no_lf_button), "app.special_no_lf"),
+            (ids!(menu_add_lf_button), "app.special_add_lf"),
+            (ids!(menu_add_2lf_button), "app.special_add_2lf"),
             (ids!(menu_camel_button), "app.special_camel"),
+            (ids!(menu_slug_button), "app.special_slug"),
+            (ids!(menu_posix_button), "app.special_posix"),
+            (ids!(menu_ascii_button), "app.special_ascii"),
+            (ids!(menu_typo_button), "app.special_typo"),
+            (ids!(menu_time_button), "app.special_time"),
+            (ids!(menu_guid_button), "app.special_guid"),
+            (ids!(menu_move_top_button), "app.move_top"),
+            (ids!(menu_move_up_button), "app.move_up"),
+            (ids!(menu_move_down_button), "app.move_down"),
+            (ids!(menu_move_last_button), "app.move_last"),
+            (ids!(menu_new_clip_button), "app.new_clip"),
+            (ids!(menu_properties_button), "app.properties"),
+            (ids!(menu_filter_clip_button), "app.filter_on_clip"),
+            (ids!(menu_copy_selection_button), "app.copy_selection"),
+            (ids!(menu_clear_history_button), "app.clear_history"),
+            (ids!(menu_export_button), "app.export_history"),
+            (ids!(menu_import_button), "app.import_history"),
+            (ids!(menu_delete_non_pinned_button), "app.delete_non_pinned"),
             (ids!(about_title), "app.settings_about"),
+            (ids!(copy_buffers_title), "app.settings_copy_buffers"),
+            (ids!(copy_buffers_status), "app.copy_buffers_status"),
+            (ids!(save_copy_buffers_button), "app.save_copy_buffers"),
+            (ids!(stats_title), "app.settings_stats"),
+            (ids!(reset_counts_button), "app.reset_counts"),
+            (ids!(utilities_title), "app.settings_utilities"),
+            (ids!(export_path_label), "app.export_path"),
+            (ids!(export_history_button), "app.export_history"),
+            (ids!(clear_history_button), "app.clear_history"),
+            (ids!(delete_non_pinned_button), "app.delete_non_pinned"),
+            (ids!(import_path_label), "app.import_path"),
+            (ids!(import_history_button), "app.import_history"),
+            (ids!(advanced_title), "app.settings_advanced"),
+            (ids!(text_delay_label), "app.text_only_delay"),
+            (ids!(expire_days_label), "app.expire_days"),
+            (ids!(max_db_label), "app.max_db_mb"),
+            (ids!(backup_path_label), "app.backup_path"),
+            (ids!(privacy_app_label), "app.privacy_app_exclude"),
+            (ids!(privacy_content_label), "app.privacy_content_exclude"),
+            (ids!(save_advanced_button), "app.save_advanced"),
         ] {
             self.widget(cx, id).set_text(cx, messages.text(key));
         }
@@ -1839,8 +2467,8 @@ impl App {
         self.widget(cx, ids!(theme_button)).set_text(
             cx,
             match state.settings.theme {
-                Theme::Light => messages.text("app.dark"),
-                Theme::Dark => messages.text("app.light"),
+                Theme::Light => messages.text("app.light"),
+                Theme::Dark => messages.text("app.dark"),
             },
         );
         self.widget(cx, ids!(menu_capture_toggle_button)).set_text(
@@ -1980,6 +2608,30 @@ impl App {
                 messages.text("app.elevated_paste_off")
             },
         );
+        self.widget(cx, ids!(update_order_button)).set_text(
+            cx,
+            if state.settings.quick_paste_update_order_on_copy {
+                messages.text("app.update_order_on")
+            } else {
+                messages.text("app.update_order_off")
+            },
+        );
+        self.widget(cx, ids!(multi_paste_reverse_button)).set_text(
+            cx,
+            if state.settings.quick_paste_multi_paste_reverse {
+                messages.text("app.multi_reverse_on")
+            } else {
+                messages.text("app.multi_reverse_off")
+            },
+        );
+        self.widget(cx, ids!(word_wrap_button)).set_text(
+            cx,
+            if state.settings.quick_paste_description_word_wrap {
+                messages.text("app.word_wrap_on")
+            } else {
+                messages.text("app.word_wrap_off")
+            },
+        );
         self.widget(cx, ids!(duplicate_policy_button)).set_text(
             cx,
             if state.settings.duplicate_moves_to_top {
@@ -2039,6 +2691,12 @@ impl App {
                 cx,
                 messages.text("app.capture_interval_placeholder").to_owned(),
             );
+        self.text_input(cx, ids!(group_name_input))
+            .set_empty_text(cx, messages.text("app.group_name_placeholder").to_owned());
+        self.text_input(cx, ids!(export_path_input))
+            .set_empty_text(cx, messages.text("app.export_path_placeholder").to_owned());
+        self.text_input(cx, ids!(import_path_input))
+            .set_empty_text(cx, messages.text("app.import_path_placeholder").to_owned());
 
         self.widget(cx, ids!(server_input))
             .set_text(cx, state.settings.server_url.as_deref().unwrap_or(""));
@@ -2056,6 +2714,26 @@ impl App {
             cx,
             &state.settings.quick_paste_transparency_percent.to_string(),
         );
+        self.widget(cx, ids!(text_delay_input))
+            .set_text(cx, &state.settings.text_only_paste_delay_ms.to_string());
+        self.widget(cx, ids!(expire_days_input))
+            .set_text(cx, &state.settings.expire_after_days.to_string());
+        self.widget(cx, ids!(max_db_input))
+            .set_text(cx, &state.settings.max_database_mb.to_string());
+        self.widget(cx, ids!(backup_path_input))
+            .set_text(cx, &state.settings.backup_path);
+        self.widget(cx, ids!(export_path_input)).set_text(
+            cx,
+            &default_path_text(&state.settings.export_path, "yank-export.json"),
+        );
+        self.widget(cx, ids!(import_path_input)).set_text(
+            cx,
+            &default_path_text(&state.settings.import_path, "yank-export.json"),
+        );
+        self.widget(cx, ids!(privacy_app_input))
+            .set_text(cx, &state.settings.privacy_app_exclude);
+        self.widget(cx, ids!(privacy_content_input))
+            .set_text(cx, &state.settings.privacy_content_exclude);
         self.widget(cx, ids!(hotkey_show_input))
             .set_text(cx, &state.settings.hotkey_show_history);
         self.widget(cx, ids!(hotkey_search_input))
@@ -2072,9 +2750,13 @@ impl App {
             .set_text(cx, &state.settings.hotkey_capture_now);
         self.widget(cx, ids!(hotkey_sync_input))
             .set_text(cx, &state.settings.hotkey_sync_now);
+        self.apply_copy_buffer_labels(cx, messages);
+        self.apply_copy_buffer_values(cx, &state.settings);
 
         self.refresh_local_status(cx);
+        self.refresh_stats(cx);
         self.refresh_detail(cx);
+        self.refresh_group_panel(cx);
         self.apply_page_visibility(cx);
         self.apply_settings_tab_visibility(cx);
         self.sync_tray_state();
@@ -2134,6 +2816,11 @@ impl App {
                 "app.settings_keyboard",
             ),
             (
+                ids!(settings_copy_buffers_tab),
+                SettingsTab::CopyBuffers,
+                "app.settings_copy_buffers",
+            ),
+            (
                 ids!(settings_quick_paste_tab),
                 SettingsTab::QuickPaste,
                 "app.settings_quick_paste",
@@ -2142,6 +2829,21 @@ impl App {
                 ids!(settings_sync_tab),
                 SettingsTab::Sync,
                 "app.sync_settings",
+            ),
+            (
+                ids!(settings_stats_tab),
+                SettingsTab::Stats,
+                "app.settings_stats",
+            ),
+            (
+                ids!(settings_utilities_tab),
+                SettingsTab::Utilities,
+                "app.settings_utilities",
+            ),
+            (
+                ids!(settings_advanced_tab),
+                SettingsTab::Advanced,
+                "app.settings_advanced",
             ),
             (
                 ids!(settings_about_tab),
@@ -2158,6 +2860,126 @@ impl App {
             };
             self.widget(cx, id).set_text(cx, &text);
         }
+    }
+
+    fn apply_copy_buffer_labels(&self, cx: &mut Cx, messages: &I18nBundle) {
+        for index in 0..GROUP_ROWS {
+            self.widget(cx, copy_buffer_label_id(index)).set_text(
+                cx,
+                &messages
+                    .text("app.copy_buffer_label")
+                    .replace("{index}", &(index + 1).to_string()),
+            );
+            let enabled = self
+                .state
+                .as_ref()
+                .and_then(|state| state.settings.copy_buffer_play_sound.get(index))
+                .copied()
+                .unwrap_or(false);
+            self.widget(cx, copy_buffer_sound_id(index)).set_text(
+                cx,
+                if enabled {
+                    messages.text("app.copy_buffer_sound_on")
+                } else {
+                    messages.text("app.copy_buffer_sound_off")
+                },
+            );
+        }
+    }
+
+    fn apply_copy_buffer_values(&self, cx: &mut Cx, settings: &Settings) {
+        for index in 0..GROUP_ROWS {
+            self.widget(cx, copy_buffer_input_id(index, CopyBufferColumn::Copy))
+                .set_text(
+                    cx,
+                    vec_item_or_empty(&settings.copy_buffer_copy_hotkeys, index),
+                );
+            self.widget(cx, copy_buffer_input_id(index, CopyBufferColumn::Paste))
+                .set_text(
+                    cx,
+                    vec_item_or_empty(&settings.copy_buffer_paste_hotkeys, index),
+                );
+            self.widget(cx, copy_buffer_input_id(index, CopyBufferColumn::Cut))
+                .set_text(
+                    cx,
+                    vec_item_or_empty(&settings.copy_buffer_cut_hotkeys, index),
+                );
+        }
+    }
+
+    fn apply_runtime_theme(&mut self, cx: &mut Cx) {
+        let Some(theme) = self.state.as_ref().map(|state| state.settings.theme) else {
+            return;
+        };
+        let palette = AppPalette::for_theme(theme);
+
+        let mut root = self.ui.clone();
+        script_apply_eval!(cx, root, {
+            main_window: {
+                pass.clear_color: #(palette.app_bg)
+            }
+        });
+
+        self.apply_solid_color(cx, ids!(app_header), palette.header_bg);
+        self.apply_solid_color(cx, ids!(settings_header), palette.header_bg);
+
+        for id in [
+            ids!(quick_paste_shell),
+            ids!(menu_panel),
+            ids!(settings_tabs),
+            ids!(appearance_settings),
+            ids!(behavior_settings),
+            ids!(hotkeys_settings),
+            ids!(copy_buffers_settings),
+            ids!(quick_paste_settings),
+            ids!(sync_settings),
+            ids!(stats_settings),
+            ids!(utilities_settings),
+            ids!(advanced_settings),
+            ids!(about_settings),
+        ] {
+            self.apply_surface_color(cx, id, palette.surface, palette.border);
+        }
+
+        for id in [ids!(status_shell), ids!(group_panel)] {
+            self.apply_surface_color(cx, id, palette.inset, palette.border);
+        }
+
+        for index in 0..HISTORY_ROWS {
+            let mut row = self.widget(cx, row_id(index));
+            script_apply_eval!(cx, row, {
+                draw_bg +: {
+                    color: #(palette.row)
+                    color_hover: #(palette.row_hover)
+                    color_focus: #(palette.row_focus)
+                    color_down: #(palette.row_focus)
+                    border_color: #(palette.border)
+                    border_color_hover: #(palette.accent)
+                    border_color_focus: #(palette.accent)
+                }
+            });
+        }
+
+        self.ui.redraw(cx);
+    }
+
+    fn apply_solid_color(&self, cx: &mut Cx, id: &[LiveId], color: Vec4) {
+        let mut widget = self.widget(cx, id);
+        script_apply_eval!(cx, widget, {
+            draw_bg +: {
+                color: #(color)
+            }
+        });
+    }
+
+    fn apply_surface_color(&self, cx: &mut Cx, id: &[LiveId], color: Vec4, border: Vec4) {
+        let mut widget = self.widget(cx, id);
+        script_apply_eval!(cx, widget, {
+            draw_bg +: {
+                color: #(color)
+                border_color: #(border)
+            }
+        });
     }
 
     fn refresh_local_status(&mut self, cx: &mut Cx) {
@@ -2194,18 +3016,85 @@ impl App {
         self.widget(cx, ids!(local_status)).set_text(cx, &status);
     }
 
+    fn refresh_stats(&mut self, cx: &mut Cx) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let stats = state.store.stats().ok();
+        let database = paths::database_path()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        let database_size = paths::database_path()
+            .ok()
+            .and_then(|path| fs::metadata(path).ok())
+            .map(|metadata| metadata.len().to_string())
+            .unwrap_or_else(|| "0".to_owned());
+        let text = self.template(
+            "app.stats_text",
+            &[
+                (
+                    "{clips}",
+                    stats
+                        .as_ref()
+                        .map(|stats| stats.clip_count.to_string())
+                        .unwrap_or_else(|| "0".to_owned()),
+                ),
+                (
+                    "{deleted}",
+                    stats
+                        .as_ref()
+                        .map(|stats| stats.deleted_count.to_string())
+                        .unwrap_or_else(|| "0".to_owned()),
+                ),
+                (
+                    "{devices}",
+                    stats
+                        .as_ref()
+                        .map(|stats| stats.device_count.to_string())
+                        .unwrap_or_else(|| "0".to_owned()),
+                ),
+                (
+                    "{newest}",
+                    stats
+                        .and_then(|stats| stats.newest_clip_at)
+                        .map(format_timestamp)
+                        .unwrap_or_else(|| "-".to_owned()),
+                ),
+                ("{db}", database),
+                ("{bytes}", database_size),
+            ],
+        );
+        self.widget(cx, ids!(stats_text)).set_text(cx, &text);
+    }
+
     fn refresh_history(&mut self, cx: &mut Cx) {
         let (clips, selected_id, count) = {
             let Some(state) = self.state.as_mut() else {
                 return;
             };
+            state.groups = state.store.list_groups().unwrap_or_default();
+            if self.active_group_id.is_some()
+                && !state
+                    .groups
+                    .iter()
+                    .any(|group| Some(group.id) == self.active_group_id)
+            {
+                self.active_group_id = None;
+            }
             let limit = state.settings.max_history.max(HISTORY_ROWS as u32);
+            let active_group_id = self.active_group_id;
+            let show_groups_in_main = state.settings.quick_paste_show_groups_in_main;
             let clips = state
                 .store
                 .search_clips(&state.query, limit)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|clip| clip_matches_filter(clip, self.clip_filter))
+                .filter(|clip| active_group_id.is_none() || clip.group_id == active_group_id)
+                .filter(|clip| {
+                    show_groups_in_main || active_group_id.is_some() || clip.group_id.is_none()
+                })
                 .take(HISTORY_ROWS)
                 .collect::<Vec<_>>();
             let count = state
@@ -2247,6 +3136,7 @@ impl App {
         }
 
         self.refresh_detail(cx);
+        self.refresh_group_panel(cx);
     }
 
     fn row_text(&self, index: usize, clip: &Clip, selected: bool) -> String {
@@ -2255,15 +3145,25 @@ impl App {
             .as_ref()
             .map(|state| state.settings.quick_paste_show_leading_whitespace)
             .unwrap_or(false);
+        let empty_text = self.text("app.empty_text");
         let text = clip.primary_text.as_deref().map_or_else(
             || clip.description.clone(),
-            |text| summarize_row_text(text, show_leading_whitespace),
+            |text| summarize_row_text(text, show_leading_whitespace, &empty_text),
         );
         let pin = if clip.pinned {
             self.text("app.pinned_marker")
         } else {
             String::new()
         };
+        let pasted = if self.clip_was_pasted(clip) {
+            self.text("app.pasted_marker")
+        } else {
+            String::new()
+        };
+        let group = self
+            .group_name_for_clip(clip)
+            .map(|name| self.template("app.group_marker", &[("{group}", name)]))
+            .unwrap_or_default();
         let types = self.row_type_text(clip);
         let source = clip.source_app.as_deref().unwrap_or("yank");
         let updated = format_timestamp(clip.updated_at);
@@ -2277,6 +3177,8 @@ impl App {
             &[
                 ("{index}", self.row_hotkey_text(index)),
                 ("{pin}", pin),
+                ("{pasted}", pasted),
+                ("{group}", group),
                 ("{types}", types),
                 ("{source}", source.to_owned()),
                 ("{updated}", updated),
@@ -2309,6 +3211,50 @@ impl App {
         } else {
             self.template("app.row_type_prefix", &[("{types}", types)])
         }
+    }
+
+    fn group_name_for_clip(&self, clip: &Clip) -> Option<String> {
+        let group_id = clip.group_id?;
+        self.state
+            .as_ref()?
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| group.name.clone())
+    }
+
+    fn clip_was_pasted(&self, clip: &Clip) -> bool {
+        self.state
+            .as_ref()
+            .filter(|state| state.settings.quick_paste_show_pasted_indicator)
+            .map(|state| state.pasted_clip_ids.iter().any(|id| id == &clip.id))
+            .unwrap_or(false)
+    }
+
+    fn refresh_group_panel(&mut self, cx: &mut Cx) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        for index in 0..GROUP_ROWS {
+            let id = group_slot_id(index);
+            if let Some(group) = state.groups.get(index) {
+                let label = if self.active_group_id == Some(group.id) {
+                    state
+                        .messages
+                        .text("app.active_choice")
+                        .replace("{label}", &group.name)
+                } else {
+                    group.name.clone()
+                };
+                self.widget(cx, id).set_visible(cx, true);
+                self.widget(cx, id).set_text(cx, &label);
+            } else {
+                self.widget(cx, id).set_visible(cx, false);
+                self.widget(cx, id).set_text(cx, "");
+            }
+        }
+        self.widget(cx, ids!(groups_button))
+            .set_text(cx, &self.clip_filter_label(&state.messages));
     }
 
     fn refresh_detail(&mut self, cx: &mut Cx) {
@@ -2369,7 +3315,9 @@ impl App {
             self.widget(cx, ids!(selected_title))
                 .set_text(cx, &self.text("app.no_selection"));
             self.widget(cx, ids!(selected_meta)).set_text(cx, "");
-            self.widget(cx, ids!(edit_input)).set_text(cx, "");
+            if !self.new_clip_mode {
+                self.widget(cx, ids!(edit_input)).set_text(cx, "");
+            }
             self.widget(cx, ids!(pin_button))
                 .set_text(cx, &self.text("app.pin"));
             self.widget(cx, ids!(menu_pin_button))
@@ -2397,6 +3345,85 @@ impl App {
         self.refresh_history(cx);
     }
 
+    fn set_group_filter_by_index(&mut self, cx: &mut Cx, index: usize) {
+        let group_id = self
+            .state
+            .as_ref()
+            .and_then(|state| state.groups.get(index))
+            .map(|group| group.id);
+        self.active_group_id = if self.active_group_id == group_id {
+            None
+        } else {
+            group_id
+        };
+        self.group_panel_visible = false;
+        self.refresh_history(cx);
+    }
+
+    fn create_group_from_input(&mut self, cx: &mut Cx) {
+        let name = self.widget(cx, ids!(group_name_input)).text();
+        let result = self.with_state_mut(|state| state.create_group(&name));
+        match result {
+            Some(Ok(Some(group))) => {
+                self.active_group_id = Some(group.id);
+                self.widget(cx, ids!(group_name_input)).set_text(cx, "");
+                self.set_status(cx, "app.status_group_created");
+                self.refresh_history(cx);
+            }
+            Some(Ok(None)) => self.set_status(cx, "app.status_group_name_required"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_group_name_required"),
+        }
+    }
+
+    fn assign_selected_to_active_group(&mut self, cx: &mut Cx) {
+        let Some(group_id) = self.active_group_id else {
+            self.set_status(cx, "app.status_group_select_first");
+            return;
+        };
+        let result = self.with_state_mut(|state| state.assign_selected_to_group(Some(group_id)));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_group_assigned");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn clear_selected_group(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(|state| state.assign_selected_to_group(None));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_group_cleared");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn delete_active_group(&mut self, cx: &mut Cx) {
+        let Some(group_id) = self.active_group_id else {
+            self.set_status(cx, "app.status_group_select_first");
+            return;
+        };
+        let result = self.with_state_mut(|state| state.delete_group(group_id));
+        match result {
+            Some(Ok(true)) => {
+                self.active_group_id = None;
+                self.set_status(cx, "app.status_group_deleted");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_group_select_first"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_group_select_first"),
+        }
+    }
+
     fn clip_filter_label(&self, messages: &I18nBundle) -> String {
         let key = match self.clip_filter {
             ClipFilter::All => "app.filter_all",
@@ -2405,7 +3432,27 @@ impl App {
             ClipFilter::Images => "app.filter_images",
             ClipFilter::Files => "app.filter_files",
         };
-        format!("{}: {}", messages.text("app.groups"), messages.text(key))
+        let type_label = messages.text(key);
+        if let Some(group_name) = self.active_group_name() {
+            format!(
+                "{}: {} / {}",
+                messages.text("app.groups"),
+                type_label,
+                group_name
+            )
+        } else {
+            format!("{}: {}", messages.text("app.groups"), type_label)
+        }
+    }
+
+    fn active_group_name(&self) -> Option<String> {
+        let group_id = self.active_group_id?;
+        self.state
+            .as_ref()?
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| group.name.clone())
     }
 
     fn copy_device_id(&mut self, cx: &mut Cx) {
@@ -2482,6 +3529,31 @@ impl App {
         }
     }
 
+    fn capture_current_clipboard_if_enabled(&mut self, cx: &mut Cx) -> bool {
+        let enabled = self
+            .state
+            .as_ref()
+            .map(|state| state.settings.capture_enabled)
+            .unwrap_or(false);
+        if !enabled {
+            return false;
+        }
+
+        let result = self.with_state_mut(|state| state.capture_clipboard(false));
+        match result {
+            Some(Ok(CaptureOutcome::Saved)) => {
+                self.set_status(cx, "app.status_auto_capture_saved");
+                true
+            }
+            Some(Ok(CaptureOutcome::Unchanged | CaptureOutcome::Empty)) => false,
+            Some(Err(error)) => {
+                self.set_status_text(cx, &error.to_string());
+                false
+            }
+            None => false,
+        }
+    }
+
     fn poll_clipboard(&mut self, cx: &mut Cx) {
         let enabled = self
             .state
@@ -2507,7 +3579,10 @@ impl App {
     fn copy_selected(&mut self, cx: &mut Cx) {
         let result = self.with_state_mut(|state| state.copy_selected());
         match result {
-            Some(Ok(true)) => self.set_status(cx, "app.status_copied_selected"),
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_copied_selected");
+                self.refresh_history(cx);
+            }
             Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
@@ -2517,7 +3592,10 @@ impl App {
     fn copy_selected_plain_text(&mut self, cx: &mut Cx) {
         let result = self.with_state_mut(|state| state.copy_selected_plain_text());
         match result {
-            Some(Ok(true)) => self.set_status(cx, "app.status_copied_plain_text"),
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_copied_plain_text");
+                self.refresh_history(cx);
+            }
             Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
@@ -2527,14 +3605,184 @@ impl App {
     fn copy_selected_transformed(&mut self, cx: &mut Cx, transform: TextTransform) {
         let result = self.with_state_mut(|state| state.copy_selected_transformed(transform));
         match result {
-            Some(Ok(true)) => self.set_status(cx, "app.status_copied_transformed"),
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_copied_transformed");
+                self.refresh_history(cx);
+            }
             Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
         }
     }
 
+    fn copy_generated_guid(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::copy_generated_guid);
+        match result {
+            Some(Ok(())) => self.set_status(cx, "app.status_copied_transformed"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
+    fn show_new_clip_editor(&mut self, cx: &mut Cx) {
+        if let Some(state) = &mut self.state {
+            state.selected_id = None;
+        }
+        self.new_clip_mode = true;
+        self.editor_visible = true;
+        self.menu_visible = false;
+        self.apply_page_visibility(cx);
+        self.widget(cx, ids!(selected_title))
+            .set_text(cx, &self.text("app.new_clip"));
+        self.widget(cx, ids!(selected_meta))
+            .set_text(cx, &self.text("app.new_clip_meta"));
+        self.widget(cx, ids!(edit_input)).set_text(cx, "");
+        self.widget(cx, ids!(edit_input)).set_key_focus(cx);
+    }
+
+    fn filter_on_selected_clip(&mut self, cx: &mut Cx) {
+        let query = self
+            .state
+            .as_ref()
+            .and_then(|state| state.selected_clip())
+            .map(|clip| {
+                clip.primary_text
+                    .as_deref()
+                    .map(yank_core::summarize_text)
+                    .unwrap_or_else(|| clip.description.clone())
+            });
+        let Some(query) = query else {
+            self.set_status(cx, "app.status_no_selection");
+            return;
+        };
+        if let Some(state) = &mut self.state {
+            state.query = query.clone();
+        }
+        self.widget(cx, ids!(search_input)).set_text(cx, &query);
+        self.set_status(cx, "app.status_filtered_on_clip");
+        self.refresh_history(cx);
+    }
+
+    fn clear_history(&mut self, cx: &mut Cx) {
+        if !self.pending_clear_history {
+            self.pending_clear_history = true;
+            self.set_status(cx, "app.status_confirm_clear_history");
+            return;
+        }
+        let result = self.with_state_mut(ClientState::clear_history);
+        match result {
+            Some(Ok(count)) => {
+                self.pending_clear_history = false;
+                self.active_group_id = None;
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_history_cleared",
+                        &[("{count}", count.to_string())],
+                    ),
+                );
+                self.refresh_history(cx);
+            }
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+    }
+
+    fn delete_non_pinned(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::delete_non_pinned);
+        match result {
+            Some(Ok(count)) => {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_non_pinned_deleted",
+                        &[("{count}", count.to_string())],
+                    ),
+                );
+                self.refresh_history(cx);
+            }
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+    }
+
+    fn export_history(&mut self, cx: &mut Cx) {
+        let path = self.widget(cx, ids!(export_path_input)).text();
+        let result = self.with_state_mut(|state| state.export_history(&path));
+        match result {
+            Some(Ok((count, path))) => {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_exported",
+                        &[("{count}", count.to_string()), ("{path}", path)],
+                    ),
+                );
+                self.apply_i18n(cx);
+            }
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+    }
+
+    fn import_history(&mut self, cx: &mut Cx) {
+        let path = self.widget(cx, ids!(import_path_input)).text();
+        let result = self.with_state_mut(|state| state.import_history(&path));
+        match result {
+            Some(Ok((count, path))) => {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_imported",
+                        &[("{count}", count.to_string()), ("{path}", path)],
+                    ),
+                );
+                self.refresh_history(cx);
+                self.apply_i18n(cx);
+            }
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+    }
+
+    fn move_selected_clip(&mut self, cx: &mut Cx, direction: ClipMove) {
+        let result = self.with_state_mut(|state| state.move_selected_clip(direction));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_clip_moved");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
     fn save_selected_edit(&mut self, cx: &mut Cx) {
+        let text = self.widget(cx, ids!(edit_input)).text();
+        if self.new_clip_mode {
+            if text.trim().is_empty() {
+                self.set_status(cx, "app.status_clipboard_empty");
+                return;
+            }
+            let result = self.with_state_mut(|state| state.create_text_clip(&text));
+            match result {
+                Some(Ok(true)) => {
+                    if let Some(group_id) = self.active_group_id {
+                        let _ = self
+                            .with_state_mut(|state| state.assign_selected_to_group(Some(group_id)));
+                    }
+                    self.new_clip_mode = false;
+                    self.set_status(cx, "app.status_new_clip_saved");
+                    self.refresh_history(cx);
+                }
+                Some(Ok(false)) => self.set_status(cx, "app.status_clipboard_empty"),
+                Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+                None => self.set_status(cx, "app.status_clipboard_empty"),
+            }
+            return;
+        }
+
         let Some(selected) = self.state.as_ref().and_then(|state| state.selected_clip()) else {
             self.set_status(cx, "app.status_no_selection");
             return;
@@ -2544,7 +3792,6 @@ impl App {
             return;
         }
 
-        let text = self.widget(cx, ids!(edit_input)).text();
         if text.trim().is_empty() {
             self.set_status(cx, "app.status_clipboard_empty");
             return;
@@ -2684,7 +3931,9 @@ impl App {
             apply_makepad_theme_to_cx(cx, theme);
         }
         self.apply_i18n(cx);
+        self.apply_runtime_theme(cx);
         self.refresh_history(cx);
+        self.set_status(cx, "app.status_settings_saved");
     }
 
     fn toggle_language(&mut self, cx: &mut Cx) {
@@ -2882,6 +4131,115 @@ impl App {
         self.set_status(cx, "app.status_settings_saved");
     }
 
+    fn save_copy_buffer_settings(&mut self, cx: &mut Cx) {
+        let mut copy = Vec::new();
+        let mut paste = Vec::new();
+        let mut cut = Vec::new();
+        for index in 0..GROUP_ROWS {
+            copy.push(
+                self.widget(cx, copy_buffer_input_id(index, CopyBufferColumn::Copy))
+                    .text(),
+            );
+            paste.push(
+                self.widget(cx, copy_buffer_input_id(index, CopyBufferColumn::Paste))
+                    .text(),
+            );
+            cut.push(
+                self.widget(cx, copy_buffer_input_id(index, CopyBufferColumn::Cut))
+                    .text(),
+            );
+        }
+
+        if let Some(invalid) = copy
+            .iter()
+            .chain(paste.iter())
+            .chain(cut.iter())
+            .find(|value| Shortcut::parse(value).is_none())
+            .cloned()
+        {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_hotkey_invalid", &[("{value}", invalid)]),
+            );
+            return;
+        }
+
+        if let Some(state) = &mut self.state {
+            state.settings.copy_buffer_copy_hotkeys = copy;
+            state.settings.copy_buffer_paste_hotkeys = paste;
+            state.settings.copy_buffer_cut_hotkeys = cut;
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn toggle_copy_buffer_sound(&mut self, cx: &mut Cx, index: usize) {
+        if let Some(state) = &mut self.state {
+            ensure_bool_len(&mut state.settings.copy_buffer_play_sound, GROUP_ROWS);
+            if let Some(value) = state.settings.copy_buffer_play_sound.get_mut(index) {
+                *value = !*value;
+            }
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn save_advanced_settings(&mut self, cx: &mut Cx) {
+        let text_only_paste_delay_ms =
+            match parse_u32_setting(&self.widget(cx, ids!(text_delay_input)).text()) {
+                Some(value) => value,
+                None => {
+                    self.set_status(cx, "app.status_invalid_number");
+                    return;
+                }
+            };
+        let expire_after_days =
+            match parse_u32_setting(&self.widget(cx, ids!(expire_days_input)).text()) {
+                Some(value) => value,
+                None => {
+                    self.set_status(cx, "app.status_invalid_number");
+                    return;
+                }
+            };
+        let max_database_mb = match parse_u32_setting(&self.widget(cx, ids!(max_db_input)).text()) {
+            Some(value) if value > 0 => value,
+            _ => {
+                self.set_status(cx, "app.status_invalid_number");
+                return;
+            }
+        };
+        let backup_path = self.widget(cx, ids!(backup_path_input)).text();
+        let export_path = self.widget(cx, ids!(export_path_input)).text();
+        let import_path = self.widget(cx, ids!(import_path_input)).text();
+        let privacy_app_exclude = self.widget(cx, ids!(privacy_app_input)).text();
+        let privacy_content_exclude = self.widget(cx, ids!(privacy_content_input)).text();
+
+        if let Some(state) = &mut self.state {
+            state.settings.text_only_paste_delay_ms = text_only_paste_delay_ms;
+            state.settings.expire_after_days = expire_after_days;
+            state.settings.max_database_mb = max_database_mb;
+            state.settings.backup_path = backup_path;
+            state.settings.export_path = export_path;
+            state.settings.import_path = import_path;
+            state.settings.privacy_app_exclude = privacy_app_exclude;
+            state.settings.privacy_content_exclude = privacy_content_exclude;
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
     fn shortcut_matches(
         &self,
         shortcut: impl FnOnce(&Settings) -> &String,
@@ -3006,6 +4364,19 @@ impl App {
         self.set_status_text(cx, &text);
     }
 
+    fn set_initial_status(&mut self, cx: &mut Cx) {
+        if self
+            .state
+            .as_ref()
+            .map(|state| state.settings.capture_enabled)
+            .unwrap_or(false)
+        {
+            self.set_status(cx, "app.status_local_ready");
+        } else {
+            self.set_status(cx, "app.capture_paused");
+        }
+    }
+
     fn set_status_text(&mut self, cx: &mut Cx, text: &str) {
         self.widget(cx, ids!(status)).set_text(cx, text);
     }
@@ -3021,9 +4392,11 @@ struct ClientState {
     messages: I18nBundle,
     clipboard: Option<Clipboard>,
     history: Vec<Clip>,
+    groups: Vec<Group>,
     selected_id: Option<String>,
     query: String,
     last_clipboard_hash: Option<String>,
+    pasted_clip_ids: Vec<String>,
 }
 
 impl ClientState {
@@ -3041,15 +4414,18 @@ impl ClientState {
         let _ = store.enforce_max_history(settings.max_history);
         let messages = i18n::bundle(settings.language);
         let clipboard = Clipboard::new().ok();
+        let groups = store.list_groups().unwrap_or_default();
         Ok(Self {
             store,
             settings,
             messages,
             clipboard,
             history: Vec::new(),
+            groups,
             selected_id: None,
             query: String::new(),
             last_clipboard_hash: None,
+            pasted_clip_ids: Vec::new(),
         })
     }
 
@@ -3064,9 +4440,11 @@ impl ClientState {
             messages,
             clipboard: Clipboard::new().ok(),
             history: Vec::new(),
+            groups: Vec::new(),
             selected_id: None,
             query: String::new(),
             last_clipboard_hash: None,
+            pasted_clip_ids: Vec::new(),
         }
     }
 
@@ -3083,14 +4461,15 @@ impl ClientState {
     fn capture_clipboard(&mut self, force: bool) -> Result<CaptureOutcome> {
         let settings = self.settings.clone();
         let snapshot = {
-            let Some(clipboard) = &mut self.clipboard else {
-                anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
-            };
+            let clipboard = self.clipboard_mut()?;
             read_clipboard_snapshot(clipboard, &settings)?
         };
         let Some(snapshot) = snapshot else {
             return Ok(CaptureOutcome::Empty);
         };
+        if snapshot_matches_content_exclude(&snapshot, &self.settings.privacy_content_exclude) {
+            return Ok(CaptureOutcome::Unchanged);
+        }
 
         let hash = content_hash(&snapshot.formats);
         if !force && self.last_clipboard_hash.as_deref() == Some(hash.as_str()) {
@@ -3130,11 +4509,13 @@ impl ClientState {
         let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
         };
-        let Some(clipboard) = &mut self.clipboard else {
-            anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
-        };
+        let clipboard = self.clipboard_mut()?;
         if restore_clip_to_clipboard(clipboard, &clip)? {
             self.last_clipboard_hash = Some(clip.content_hash);
+            self.mark_clip_pasted(&clip.id);
+            if self.settings.quick_paste_update_order_on_copy {
+                let _ = self.store.move_clip_to_top(&clip.id)?;
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -3145,11 +4526,15 @@ impl ClientState {
         let Some(text) = self.selected_clip().and_then(plain_text_payload) else {
             return Ok(false);
         };
-        let Some(clipboard) = &mut self.clipboard else {
-            anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
-        };
+        let clipboard = self.clipboard_mut()?;
         clipboard.set_text(text.clone())?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
+        if let Some(id) = self.selected_id.clone() {
+            self.mark_clip_pasted(&id);
+            if self.settings.quick_paste_update_order_on_copy {
+                let _ = self.store.move_clip_to_top(&id)?;
+            }
+        }
         Ok(true)
     }
 
@@ -3157,21 +4542,51 @@ impl ClientState {
         let Some(text) = self.selected_clip().and_then(plain_text_payload) else {
             return Ok(false);
         };
-        let Some(clipboard) = &mut self.clipboard else {
-            anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
-        };
+        let clipboard = self.clipboard_mut()?;
         let transformed = transform_text(&text, transform);
         clipboard.set_text(transformed.clone())?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&transformed)]));
+        if let Some(id) = self.selected_id.clone() {
+            self.mark_clip_pasted(&id);
+            if self.settings.quick_paste_update_order_on_copy {
+                let _ = self.store.move_clip_to_top(&id)?;
+            }
+        }
         Ok(true)
     }
 
-    fn copy_device_id(&mut self) -> Result<()> {
-        let Some(clipboard) = &mut self.clipboard else {
-            anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
-        };
-        clipboard.set_text(self.settings.device_id.clone())?;
+    fn copy_generated_guid(&mut self) -> Result<()> {
+        let text = yank_core::new_id();
+        let clipboard = self.clipboard_mut()?;
+        clipboard.set_text(text.clone())?;
+        self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
         Ok(())
+    }
+
+    fn copy_device_id(&mut self) -> Result<()> {
+        let device_id = self.settings.device_id.clone();
+        let clipboard = self.clipboard_mut()?;
+        clipboard.set_text(device_id)?;
+        Ok(())
+    }
+
+    fn mark_clip_pasted(&mut self, id: &str) {
+        self.pasted_clip_ids.retain(|existing| existing != id);
+        self.pasted_clip_ids.insert(0, id.to_owned());
+        self.pasted_clip_ids.truncate(64);
+    }
+
+    fn clipboard_mut(&mut self) -> Result<&mut Clipboard> {
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+        if self.clipboard.is_none() {
+            anyhow::bail!("{}", self.messages.text("app.status_clipboard_unavailable"));
+        }
+        Ok(self
+            .clipboard
+            .as_mut()
+            .expect("clipboard availability was checked"))
     }
 
     fn update_selected_text(&mut self, text: &str) -> Result<bool> {
@@ -3185,6 +4600,41 @@ impl ClientState {
             let _ = sync.push_clip(clip)?;
         }
         Ok(true)
+    }
+
+    fn create_text_clip(&mut self, text: &str) -> Result<bool> {
+        if text.trim().is_empty() {
+            return Ok(false);
+        }
+        let mut clip = Clip::from_text(&self.settings.device_id, text);
+        clip.group_id = None;
+        let saved = self.store.save_clip_deduplicated(&clip, true)?;
+        self.selected_id = Some(saved.id.clone());
+        if let Some(sync) = self.sync_client() {
+            let _ = sync.push_clip(saved)?;
+        }
+        Ok(true)
+    }
+
+    fn create_group(&mut self, name: &str) -> yank_core::Result<Option<Group>> {
+        let group = self.store.create_group(name)?;
+        self.groups = self.store.list_groups()?;
+        Ok(group)
+    }
+
+    fn delete_group(&mut self, id: i64) -> yank_core::Result<bool> {
+        let deleted = self.store.delete_group(id)?;
+        self.groups = self.store.list_groups()?;
+        Ok(deleted)
+    }
+
+    fn assign_selected_to_group(&mut self, group_id: Option<i64>) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        self.store
+            .assign_clip_to_group(&id, group_id)
+            .map_err(Into::into)
     }
 
     fn toggle_selected_pin(&mut self) -> Result<bool> {
@@ -3212,6 +4662,53 @@ impl ClientState {
         }
         self.selected_id = None;
         Ok(true)
+    }
+
+    fn clear_history(&mut self) -> yank_core::Result<usize> {
+        self.selected_id = None;
+        self.history.clear();
+        Ok(self.store.clear_all_clips()?)
+    }
+
+    fn delete_non_pinned(&mut self) -> yank_core::Result<usize> {
+        self.selected_id = None;
+        Ok(self.store.delete_non_pinned_clips()?)
+    }
+
+    fn export_history(&mut self, path: &str) -> Result<(usize, String)> {
+        let path = resolve_history_path(path, "yank-export.json")?;
+        let count = self.store.export_active_clips_json(&path)?;
+        self.settings.export_path = path.to_string_lossy().into_owned();
+        self.persist_settings()?;
+        Ok((count, self.settings.export_path.clone()))
+    }
+
+    fn import_history(&mut self, path: &str) -> Result<(usize, String)> {
+        let path = resolve_history_path(path, "yank-export.json")?;
+        let count = self.store.import_clips_json(&path)?;
+        self.settings.import_path = path.to_string_lossy().into_owned();
+        self.persist_settings()?;
+        self.store.enforce_max_history(self.settings.max_history)?;
+        Ok((count, self.settings.import_path.clone()))
+    }
+
+    fn move_selected_clip(&mut self, direction: ClipMove) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        let moved = match direction {
+            ClipMove::Top => self.store.move_clip_to_top(&id)?,
+            ClipMove::Up => self.store.move_clip_up(&id)?,
+            ClipMove::Down => self.store.move_clip_down(&id)?,
+            ClipMove::Last => self.store.move_clip_to_last(&id)?,
+        };
+        if moved
+            && let Some(clip) = self.store.get_clip(&id)?
+            && let Some(sync) = self.sync_client()
+        {
+            let _ = sync.push_clip(clip)?;
+        }
+        Ok(moved)
     }
 
     fn sync_now(&mut self) -> Result<bool> {
@@ -3255,7 +4752,7 @@ fn read_clipboard_snapshot(
     let mut description = None;
 
     if settings.capture_files_enabled
-        && let Some(paths) = read_optional_clipboard(clipboard.get().file_list())?
+        && let Some(paths) = read_optional_clipboard_format(clipboard.get().file_list())?
     {
         let paths = paths
             .into_iter()
@@ -3271,7 +4768,7 @@ fn read_clipboard_snapshot(
     }
 
     if settings.capture_image_enabled
-        && let Some(image) = read_optional_clipboard(clipboard.get_image())?
+        && let Some(image) = read_optional_clipboard_format(clipboard.get_image())?
     {
         let bytes = image.bytes.into_owned();
         let expected_len = image.width.saturating_mul(image.height).saturating_mul(4);
@@ -3282,7 +4779,7 @@ fn read_clipboard_snapshot(
     }
 
     if settings.capture_html_enabled
-        && let Some(html) = read_optional_clipboard(clipboard.get().html())?
+        && let Some(html) = read_optional_clipboard_format(clipboard.get().html())?
         && !html.trim().is_empty()
     {
         let searchable = html_to_text(&html);
@@ -3325,6 +4822,20 @@ fn read_optional_clipboard<T>(result: std::result::Result<T, ClipboardError>) ->
     match result {
         Ok(value) => Ok(Some(value)),
         Err(ClipboardError::ContentNotAvailable | ClipboardError::ConversionFailure) => Ok(None),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
+    }
+}
+
+fn read_optional_clipboard_format<T>(
+    result: std::result::Result<T, ClipboardError>,
+) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(
+            ClipboardError::ContentNotAvailable
+            | ClipboardError::ConversionFailure
+            | ClipboardError::ClipboardNotSupported,
+        ) => Ok(None),
         Err(error) => Err(anyhow::anyhow!("{error}")),
     }
 }
@@ -3417,6 +4928,9 @@ fn transform_text(text: &str, transform: TextTransform) -> String {
     match transform {
         TextTransform::Upper => text.to_uppercase(),
         TextTransform::Lower => text.to_lowercase(),
+        TextTransform::Capitalize => capitalize_words(text),
+        TextTransform::SentenceCase => sentence_case(text),
+        TextTransform::InvertCase => invert_case(text),
         TextTransform::Trim => text.trim().to_owned(),
         TextTransform::RemoveLineFeeds => text
             .lines()
@@ -3424,26 +4938,160 @@ fn transform_text(text: &str, transform: TextTransform) -> String {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
-        TextTransform::CamelCase => {
-            let mut output = String::new();
-            for (index, word) in text
-                .split(|ch: char| !ch.is_alphanumeric())
-                .filter(|word| !word.is_empty())
-                .enumerate()
-            {
-                let mut chars = word.chars();
-                if let Some(first) = chars.next() {
-                    if index == 0 {
-                        output.push_str(&first.to_lowercase().collect::<String>());
-                    } else {
-                        output.push_str(&first.to_uppercase().collect::<String>());
-                    }
-                    output.push_str(&chars.as_str().to_lowercase());
-                }
+        TextTransform::AddOneLineFeed => append_line_feeds(text, 1),
+        TextTransform::AddTwoLineFeeds => append_line_feeds(text, 2),
+        TextTransform::CamelCase => camel_case(text),
+        TextTransform::Slugify => slugify(text),
+        TextTransform::PosixifyPaths => posixify_paths(text),
+        TextTransform::AsciiOnly => text.chars().filter(char::is_ascii).collect(),
+        TextTransform::Typoglycemia => typoglycemia(text),
+        TextTransform::AddCurrentTime => format!(
+            "{} {}",
+            text.trim_end(),
+            Local::now().format("%Y-%m-%d %H:%M:%S")
+        ),
+    }
+}
+
+fn capitalize_words(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut start_word = true;
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            if start_word {
+                output.push_str(&ch.to_uppercase().collect::<String>());
+                start_word = false;
+            } else {
+                output.push_str(&ch.to_lowercase().collect::<String>());
             }
-            output
+        } else {
+            output.push(ch);
+            start_word = true;
         }
     }
+    output
+}
+
+fn sentence_case(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut sentence_start = true;
+    for ch in text.chars() {
+        if ch.is_alphabetic() {
+            if sentence_start {
+                output.push_str(&ch.to_uppercase().collect::<String>());
+                sentence_start = false;
+            } else {
+                output.push_str(&ch.to_lowercase().collect::<String>());
+            }
+        } else {
+            output.push(ch);
+            if matches!(ch, '.' | '!' | '?') {
+                sentence_start = true;
+            } else if !ch.is_whitespace() {
+                sentence_start = false;
+            }
+        }
+    }
+    output
+}
+
+fn invert_case(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_lowercase() {
+            output.push_str(&ch.to_uppercase().collect::<String>());
+        } else if ch.is_uppercase() {
+            output.push_str(&ch.to_lowercase().collect::<String>());
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn append_line_feeds(text: &str, count: usize) -> String {
+    let mut output = text.trim_end_matches(['\r', '\n']).to_owned();
+    for _ in 0..count {
+        output.push('\n');
+    }
+    output
+}
+
+fn camel_case(text: &str) -> String {
+    let mut output = String::new();
+    for (index, word) in text
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .enumerate()
+    {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            if index == 0 {
+                output.push_str(&first.to_lowercase().collect::<String>());
+            } else {
+                output.push_str(&first.to_uppercase().collect::<String>());
+            }
+            output.push_str(&chars.as_str().to_lowercase());
+        }
+    }
+    output
+}
+
+fn slugify(text: &str) -> String {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn posixify_paths(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let path = line.replace('\\', "/");
+            let bytes = path.as_bytes();
+            if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+                format!(
+                    "/{}/{}",
+                    (bytes[0] as char).to_ascii_lowercase(),
+                    &path[2..]
+                )
+                .replace("//", "/")
+            } else {
+                path
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn typoglycemia(text: &str) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|part| {
+            let trailing_ws_len = part
+                .chars()
+                .rev()
+                .take_while(|ch| ch.is_whitespace())
+                .map(char::len_utf8)
+                .sum::<usize>();
+            let (word, suffix) = part.split_at(part.len().saturating_sub(trailing_ws_len));
+            format!("{}{}", scramble_word_middle(word), suffix)
+        })
+        .collect()
+}
+
+fn scramble_word_middle(word: &str) -> String {
+    let chars = word.chars().collect::<Vec<_>>();
+    if chars.len() <= 3 {
+        return word.to_owned();
+    }
+    let mut output = String::with_capacity(word.len());
+    output.push(chars[0]);
+    for ch in chars[1..chars.len() - 1].iter().rev() {
+        output.push(*ch);
+    }
+    output.push(*chars.last().expect("word length was checked"));
+    output
 }
 
 fn enabled_capture_format_names(messages: &I18nBundle, settings: &Settings) -> String {
@@ -3501,6 +5149,59 @@ fn clip_matches_filter(clip: &Clip, filter: ClipFilter) -> bool {
     }
 }
 
+fn snapshot_matches_content_exclude(snapshot: &ClipboardSnapshot, rules: &str) -> bool {
+    let text = snapshot
+        .primary_text
+        .as_deref()
+        .unwrap_or(&snapshot.description)
+        .to_ascii_lowercase();
+    rules
+        .lines()
+        .map(str::trim)
+        .filter(|rule| !rule.is_empty())
+        .any(|rule| text.contains(&rule.to_ascii_lowercase()))
+}
+
+fn resolve_history_path(value: &str, default_file: &str) -> Result<PathBuf> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(paths::data_dir()?.join(default_file));
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(paths::data_dir()?.join(path))
+    }
+}
+
+fn default_path_text(value: &str, default_file: &str) -> String {
+    if value.trim().is_empty() {
+        paths::data_dir()
+            .map(|path| path.join(default_file).display().to_string())
+            .unwrap_or_else(|_| default_file.to_owned())
+    } else {
+        value.to_owned()
+    }
+}
+
+fn vec_item_or_empty(values: &[String], index: usize) -> &str {
+    values.get(index).map(String::as_str).unwrap_or("")
+}
+
+fn ensure_bool_len(values: &mut Vec<bool>, len: usize) {
+    if values.len() < len {
+        values.resize(len, false);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CopyBufferColumn {
+    Copy,
+    Paste,
+    Cut,
+}
+
 fn popup_position_label<'a>(messages: &'a I18nBundle, value: &str) -> &'a str {
     match QuickPastePosition::parse(value) {
         QuickPastePosition::Cursor => messages.text("app.popup_cursor"),
@@ -3523,7 +5224,7 @@ fn summarize_paths(paths: &[String]) -> String {
         .join(", ")
 }
 
-fn summarize_row_text(text: &str, show_leading_whitespace: bool) -> String {
+fn summarize_row_text(text: &str, show_leading_whitespace: bool, empty_text: &str) -> String {
     if show_leading_whitespace {
         let visible = text
             .chars()
@@ -3536,7 +5237,7 @@ fn summarize_row_text(text: &str, show_leading_whitespace: bool) -> String {
             .take(160)
             .collect::<String>();
         if visible.trim().is_empty() {
-            "(empty text)".to_owned()
+            empty_text.to_owned()
         } else {
             visible
         }
@@ -3671,12 +5372,18 @@ impl Shortcut {
 fn parse_key_code(value: &str) -> Option<KeyCode> {
     match value {
         "enter" | "return" => Some(KeyCode::ReturnKey),
+        "numpadenter" | "numenter" => Some(KeyCode::NumpadEnter),
         "delete" | "del" => Some(KeyCode::Delete),
         "escape" | "esc" => Some(KeyCode::Escape),
         "backspace" => Some(KeyCode::Backspace),
         "space" => Some(KeyCode::Space),
         "tab" => Some(KeyCode::Tab),
         "backtick" | "`" => Some(KeyCode::Backtick),
+        "f2" => Some(KeyCode::F2),
+        "f3" => Some(KeyCode::F3),
+        "f4" => Some(KeyCode::F4),
+        "f5" => Some(KeyCode::F5),
+        "f7" => Some(KeyCode::F7),
         "0" => Some(KeyCode::Key0),
         "1" => Some(KeyCode::Key1),
         "2" => Some(KeyCode::Key2),
@@ -3772,6 +5479,56 @@ fn row_id(index: usize) -> &'static [LiveId] {
         17 => ids!(row_17),
         18 => ids!(row_18),
         _ => ids!(row_19),
+    }
+}
+
+fn group_slot_id(index: usize) -> &'static [LiveId] {
+    match index {
+        0 => ids!(group_slot_0),
+        1 => ids!(group_slot_1),
+        2 => ids!(group_slot_2),
+        3 => ids!(group_slot_3),
+        _ => ids!(group_slot_4),
+    }
+}
+
+fn copy_buffer_label_id(index: usize) -> &'static [LiveId] {
+    match index {
+        0 => ids!(copy_buffer_1_label),
+        1 => ids!(copy_buffer_2_label),
+        2 => ids!(copy_buffer_3_label),
+        3 => ids!(copy_buffer_4_label),
+        _ => ids!(copy_buffer_5_label),
+    }
+}
+
+fn copy_buffer_sound_id(index: usize) -> &'static [LiveId] {
+    match index {
+        0 => ids!(copy_buffer_1_sound_button),
+        1 => ids!(copy_buffer_2_sound_button),
+        2 => ids!(copy_buffer_3_sound_button),
+        3 => ids!(copy_buffer_4_sound_button),
+        _ => ids!(copy_buffer_5_sound_button),
+    }
+}
+
+fn copy_buffer_input_id(index: usize, column: CopyBufferColumn) -> &'static [LiveId] {
+    match (index, column) {
+        (0, CopyBufferColumn::Copy) => ids!(copy_buffer_1_copy_input),
+        (0, CopyBufferColumn::Paste) => ids!(copy_buffer_1_paste_input),
+        (0, CopyBufferColumn::Cut) => ids!(copy_buffer_1_cut_input),
+        (1, CopyBufferColumn::Copy) => ids!(copy_buffer_2_copy_input),
+        (1, CopyBufferColumn::Paste) => ids!(copy_buffer_2_paste_input),
+        (1, CopyBufferColumn::Cut) => ids!(copy_buffer_2_cut_input),
+        (2, CopyBufferColumn::Copy) => ids!(copy_buffer_3_copy_input),
+        (2, CopyBufferColumn::Paste) => ids!(copy_buffer_3_paste_input),
+        (2, CopyBufferColumn::Cut) => ids!(copy_buffer_3_cut_input),
+        (3, CopyBufferColumn::Copy) => ids!(copy_buffer_4_copy_input),
+        (3, CopyBufferColumn::Paste) => ids!(copy_buffer_4_paste_input),
+        (3, CopyBufferColumn::Cut) => ids!(copy_buffer_4_cut_input),
+        (_, CopyBufferColumn::Copy) => ids!(copy_buffer_5_copy_input),
+        (_, CopyBufferColumn::Paste) => ids!(copy_buffer_5_paste_input),
+        (_, CopyBufferColumn::Cut) => ids!(copy_buffer_5_cut_input),
     }
 }
 
