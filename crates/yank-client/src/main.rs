@@ -28,9 +28,12 @@ use yank_core::{
     i18n::{self, I18nBundle},
 };
 
+#[cfg(target_os = "windows")]
+mod windows_tray;
+
 #[cfg(target_os = "linux")]
 use ksni::blocking::TrayMethods as _;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::sync::mpsc::{self, Receiver};
 
 const HISTORY_ROWS: usize = 20;
@@ -1020,16 +1023,21 @@ pub struct App {
     #[rust]
     initialized: bool,
     #[rust]
+    background_timer: Timer,
+    #[rust]
     poll_timer: Timer,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[rust]
     tray_timer: Timer,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[rust]
     tray_rx: Option<Receiver<TrayCommand>>,
     #[cfg(target_os = "linux")]
     #[rust]
     tray_handle: Option<ksni::blocking::Handle<YankTray>>,
+    #[cfg(target_os = "windows")]
+    #[rust]
+    tray_handle: Option<windows_tray::WindowsTrayHandle>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1247,9 +1255,8 @@ impl RegisteredGlobalHotkeys {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TrayCommand {
+pub(crate) enum TrayCommand {
     Open,
     Settings,
     KeyboardSettings,
@@ -1304,8 +1311,9 @@ impl AppPalette {
     }
 }
 
-#[cfg(target_os = "linux")]
-struct TrayLabels {
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[derive(Clone)]
+pub(crate) struct TrayLabels {
     title: String,
     open: String,
     options: String,
@@ -1320,7 +1328,7 @@ struct TrayLabels {
     exit: String,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl TrayLabels {
     fn from_messages(messages: &I18nBundle) -> Self {
         Self {
@@ -1595,6 +1603,10 @@ impl AppMain for App {
 
         self.drain_tray_commands(cx);
         self.drain_global_hotkey_events(cx);
+
+        if self.handle_window_close_requested(cx, event) {
+            return;
+        }
 
         if self.handle_secondary_mouse_down(cx, event) {
             return;
@@ -2408,11 +2420,15 @@ impl MatchEvent for App {
     }
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
+        if self.background_timer.is_timer(event).is_some() {
+            self.drain_global_hotkey_events(cx);
+            self.drain_tray_commands(cx);
+        }
         if self.poll_timer.is_timer(event).is_some() {
             self.drain_global_hotkey_events(cx);
             self.poll_clipboard(cx);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if self.tray_timer.is_timer(event).is_some() {
             self.drain_tray_commands(cx);
         }
@@ -2591,6 +2607,7 @@ impl App {
             Ok(state) => {
                 self.state = Some(state);
                 self.start_tray();
+                self.restart_background_timer(cx);
                 self.restart_tray_timer(cx);
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
@@ -2606,6 +2623,7 @@ impl App {
             Err(error) => {
                 self.state = Some(ClientState::fallback(error.to_string()));
                 self.start_tray();
+                self.restart_background_timer(cx);
                 self.restart_tray_timer(cx);
                 self.restart_poll_timer(cx);
                 self.apply_i18n(cx);
@@ -6769,6 +6787,37 @@ impl App {
                 })
     }
 
+    fn handle_window_close_requested(&mut self, cx: &mut Cx, event: &Event) -> bool {
+        let Event::WindowCloseRequested(event) = event else {
+            return false;
+        };
+        if event.window_id != CxWindowPool::id_zero() || !self.close_to_tray_enabled() {
+            return false;
+        }
+
+        event.accept_close.set(false);
+        self.start_tray();
+        self.restart_tray_timer(cx);
+        self.minimize_main_window(cx);
+        self.set_status(cx, "app.status_minimized_to_tray");
+        true
+    }
+
+    fn close_to_tray_enabled(&self) -> bool {
+        self.state
+            .as_ref()
+            .map(|state| state.settings.show_tray_icon)
+            .unwrap_or(false)
+    }
+
+    fn restart_background_timer(&mut self, cx: &mut Cx) {
+        if !self.background_timer.is_empty() {
+            cx.stop_timer(self.background_timer);
+            self.background_timer = Timer::empty();
+        }
+        self.background_timer = cx.start_interval(0.1);
+    }
+
     fn restart_poll_timer(&mut self, cx: &mut Cx) {
         if !self.poll_timer.is_empty() {
             cx.stop_timer(self.poll_timer);
@@ -6787,11 +6836,11 @@ impl App {
     }
 
     fn restart_tray_timer(&mut self, cx: &mut Cx) {
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let _ = cx;
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
             if !self.tray_timer.is_empty() {
                 cx.stop_timer(self.tray_timer);
@@ -6802,11 +6851,11 @@ impl App {
     }
 
     fn drain_tray_commands(&mut self, cx: &mut Cx) {
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let _ = cx;
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
             let mut commands = Vec::new();
             if let Some(rx) = &self.tray_rx {
@@ -6844,7 +6893,7 @@ impl App {
                     }
                     TrayCommand::DeleteNonPinned => self.delete_non_pinned(cx),
                     TrayCommand::ToggleCapture => self.toggle_capture(cx),
-                    TrayCommand::Exit => std::process::exit(0),
+                    TrayCommand::Exit => self.exit_application(),
                 }
             }
         }
@@ -6883,6 +6932,8 @@ impl App {
             GlobalHotkeyAction::ShowHistory => {
                 self.restore_main_window(cx);
                 self.show_main_page(cx);
+                self.refresh_history(cx);
+                cx.redraw_all();
             }
             GlobalHotkeyAction::CaptureNow => self.capture_clipboard(cx),
             GlobalHotkeyAction::CopyAndCapture => self.copy_and_capture_clipboard(cx),
@@ -6944,6 +6995,28 @@ impl App {
                 }
             }
         }
+        #[cfg(target_os = "windows")]
+        {
+            let Some(state) = self.state.as_ref() else {
+                return;
+            };
+            if !state.settings.show_tray_icon || self.tray_handle.is_some() {
+                return;
+            }
+
+            let (tx, rx) = mpsc::channel();
+            let labels = TrayLabels::from_messages(&state.messages);
+            match windows_tray::WindowsTrayHandle::spawn(tx, labels, state.settings.capture_enabled)
+            {
+                Ok(handle) => {
+                    self.tray_rx = Some(rx);
+                    self.tray_handle = Some(handle);
+                }
+                Err(error) => {
+                    eprintln!("system tray unavailable: {error}");
+                }
+            }
+        }
     }
 
     fn sync_tray_state(&mut self) {
@@ -6956,6 +7029,15 @@ impl App {
                     tray.capture_enabled = capture_enabled;
                     tray.labels = labels;
                 });
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let (Some(handle), Some(state)) = (self.tray_handle.as_ref(), self.state.as_ref()) {
+                handle.update(
+                    TrayLabels::from_messages(&state.messages),
+                    state.settings.capture_enabled,
+                );
             }
         }
     }
@@ -6975,6 +7057,41 @@ impl App {
                 self.tray_rx = None;
             }
         }
+        #[cfg(target_os = "windows")]
+        {
+            let enabled = self
+                .state
+                .as_ref()
+                .map(|state| state.settings.show_tray_icon)
+                .unwrap_or(false);
+            if enabled {
+                self.start_tray();
+            } else {
+                self.shutdown_tray();
+            }
+        }
+    }
+
+    fn shutdown_tray(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(handle) = self.tray_handle.take() {
+                handle.shutdown().wait();
+            }
+            self.tray_rx = None;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(handle) = self.tray_handle.take() {
+                handle.shutdown();
+            }
+            self.tray_rx = None;
+        }
+    }
+
+    fn exit_application(&mut self) -> ! {
+        self.shutdown_tray();
+        std::process::exit(0);
     }
 
     fn set_status(&mut self, cx: &mut Cx, key: &str) {

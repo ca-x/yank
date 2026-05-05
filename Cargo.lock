@@ -3683,7 +3683,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "yank-client"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3695,12 +3695,13 @@ dependencies = [
  "regex",
  "reqwest",
  "serde_json",
+ "windows-sys 0.61.2",
  "yank-core",
 ]
 
 [[package]]
 name = "yank-core"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "chrono",
  "hex",
@@ -3715,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "yank-server"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "axum",

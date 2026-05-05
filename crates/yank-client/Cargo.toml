@@ -20,6 +20,9 @@ yank-core = { path = "../yank-core" }
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys.workspace = true
+
 [[bin]]
 name = "yank-client"
 path = "src/main.rs"

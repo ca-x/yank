@@ -293,6 +293,7 @@
     "app.server_placeholder": "http://127.0.0.1:7219",
     "app.token_placeholder": "Bearer token",
     "app.status_ready": "Ready",
+    "app.status_minimized_to_tray": "Yank is still running in the system tray",
     "app.status_startup_fallback": "Started with an in-memory fallback store",
     "app.status_local_ready": "Local history is ready",
     "app.status_capture_saved": "Captured clipboard content",

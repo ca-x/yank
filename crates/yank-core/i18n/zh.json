@@ -293,6 +293,7 @@
     "app.server_placeholder": "http://127.0.0.1:7219",
     "app.token_placeholder": "Bearer 令牌",
     "app.status_ready": "就绪",
+    "app.status_minimized_to_tray": "Yank 已最小化到系统托盘并继续运行",
     "app.status_startup_fallback": "已使用内存备用存储启动",
     "app.status_local_ready": "本地历史已就绪",
     "app.status_capture_saved": "已捕获剪切板内容",
