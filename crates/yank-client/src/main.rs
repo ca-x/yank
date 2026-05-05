@@ -12,6 +12,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     rc::Rc,
+    thread,
+    time::Duration,
 };
 use yank_client::{
     paths,
@@ -31,6 +33,7 @@ const HISTORY_ROWS: usize = 20;
 const GROUP_ROWS: usize = 5;
 const HISTORY_PAGE_STEP: usize = 10;
 const MIN_CAPTURE_INTERVAL_MS: u64 = 250;
+const UNLIMITED_HISTORY_QUERY_LIMIT: u32 = 10_000;
 
 include!(concat!(env!("OUT_DIR"), "/embedded_makepad_fonts.rs"));
 
@@ -226,7 +229,7 @@ script_mod! {
     startup() do #(App::script_component(vm)){
         ui: Root{
             main_window := Window{
-                pass.clear_color: theme.color_bg_app
+                pass +: { clear_color: theme.color_bg_app }
                 window.title: "yank"
                 window.inner_size: vec2(760, 680)
                 body +: {
@@ -399,7 +402,7 @@ script_mod! {
 
                             editor_panel := View{
                                 width: Fill
-                                height: 126
+                                height: 160
                                 visible: false
                                 flow: Right
                                 spacing: theme.space_1
@@ -410,6 +413,14 @@ script_mod! {
                                     spacing: theme.space_1
                                     selected_title := SectionTitle{text: ""}
                                     selected_meta := MutedLabel{text: ""}
+                                    quick_paste_alias_row := View{
+                                        width: Fill
+                                        height: Fit
+                                        flow: Right
+                                        spacing: theme.space_1
+                                        quick_paste_alias_label := Label{width: 120 text: "" draw_text.color: theme.color_label_inner}
+                                        quick_paste_alias_input := TextInput{width: Fill height: 32 empty_text: ""}
+                                    }
                                     edit_label := SectionTitle{text: ""}
                                     edit_input := TextInput{
                                         width: Fill
@@ -714,6 +725,16 @@ script_mod! {
                                         show_thumbnails_button := DenseButton{text: ""}
                                         draw_rtf_button := DenseButton{text: ""}
                                     }
+                                    FieldGroup{
+                                        search_scope_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        FieldRow{
+                                            search_scope_all_button := DenseButton{text: ""}
+                                            search_scope_description_button := DenseButton{text: ""}
+                                            search_scope_text_button := DenseButton{text: ""}
+                                            search_scope_source_button := DenseButton{text: ""}
+                                            search_scope_date_button := DenseButton{text: ""}
+                                        }
+                                    }
                                     FieldRow{
                                         ensure_visible_button := DenseButton{text: ""}
                                         show_groups_main_button := DenseButton{text: ""}
@@ -734,6 +755,10 @@ script_mod! {
                                     FieldRow{
                                         transparency_label := Label{text: "" draw_text.color: theme.color_label_inner}
                                         transparency_input := TextInput{width: 90 height: 34 empty_text: ""}
+                                    }
+                                    FieldGroup{
+                                        multi_paste_separator_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        multi_paste_separator_input := TextInput{width: Fill height: 34 empty_text: ""}
                                     }
                                 }
 
@@ -910,6 +935,42 @@ impl SearchMode {
             Self::Wildcard
         } else {
             Self::Simple
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SearchScope {
+    #[default]
+    All,
+    Description,
+    Text,
+    Source,
+    Date,
+}
+
+impl SearchScope {
+    fn from_settings(settings: &Settings) -> Self {
+        Self::parse(&settings.quick_paste_search_scope)
+    }
+
+    fn parse(value: &str) -> Self {
+        match value {
+            "description" | "quick_paste" => Self::Description,
+            "text" | "full_text" => Self::Text,
+            "source" => Self::Source,
+            "date" | "time" => Self::Date,
+            _ => Self::All,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Description => "description",
+            Self::Text => "text",
+            Self::Source => "source",
+            Self::Date => "date",
         }
     }
 }
@@ -1310,10 +1371,13 @@ impl MatchEvent for App {
 
         for index in 0..HISTORY_ROWS {
             if let Some(modifiers) = self.button(cx, row_id(index)).clicked_modifiers(actions) {
-                self.select_clip_by_index(cx, index);
-                if modifiers.shift {
+                if modifiers.is_primary() {
+                    self.toggle_multi_select_by_index(cx, index);
+                } else if modifiers.shift {
+                    self.select_clip_by_index(cx, index);
                     self.copy_selected_plain_text(cx);
                 } else {
+                    self.select_clip_by_index(cx, index);
                     self.copy_selected(cx);
                 }
             }
@@ -1686,6 +1750,36 @@ impl MatchEvent for App {
                 &mut settings.quick_paste_case_sensitive_search
             });
             self.refresh_history(cx);
+        }
+        if self
+            .button(cx, ids!(search_scope_all_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::All);
+        }
+        if self
+            .button(cx, ids!(search_scope_description_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::Description);
+        }
+        if self
+            .button(cx, ids!(search_scope_text_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::Text);
+        }
+        if self
+            .button(cx, ids!(search_scope_source_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::Source);
+        }
+        if self
+            .button(cx, ids!(search_scope_date_button))
+            .clicked(actions)
+        {
+            self.set_search_scope(cx, SearchScope::Date);
         }
         if self
             .button(cx, ids!(show_hotkey_text_button))
@@ -2179,6 +2273,12 @@ impl App {
                 self.toggle_group_panel(cx);
                 true
             }
+            KeyCode::Space
+                if !search_focus && !event.modifiers.is_primary() && !event.modifiers.alt =>
+            {
+                self.toggle_selected_multi_select(cx);
+                true
+            }
             KeyCode::Space if event.modifiers.is_primary() && !search_focus => {
                 self.toggle_pinned_filter(cx);
                 true
@@ -2238,6 +2338,7 @@ impl App {
         [
             ids!(search_input),
             ids!(edit_input),
+            ids!(quick_paste_alias_input),
             ids!(device_id_value),
             ids!(max_history_input),
             ids!(capture_interval_input),
@@ -2257,6 +2358,7 @@ impl App {
             ids!(group_hotkey_input),
             ids!(export_path_input),
             ids!(import_path_input),
+            ids!(multi_paste_separator_input),
             ids!(text_delay_input),
             ids!(expire_days_input),
             ids!(max_db_input),
@@ -2447,6 +2549,7 @@ impl App {
             (ids!(clear_search_button), "app.clear_search"),
             (ids!(history_title), "app.latest"),
             (ids!(selected_title), "app.no_selection"),
+            (ids!(quick_paste_alias_label), "app.quick_paste_alias"),
             (ids!(edit_label), "app.edit_text"),
             (ids!(copy_selected_button), "app.copy_selected"),
             (ids!(save_edit_button), "app.save_edit"),
@@ -2523,8 +2626,13 @@ impl App {
             (ids!(settings_about_tab), "app.settings_about"),
             (ids!(popup_position_label), "app.popup_position"),
             (ids!(quick_paste_title), "app.quick_paste_options"),
+            (ids!(search_scope_label), "app.search_scope"),
             (ids!(lines_per_row_label), "app.lines_per_row"),
             (ids!(transparency_label), "app.transparency"),
+            (
+                ids!(multi_paste_separator_label),
+                "app.multi_paste_separator",
+            ),
             (ids!(save_quick_paste_button), "app.save_quick_paste"),
             (ids!(menu_upper_button), "app.special_upper"),
             (ids!(menu_lower_button), "app.special_lower"),
@@ -2710,6 +2818,42 @@ impl App {
                     messages.text("app.case_sensitive_off")
                 },
             );
+        let search_scope = SearchScope::from_settings(&state.settings);
+        self.set_choice_button_text(
+            cx,
+            ids!(search_scope_all_button),
+            messages,
+            "app.search_scope_all",
+            search_scope == SearchScope::All,
+        );
+        self.set_choice_button_text(
+            cx,
+            ids!(search_scope_description_button),
+            messages,
+            "app.search_scope_description",
+            search_scope == SearchScope::Description,
+        );
+        self.set_choice_button_text(
+            cx,
+            ids!(search_scope_text_button),
+            messages,
+            "app.search_scope_text",
+            search_scope == SearchScope::Text,
+        );
+        self.set_choice_button_text(
+            cx,
+            ids!(search_scope_source_button),
+            messages,
+            "app.search_scope_source",
+            search_scope == SearchScope::Source,
+        );
+        self.set_choice_button_text(
+            cx,
+            ids!(search_scope_date_button),
+            messages,
+            "app.search_scope_date",
+            search_scope == SearchScope::Date,
+        );
         self.widget(cx, ids!(show_hotkey_text_button)).set_text(
             cx,
             if state.settings.quick_paste_show_hotkey_text {
@@ -2863,6 +3007,13 @@ impl App {
             .set_empty_text(cx, messages.text("app.search_placeholder").to_owned());
         self.text_input(cx, ids!(edit_input))
             .set_empty_text(cx, messages.text("app.edit_placeholder").to_owned());
+        self.text_input(cx, ids!(quick_paste_alias_input))
+            .set_empty_text(
+                cx,
+                messages
+                    .text("app.quick_paste_alias_placeholder")
+                    .to_owned(),
+            );
         self.text_input(cx, ids!(server_input))
             .set_empty_text(cx, messages.text("app.server_placeholder").to_owned());
         self.text_input(cx, ids!(token_input))
@@ -2882,6 +3033,13 @@ impl App {
             .set_empty_text(cx, messages.text("app.export_path_placeholder").to_owned());
         self.text_input(cx, ids!(import_path_input))
             .set_empty_text(cx, messages.text("app.import_path_placeholder").to_owned());
+        self.text_input(cx, ids!(multi_paste_separator_input))
+            .set_empty_text(
+                cx,
+                messages
+                    .text("app.multi_paste_separator_placeholder")
+                    .to_owned(),
+            );
 
         self.widget(cx, ids!(server_input))
             .set_text(cx, state.settings.server_url.as_deref().unwrap_or(""));
@@ -2898,6 +3056,10 @@ impl App {
         self.widget(cx, ids!(transparency_input)).set_text(
             cx,
             &state.settings.quick_paste_transparency_percent.to_string(),
+        );
+        self.widget(cx, ids!(multi_paste_separator_input)).set_text(
+            cx,
+            &separator_input_text(&state.settings.multi_paste_separator),
         );
         self.widget(cx, ids!(text_delay_input))
             .set_text(cx, &state.settings.text_only_paste_delay_ms.to_string());
@@ -3100,8 +3262,10 @@ impl App {
 
         let mut root = self.ui.clone();
         script_apply_eval!(cx, root, {
-            main_window: {
-                pass.clear_color: #(palette.app_bg)
+            main_window +: {
+                pass +: {
+                    clear_color: #(palette.app_bg)
+                }
             }
         });
 
@@ -3278,7 +3442,7 @@ impl App {
             {
                 self.active_group_id = None;
             }
-            let limit = state.settings.max_history.max(HISTORY_ROWS as u32);
+            let limit = history_query_limit(&state.settings);
             let active_group_id = self.active_group_id;
             let show_groups_in_main = state.settings.quick_paste_show_groups_in_main;
             let clips =
@@ -3308,6 +3472,9 @@ impl App {
             {
                 state.selected_id = clips.first().map(|clip| clip.id.clone());
             }
+            state
+                .selected_ids
+                .retain(|id| clips.iter().any(|clip| &clip.id == id));
             state.history = clips.clone();
             (clips, state.selected_id.clone(), count)
         };
@@ -3337,7 +3504,12 @@ impl App {
             });
             if let Some(clip) = clips.get(index) {
                 let selected = selected_id.as_deref() == Some(clip.id.as_str());
-                let row_text = self.row_text(index, clip, selected);
+                let multi_selected = self
+                    .state
+                    .as_ref()
+                    .map(|state| state.selected_ids.iter().any(|id| id == &clip.id))
+                    .unwrap_or(false);
+                let row_text = self.row_text(index, clip, selected, multi_selected);
                 self.widget(cx, id).set_visible(cx, true);
                 self.widget(cx, id).set_text(cx, &row_text);
             } else {
@@ -3355,7 +3527,7 @@ impl App {
         self.refresh_group_panel(cx);
     }
 
-    fn row_text(&self, index: usize, clip: &Clip, selected: bool) -> String {
+    fn row_text(&self, index: usize, clip: &Clip, selected: bool, multi_selected: bool) -> String {
         let (show_leading_whitespace, word_wrap, lines_per_row) = self
             .state
             .as_ref()
@@ -3394,6 +3566,17 @@ impl App {
             .group_name_for_clip(clip)
             .map(|name| self.template("app.group_marker", &[("{group}", name)]))
             .unwrap_or_default();
+        let quick = clip
+            .quick_paste_text
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| self.template("app.quick_paste_marker", &[("{value}", value.to_owned())]))
+            .unwrap_or_default();
+        let multi = if multi_selected {
+            self.text("app.multi_selected_marker")
+        } else {
+            String::new()
+        };
         let types = self.row_type_text(clip);
         let source = clip
             .source_app
@@ -3411,6 +3594,8 @@ impl App {
                 ("{index}", self.row_hotkey_text(index)),
                 ("{pin}", pin),
                 ("{pasted}", pasted),
+                ("{multi}", multi),
+                ("{quick}", quick),
                 ("{group}", group),
                 ("{types}", types),
                 ("{source}", source),
@@ -3545,6 +3730,12 @@ impl App {
                         ("{formats}", clip.formats.len().to_string()),
                         ("{types}", types),
                         ("{source}", source),
+                        (
+                            "{quick}",
+                            clip.quick_paste_text
+                                .clone()
+                                .unwrap_or_else(|| "-".to_owned()),
+                        ),
                         ("{created}", format_timestamp(clip.created_at)),
                         ("{updated}", format_timestamp(clip.updated_at)),
                         ("{pin}", pin),
@@ -3554,6 +3745,8 @@ impl App {
             let editable_text = editable_text(&clip).unwrap_or_default();
             self.widget(cx, ids!(edit_input))
                 .set_text(cx, editable_text);
+            self.widget(cx, ids!(quick_paste_alias_input))
+                .set_text(cx, clip.quick_paste_text.as_deref().unwrap_or_default());
             let pin_label = if clip.pinned {
                 self.text("app.unpin")
             } else {
@@ -3568,6 +3761,8 @@ impl App {
             self.widget(cx, ids!(selected_meta)).set_text(cx, "");
             if !self.new_clip_mode {
                 self.widget(cx, ids!(edit_input)).set_text(cx, "");
+                self.widget(cx, ids!(quick_paste_alias_input))
+                    .set_text(cx, "");
             }
             self.widget(cx, ids!(pin_button))
                 .set_text(cx, &self.text("app.pin"));
@@ -3790,10 +3985,39 @@ impl App {
             && let Some(clip) = state.history.get(index)
         {
             state.selected_id = Some(clip.id.clone());
+            state.selected_ids.clear();
             self.pending_delete_id = None;
             self.refresh_history(cx);
             self.widget(cx, row_id(index)).set_key_focus(cx);
         }
+    }
+
+    fn toggle_multi_select_by_index(&mut self, cx: &mut Cx, index: usize) {
+        if let Some(state) = &mut self.state
+            && let Some(clip) = state.history.get(index)
+        {
+            let id = clip.id.clone();
+            state.selected_id = Some(id.clone());
+            if let Some(position) = state
+                .selected_ids
+                .iter()
+                .position(|existing| existing == &id)
+            {
+                state.selected_ids.remove(position);
+            } else {
+                state.selected_ids.push(id);
+            }
+            self.pending_delete_id = None;
+            self.refresh_history(cx);
+            self.widget(cx, row_id(index)).set_key_focus(cx);
+        }
+    }
+
+    fn toggle_selected_multi_select(&mut self, cx: &mut Cx) {
+        let Some(index) = self.state.as_ref().and_then(ClientState::selected_position) else {
+            return;
+        };
+        self.toggle_multi_select_by_index(cx, index);
     }
 
     fn select_first_clip(&mut self, cx: &mut Cx) {
@@ -3898,6 +4122,29 @@ impl App {
     }
 
     fn copy_selected(&mut self, cx: &mut Cx) {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(ClientState::multi_selection_active)
+        {
+            let result = self.with_state_mut(|state| state.copy_selected_merged(None));
+            match result {
+                Some(Ok(count)) if count > 0 => {
+                    self.set_status_text(
+                        cx,
+                        &self.template(
+                            "app.status_copied_merged",
+                            &[("{count}", count.to_string())],
+                        ),
+                    );
+                    self.refresh_history(cx);
+                }
+                Some(Ok(_)) => self.set_status(cx, "app.status_plain_text_unavailable"),
+                Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+                None => self.set_status(cx, "app.status_clipboard_unavailable"),
+            }
+            return;
+        }
         let result = self.with_state_mut(|state| state.copy_selected());
         match result {
             Some(Ok(true)) => {
@@ -3911,6 +4158,14 @@ impl App {
     }
 
     fn copy_selected_plain_text(&mut self, cx: &mut Cx) {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(ClientState::multi_selection_active)
+        {
+            self.copy_selected(cx);
+            return;
+        }
         let result = self.with_state_mut(|state| state.copy_selected_plain_text());
         match result {
             Some(Ok(true)) => {
@@ -3924,6 +4179,29 @@ impl App {
     }
 
     fn copy_selected_transformed(&mut self, cx: &mut Cx, transform: TextTransform) {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(ClientState::multi_selection_active)
+        {
+            let result = self.with_state_mut(|state| state.copy_selected_merged(Some(transform)));
+            match result {
+                Some(Ok(count)) if count > 0 => {
+                    self.set_status_text(
+                        cx,
+                        &self.template(
+                            "app.status_copied_merged",
+                            &[("{count}", count.to_string())],
+                        ),
+                    );
+                    self.refresh_history(cx);
+                }
+                Some(Ok(_)) => self.set_status(cx, "app.status_plain_text_unavailable"),
+                Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+                None => self.set_status(cx, "app.status_clipboard_unavailable"),
+            }
+            return;
+        }
         let result = self.with_state_mut(|state| state.copy_selected_transformed(transform));
         match result {
             Some(Ok(true)) => {
@@ -3946,7 +4224,7 @@ impl App {
     }
 
     fn put_selected_on_copy_buffer(&mut self, cx: &mut Cx, index: usize, cut: bool) {
-        let result = self.with_state_mut(|state| state.put_selected_on_copy_buffer(index));
+        let result = self.with_state_mut(|state| state.put_selected_on_copy_buffer(index, cut));
         let key = if cut {
             "app.status_copy_buffer_cut_saved"
         } else {
@@ -4004,6 +4282,8 @@ impl App {
             .set_text(cx, &self.text("app.new_clip"));
         self.widget(cx, ids!(selected_meta))
             .set_text(cx, &self.text("app.new_clip_meta"));
+        self.widget(cx, ids!(quick_paste_alias_input))
+            .set_text(cx, "");
         self.widget(cx, ids!(edit_input)).set_text(cx, "");
         self.widget(cx, ids!(edit_input)).set_key_focus(cx);
     }
@@ -4128,12 +4408,16 @@ impl App {
 
     fn save_selected_edit(&mut self, cx: &mut Cx) {
         let text = self.widget(cx, ids!(edit_input)).text();
+        let quick_paste_alias = self.widget(cx, ids!(quick_paste_alias_input)).text();
+        let quick_paste_alias = quick_paste_alias.trim();
+        let quick_paste_alias = (!quick_paste_alias.is_empty()).then_some(quick_paste_alias);
         if self.new_clip_mode {
             if text.trim().is_empty() {
                 self.set_status(cx, "app.status_clipboard_empty");
                 return;
             }
-            let result = self.with_state_mut(|state| state.create_text_clip(&text));
+            let result =
+                self.with_state_mut(|state| state.create_text_clip(&text, quick_paste_alias));
             match result {
                 Some(Ok(true)) => {
                     if let Some(group_id) = self.active_group_id {
@@ -4156,7 +4440,17 @@ impl App {
             return;
         };
         if editable_text(selected).is_none() {
-            self.set_status(cx, "app.status_edit_text_only");
+            let result = self
+                .with_state_mut(|state| state.update_selected_quick_paste_text(quick_paste_alias));
+            match result {
+                Some(Ok(true)) => {
+                    self.set_status(cx, "app.status_edit_saved");
+                    self.refresh_history(cx);
+                }
+                Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+                Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+                None => self.set_status(cx, "app.status_no_selection"),
+            }
             return;
         }
 
@@ -4165,7 +4459,8 @@ impl App {
             return;
         }
 
-        let result = self.with_state_mut(|state| state.update_selected_text(&text));
+        let result =
+            self.with_state_mut(|state| state.update_selected_text(&text, quick_paste_alias));
         match result {
             Some(Ok(true)) => {
                 self.set_status(cx, "app.status_edit_saved");
@@ -4424,10 +4719,13 @@ impl App {
                     return;
                 }
             };
+        let multi_paste_separator =
+            parse_separator_input(&self.widget(cx, ids!(multi_paste_separator_input)).text());
 
         if let Some(state) = &mut self.state {
             state.settings.quick_paste_lines_per_row = lines_per_row;
             state.settings.quick_paste_transparency_percent = transparency_percent;
+            state.settings.multi_paste_separator = multi_paste_separator;
             if let Err(error) = state.persist_settings() {
                 self.set_status_text(cx, &error.to_string());
                 return;
@@ -4462,6 +4760,19 @@ impl App {
         self.apply_i18n(cx);
         self.refresh_history(cx);
         self.set_status(cx, "app.status_search_mode_updated");
+    }
+
+    fn set_search_scope(&mut self, cx: &mut Cx, scope: SearchScope) {
+        if let Some(state) = &mut self.state {
+            state.settings.quick_paste_search_scope = scope.as_str().to_owned();
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.refresh_history(cx);
+        self.set_status(cx, "app.status_search_scope_updated");
     }
 
     fn toggle_pinned_filter(&mut self, cx: &mut Cx) {
@@ -4970,6 +5281,7 @@ struct ClientState {
     history: Vec<Clip>,
     groups: Vec<Group>,
     selected_id: Option<String>,
+    selected_ids: Vec<String>,
     query: String,
     last_clipboard_hash: Option<String>,
     pasted_clip_ids: Vec<String>,
@@ -4999,6 +5311,7 @@ impl ClientState {
             history: Vec::new(),
             groups,
             selected_id: None,
+            selected_ids: Vec::new(),
             query: String::new(),
             last_clipboard_hash: None,
             pasted_clip_ids: Vec::new(),
@@ -5018,6 +5331,7 @@ impl ClientState {
             history: Vec::new(),
             groups: Vec::new(),
             selected_id: None,
+            selected_ids: Vec::new(),
             query: String::new(),
             last_clipboard_hash: None,
             pasted_clip_ids: Vec::new(),
@@ -5032,6 +5346,26 @@ impl ClientState {
     fn selected_position(&self) -> Option<usize> {
         let selected_id = self.selected_id.as_deref()?;
         self.history.iter().position(|clip| clip.id == selected_id)
+    }
+
+    fn multi_selection_active(&self) -> bool {
+        self.selected_ids.len() > 1
+    }
+
+    fn selected_multi_clips(&self) -> Vec<Clip> {
+        if self.selected_ids.len() < 2 {
+            return Vec::new();
+        }
+        let selected = self
+            .selected_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        self.history
+            .iter()
+            .filter(|clip| selected.contains(clip.id.as_str()))
+            .cloned()
+            .collect()
     }
 
     fn capture_clipboard(&mut self, force: bool) -> Result<CaptureOutcome> {
@@ -5113,9 +5447,11 @@ impl ClientState {
         let Some(text) = plain_text_payload(&clip) else {
             return Ok(false);
         };
+        let delay_ms = self.settings.text_only_paste_delay_ms;
         let text = {
             let clipboard = self.clipboard_mut()?;
             let text = render_template_text_for_clip(&clip, text, clipboard);
+            apply_text_paste_delay(delay_ms);
             clipboard.set_text(text.clone())?;
             text
         };
@@ -5137,10 +5473,12 @@ impl ClientState {
         let Some(text) = plain_text_payload(&clip) else {
             return Ok(false);
         };
+        let delay_ms = self.settings.text_only_paste_delay_ms;
         let transformed = {
             let clipboard = self.clipboard_mut()?;
             let text = render_template_text_for_clip(&clip, text, clipboard);
             let transformed = transform_text(&text, transform);
+            apply_text_paste_delay(delay_ms);
             clipboard.set_text(transformed.clone())?;
             transformed
         };
@@ -5155,6 +5493,53 @@ impl ClientState {
         Ok(true)
     }
 
+    fn copy_selected_merged(&mut self, transform: Option<TextTransform>) -> Result<usize> {
+        let mut clips = self.selected_multi_clips();
+        if clips.len() < 2 {
+            return Ok(0);
+        }
+        if self.settings.quick_paste_multi_paste_reverse {
+            clips.reverse();
+        }
+
+        let separator = self.settings.multi_paste_separator.clone();
+        let delay_ms = self.settings.text_only_paste_delay_ms;
+        let merged = {
+            let clipboard = self.clipboard_mut()?;
+            let mut texts = Vec::new();
+            for clip in &clips {
+                let Some(text) = plain_text_payload(clip) else {
+                    continue;
+                };
+                let text = render_template_text_for_clip(clip, text, clipboard);
+                let text = transform
+                    .map(|transform| transform_text(&text, transform))
+                    .unwrap_or(text);
+                texts.push(text);
+            }
+            if texts.is_empty() {
+                return Ok(0);
+            }
+            apply_text_paste_delay(delay_ms);
+            let merged = texts.join(&separator);
+            clipboard.set_text(merged.clone())?;
+            merged
+        };
+
+        self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&merged)]));
+        let ids = clips.iter().map(|clip| clip.id.clone()).collect::<Vec<_>>();
+        for id in &ids {
+            self.mark_clip_pasted(id);
+        }
+        if self.settings.quick_paste_update_order_on_copy {
+            for id in ids.iter().rev() {
+                let _ = self.store.move_clip_to_top(id)?;
+            }
+        }
+        self.record_paste()?;
+        Ok(ids.len())
+    }
+
     fn copy_generated_guid(&mut self) -> Result<()> {
         let text = yank_core::new_id();
         let clipboard = self.clipboard_mut()?;
@@ -5164,17 +5549,26 @@ impl ClientState {
         Ok(())
     }
 
-    fn put_selected_on_copy_buffer(&mut self, index: usize) -> Result<bool> {
+    fn put_selected_on_copy_buffer(&mut self, index: usize, cut: bool) -> Result<bool> {
         let Some(id) = self.selected_id.clone() else {
             return Ok(false);
         };
-        self.store
-            .set_copy_buffer_clip(index, &id)
-            .map_err(Into::into)
+        if !self.store.set_copy_buffer_clip(index, &id)? {
+            return Ok(false);
+        }
+        if cut {
+            let _ = self.store.delete_clip(&id)?;
+            if let Some(sync) = self.sync_client() {
+                let _ = sync.delete_clip(&id);
+            }
+            self.selected_id = None;
+            self.selected_ids.retain(|selected| selected != &id);
+        }
+        Ok(true)
     }
 
     fn copy_buffer_to_clipboard(&mut self, index: usize) -> Result<bool> {
-        let Some(clip) = self.store.copy_buffer_clip(index)? else {
+        let Some(clip) = self.store.copy_buffer_clip_including_deleted(index)? else {
             return Ok(false);
         };
         let copied_hash = {
@@ -5190,8 +5584,9 @@ impl ClientState {
         if let Some(hash) = copied_hash {
             self.last_clipboard_hash = Some(hash);
             self.selected_id = Some(clip.id.clone());
+            self.selected_ids.clear();
             self.mark_clip_pasted(&clip.id);
-            if self.settings.quick_paste_update_order_on_copy {
+            if self.settings.quick_paste_update_order_on_copy && clip.deleted_at.is_none() {
                 let _ = self.store.move_clip_to_top(&clip.id)?;
             }
             self.record_paste()?;
@@ -5238,11 +5633,35 @@ impl ClientState {
             .expect("clipboard availability was checked"))
     }
 
-    fn update_selected_text(&mut self, text: &str) -> Result<bool> {
+    fn update_selected_text(&mut self, text: &str, quick_paste_text: Option<&str>) -> Result<bool> {
         let Some(id) = self.selected_id.clone() else {
             return Ok(false);
         };
-        let Some(clip) = self.store.update_clip_text(&id, text)? else {
+        self.selected_ids.clear();
+        let Some(mut clip) = self.store.update_clip_text(&id, text)? else {
+            return Ok(false);
+        };
+        if let Some(updated) = self
+            .store
+            .update_clip_quick_paste_text(&id, quick_paste_text)?
+        {
+            clip = updated;
+        }
+        if let Some(sync) = self.sync_client() {
+            let _ = sync.push_clip(clip)?;
+        }
+        Ok(true)
+    }
+
+    fn update_selected_quick_paste_text(&mut self, quick_paste_text: Option<&str>) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        self.selected_ids.clear();
+        let Some(clip) = self
+            .store
+            .update_clip_quick_paste_text(&id, quick_paste_text)?
+        else {
             return Ok(false);
         };
         if let Some(sync) = self.sync_client() {
@@ -5251,14 +5670,19 @@ impl ClientState {
         Ok(true)
     }
 
-    fn create_text_clip(&mut self, text: &str) -> Result<bool> {
+    fn create_text_clip(&mut self, text: &str, quick_paste_text: Option<&str>) -> Result<bool> {
         if text.trim().is_empty() {
             return Ok(false);
         }
         let mut clip = Clip::from_text(&self.settings.device_id, text);
         clip.group_id = None;
+        clip.quick_paste_text = quick_paste_text
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
         let saved = self.store.save_clip_deduplicated(&clip, true)?;
         self.selected_id = Some(saved.id.clone());
+        self.selected_ids.clear();
         if let Some(sync) = self.sync_client() {
             let _ = sync.push_clip(saved)?;
         }
@@ -5328,17 +5752,20 @@ impl ClientState {
             let _ = sync.delete_clip(&id);
         }
         self.selected_id = None;
+        self.selected_ids.retain(|selected| selected != &id);
         Ok(true)
     }
 
     fn clear_history(&mut self) -> yank_core::Result<usize> {
         self.selected_id = None;
+        self.selected_ids.clear();
         self.history.clear();
         self.store.clear_all_clips()
     }
 
     fn delete_non_pinned(&mut self) -> yank_core::Result<usize> {
         self.selected_id = None;
+        self.selected_ids.clear();
         self.store.delete_non_pinned_clips()
     }
 
@@ -6191,26 +6618,31 @@ fn clip_matches_filter(clip: &Clip, filter: ClipFilter) -> bool {
     }
 }
 
+fn history_query_limit(settings: &Settings) -> u32 {
+    if settings.max_history == 0 {
+        UNLIMITED_HISTORY_QUERY_LIMIT
+    } else {
+        settings.max_history.max(HISTORY_ROWS as u32)
+    }
+}
+
 fn query_history_clips(
     store: &Store,
     query: &str,
     limit: u32,
     settings: &Settings,
 ) -> Result<Vec<Clip>> {
-    let query = query.trim();
+    let (scope, query) = search_scope_and_query(settings, query);
     if query.is_empty() {
         return store.list_clips(limit).map_err(Into::into);
     }
 
     match SearchMode::from_settings(settings) {
-        SearchMode::Simple if !settings.quick_paste_case_sensitive_search => {
-            store.search_clips(query, limit).map_err(Into::into)
-        }
         SearchMode::Simple => {
             let clips = store.list_clips(limit)?;
             Ok(clips
                 .into_iter()
-                .filter(|clip| searchable_clip_text(clip).contains(query))
+                .filter(|clip| search_text_matches(clip, scope, query, settings))
                 .collect())
         }
         SearchMode::Regex => {
@@ -6220,7 +6652,7 @@ fn query_history_clips(
             let clips = store.list_clips(limit)?;
             Ok(clips
                 .into_iter()
-                .filter(|clip| regex.is_match(&searchable_clip_text(clip)))
+                .filter(|clip| regex.is_match(&searchable_clip_text_for_scope(clip, scope)))
                 .collect())
         }
         SearchMode::Wildcard => {
@@ -6230,21 +6662,80 @@ fn query_history_clips(
             let clips = store.list_clips(limit)?;
             Ok(clips
                 .into_iter()
-                .filter(|clip| regex.is_match(&searchable_clip_text(clip)))
+                .filter(|clip| regex.is_match(&searchable_clip_text_for_scope(clip, scope)))
                 .collect())
         }
     }
 }
 
-fn searchable_clip_text(clip: &Clip) -> String {
-    [
-        clip.description.as_str(),
-        clip.primary_text.as_deref().unwrap_or_default(),
-        clip.source_app.as_deref().unwrap_or_default(),
-        &format_timestamp(clip.created_at),
-        &format_timestamp(clip.updated_at),
-    ]
-    .join("\n")
+fn search_scope_and_query<'a>(settings: &Settings, query: &'a str) -> (SearchScope, &'a str) {
+    let trimmed = query.trim();
+    if let Some(rest) = strip_search_prefix(trimmed, 'q') {
+        return (SearchScope::Description, rest.trim());
+    }
+    if let Some(rest) = strip_search_prefix(trimmed, 'f') {
+        return (SearchScope::Text, rest.trim());
+    }
+    if let Some(rest) = strip_search_prefix(trimmed, 's') {
+        return (SearchScope::Source, rest.trim());
+    }
+    if let Some(rest) = strip_search_prefix(trimmed, 'd') {
+        return (SearchScope::Date, rest.trim());
+    }
+    (SearchScope::from_settings(settings), trimmed)
+}
+
+fn strip_search_prefix(query: &str, prefix: char) -> Option<&str> {
+    let mut chars = query.char_indices();
+    let (_, marker) = chars.next()?;
+    if marker != '/' && marker != '\\' {
+        return None;
+    }
+    let (_, actual) = chars.next()?;
+    if !actual.eq_ignore_ascii_case(&prefix) {
+        return None;
+    }
+    let rest_start = chars.next().map(|(index, _)| index).unwrap_or(query.len());
+    Some(&query[rest_start..])
+}
+
+fn search_text_matches(clip: &Clip, scope: SearchScope, query: &str, settings: &Settings) -> bool {
+    let text = searchable_clip_text_for_scope(clip, scope);
+    if settings.quick_paste_case_sensitive_search {
+        text.contains(query)
+    } else {
+        text.to_lowercase().contains(&query.to_lowercase())
+    }
+}
+
+fn searchable_clip_text_for_scope(clip: &Clip, scope: SearchScope) -> String {
+    match scope {
+        SearchScope::All => [
+            clip.description.as_str(),
+            clip.quick_paste_text.as_deref().unwrap_or_default(),
+            clip.primary_text.as_deref().unwrap_or_default(),
+            clip.source_app.as_deref().unwrap_or_default(),
+            &format_timestamp(clip.created_at),
+            &format_timestamp(clip.updated_at),
+        ]
+        .join("\n"),
+        SearchScope::Description => [
+            clip.description.as_str(),
+            clip.quick_paste_text.as_deref().unwrap_or_default(),
+        ]
+        .join("\n"),
+        SearchScope::Text => clip
+            .primary_text
+            .clone()
+            .or_else(|| plain_text_payload(clip))
+            .unwrap_or_default(),
+        SearchScope::Source => clip.source_app.clone().unwrap_or_default(),
+        SearchScope::Date => [
+            format_timestamp(clip.created_at),
+            format_timestamp(clip.updated_at),
+        ]
+        .join("\n"),
+    }
 }
 
 fn wildcard_to_regex(query: &str) -> String {
@@ -6311,6 +6802,35 @@ fn default_path_text(value: &str, default_file: &str) -> String {
             .unwrap_or_else(|_| default_file.to_owned())
     } else {
         value.to_owned()
+    }
+}
+
+fn parse_separator_input(value: &str) -> String {
+    let parsed = value
+        .replace("[CRLF]", "\r\n")
+        .replace("[crlf]", "\r\n")
+        .replace("[LF]", "\n")
+        .replace("[lf]", "\n")
+        .replace("\\r\\n", "\r\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t");
+    if parsed.is_empty() {
+        "\n".to_owned()
+    } else {
+        parsed
+    }
+}
+
+fn separator_input_text(value: &str) -> String {
+    value
+        .replace("\r\n", "[CRLF]")
+        .replace('\n', "[LF]")
+        .replace('\t', "\\t")
+}
+
+fn apply_text_paste_delay(delay_ms: u32) {
+    if delay_ms > 0 {
+        thread::sleep(Duration::from_millis(u64::from(delay_ms)));
     }
 }
 
@@ -6549,7 +7069,7 @@ impl HotkeySettingsInput {
 
     fn invalid_shortcut(&self) -> Option<String> {
         for value in self.values() {
-            if Shortcut::parse(value).is_none() {
+            if !value.trim().is_empty() && Shortcut::parse(value).is_none() {
                 return Some(value.clone());
             }
         }
@@ -7072,4 +7592,47 @@ fn write_embedded_makepad_resource(path: &Path, data: &[u8]) -> Result<()> {
     }
     fs::write(path, data)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blank_configured_hotkeys_disable_actions() {
+        let input = HotkeySettingsInput {
+            show_history: String::new(),
+            search: "Ctrl+F".to_owned(),
+            copy_selected: "Enter".to_owned(),
+            delete_selected: "Delete".to_owned(),
+            toggle_pin: "Ctrl+P".to_owned(),
+            edit_selected: "Ctrl+E".to_owned(),
+            capture_now: String::new(),
+            sync_now: "Ctrl+Shift+S".to_owned(),
+        };
+
+        assert!(input.invalid_shortcut().is_none());
+    }
+
+    #[test]
+    fn search_prefixes_match_ditto_style_short_forms() {
+        let settings = Settings::default();
+
+        assert_eq!(
+            search_scope_and_query(&settings, "/qalias"),
+            (SearchScope::Description, "alias")
+        );
+        assert_eq!(
+            search_scope_and_query(&settings, "\\f body"),
+            (SearchScope::Text, "body")
+        );
+        assert_eq!(
+            search_scope_and_query(&settings, "/SFirefox"),
+            (SearchScope::Source, "Firefox")
+        );
+        assert_eq!(
+            search_scope_and_query(&settings, "/d 2026-05"),
+            (SearchScope::Date, "2026-05")
+        );
+    }
 }

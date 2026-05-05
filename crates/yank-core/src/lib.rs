@@ -123,6 +123,7 @@ pub struct Settings {
     pub quick_paste_regex_search: bool,
     pub quick_paste_wildcard_search: bool,
     pub quick_paste_case_sensitive_search: bool,
+    pub quick_paste_search_scope: String,
     pub quick_paste_show_hotkey_text: bool,
     pub quick_paste_show_leading_whitespace: bool,
     pub quick_paste_show_thumbnails: bool,
@@ -135,6 +136,7 @@ pub struct Settings {
     pub quick_paste_elevated_paste: bool,
     pub quick_paste_update_order_on_copy: bool,
     pub quick_paste_multi_paste_reverse: bool,
+    pub multi_paste_separator: String,
     pub quick_paste_description_word_wrap: bool,
     pub quick_paste_lines_per_row: u32,
     pub quick_paste_transparency_percent: u32,
@@ -187,6 +189,7 @@ impl Default for Settings {
             quick_paste_regex_search: false,
             quick_paste_wildcard_search: false,
             quick_paste_case_sensitive_search: false,
+            quick_paste_search_scope: "all".to_owned(),
             quick_paste_show_hotkey_text: true,
             quick_paste_show_leading_whitespace: false,
             quick_paste_show_thumbnails: true,
@@ -199,6 +202,7 @@ impl Default for Settings {
             quick_paste_elevated_paste: false,
             quick_paste_update_order_on_copy: true,
             quick_paste_multi_paste_reverse: false,
+            multi_paste_separator: "\n".to_owned(),
             quick_paste_description_word_wrap: true,
             quick_paste_lines_per_row: 1,
             quick_paste_transparency_percent: 0,
@@ -372,6 +376,8 @@ pub struct Clip {
     pub device_id: String,
     pub description: String,
     pub primary_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_paste_text: Option<String>,
     pub formats: Vec<ClipFormat>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -407,6 +413,7 @@ impl Clip {
             device_id: device_id.into(),
             description: description.into(),
             primary_text,
+            quick_paste_text: None,
             formats,
             created_at: now,
             updated_at: now,
@@ -512,6 +519,7 @@ impl Store {
                 device_id TEXT NOT NULL,
                 description TEXT NOT NULL,
                 primary_text TEXT,
+                quick_paste_text TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 deleted_at INTEGER,
@@ -567,6 +575,11 @@ impl Store {
             "group_id",
             "ALTER TABLE clips ADD COLUMN group_id INTEGER",
         )?;
+        self.ensure_column(
+            "clips",
+            "quick_paste_text",
+            "ALTER TABLE clips ADD COLUMN quick_paste_text TEXT",
+        )?;
         Ok(())
     }
 
@@ -576,14 +589,16 @@ impl Store {
         tx.execute(
             r#"
             INSERT INTO clips (
-                id, device_id, description, primary_text, created_at, updated_at,
-                deleted_at, content_hash, pinned, source_app, group_id
+                id, device_id, description, primary_text, quick_paste_text,
+                created_at, updated_at, deleted_at, content_hash, pinned,
+                source_app, group_id
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 device_id = excluded.device_id,
                 description = excluded.description,
                 primary_text = excluded.primary_text,
+                quick_paste_text = excluded.quick_paste_text,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at,
@@ -597,6 +612,7 @@ impl Store {
                 clip.device_id,
                 clip.description,
                 clip.primary_text,
+                clip.quick_paste_text,
                 clip.created_at,
                 clip.updated_at,
                 clip.deleted_at,
@@ -646,6 +662,12 @@ impl Store {
                 )?;
                 existing.updated_at = updated_at;
             }
+            if clip.quick_paste_text.is_some() && existing.quick_paste_text != clip.quick_paste_text
+            {
+                existing.quick_paste_text = clip.quick_paste_text;
+                existing.updated_at = now_ts();
+                self.save_clip(&existing)?;
+            }
             return Ok(existing);
         }
         self.save_clip(&clip)
@@ -654,7 +676,7 @@ impl Store {
     pub fn list_clips(&self, limit: u32) -> Result<Vec<Clip>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, device_id, description, primary_text, created_at, updated_at,
+            SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
                    deleted_at, content_hash, pinned, source_app, group_id
             FROM clips
             WHERE deleted_at IS NULL
@@ -679,11 +701,15 @@ impl Store {
         let pattern = format!("%{}%", escape_like(query));
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, device_id, description, primary_text, created_at, updated_at,
+            SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
                    deleted_at, content_hash, pinned, source_app, group_id
             FROM clips
             WHERE deleted_at IS NULL
-              AND (description LIKE ?1 ESCAPE '\' OR primary_text LIKE ?1 ESCAPE '\')
+              AND (
+                  description LIKE ?1 ESCAPE '\'
+                  OR primary_text LIKE ?1 ESCAPE '\'
+                  OR quick_paste_text LIKE ?1 ESCAPE '\'
+              )
             ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
             LIMIT ?2
             "#,
@@ -699,7 +725,7 @@ impl Store {
     pub fn list_clips_since(&self, since: i64, limit: u32) -> Result<Vec<Clip>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, device_id, description, primary_text, created_at, updated_at,
+            SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
                    deleted_at, content_hash, pinned, source_app, group_id
             FROM clips
             WHERE updated_at > ?1
@@ -720,7 +746,7 @@ impl Store {
             .conn
             .query_row(
                 r#"
-                SELECT id, device_id, description, primary_text, created_at, updated_at,
+                SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
                        deleted_at, content_hash, pinned, source_app, group_id
                 FROM clips
                 WHERE id = ?1
@@ -1023,11 +1049,29 @@ impl Store {
             .conn
             .query_row(
                 r#"
-                SELECT c.id, c.device_id, c.description, c.primary_text, c.created_at, c.updated_at,
+                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.created_at, c.updated_at,
                        c.deleted_at, c.content_hash, c.pinned, c.source_app, c.group_id
                 FROM copy_buffers b
                 INNER JOIN clips c ON c.id = b.clip_id
                 WHERE b.slot = ?1 AND c.deleted_at IS NULL
+                "#,
+                params![slot as i64],
+                |row| self.clip_from_row(row),
+            )
+            .optional()?;
+        clip.map(|clip| self.with_formats(clip)).transpose()
+    }
+
+    pub fn copy_buffer_clip_including_deleted(&self, slot: usize) -> Result<Option<Clip>> {
+        let clip = self
+            .conn
+            .query_row(
+                r#"
+                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.created_at, c.updated_at,
+                       c.deleted_at, c.content_hash, c.pinned, c.source_app, c.group_id
+                FROM copy_buffers b
+                INNER JOIN clips c ON c.id = b.clip_id
+                WHERE b.slot = ?1
                 "#,
                 params![slot as i64],
                 |row| self.clip_from_row(row),
@@ -1199,6 +1243,26 @@ impl Store {
         self.save_clip(&clip).map(Some)
     }
 
+    pub fn update_clip_quick_paste_text(
+        &self,
+        id: &str,
+        quick_paste_text: Option<&str>,
+    ) -> Result<Option<Clip>> {
+        let Some(mut clip) = self.get_clip(id)? else {
+            return Ok(None);
+        };
+        if clip.deleted_at.is_some() {
+            return Ok(None);
+        }
+
+        clip.quick_paste_text = quick_paste_text
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        clip.updated_at = now_ts();
+        self.save_clip(&clip).map(Some)
+    }
+
     pub fn find_active_by_content_hash(&self, hash: &str) -> Result<Option<Clip>> {
         self.find_active_by_hash(hash)
     }
@@ -1326,6 +1390,10 @@ impl Store {
             "quick_paste_case_sensitive_search",
             settings.quick_paste_case_sensitive_search,
         )?;
+        settings.quick_paste_search_scope = self.get_string_setting(
+            "quick_paste_search_scope",
+            settings.quick_paste_search_scope,
+        )?;
         settings.quick_paste_show_hotkey_text = self.get_bool_setting(
             "quick_paste_show_hotkey_text",
             settings.quick_paste_show_hotkey_text,
@@ -1372,6 +1440,8 @@ impl Store {
             "quick_paste_multi_paste_reverse",
             settings.quick_paste_multi_paste_reverse,
         )?;
+        settings.multi_paste_separator =
+            self.get_string_setting("multi_paste_separator", settings.multi_paste_separator)?;
         settings.quick_paste_description_word_wrap = self.get_bool_setting(
             "quick_paste_description_word_wrap",
             settings.quick_paste_description_word_wrap,
@@ -1559,6 +1629,10 @@ impl Store {
             },
         )?;
         self.set_setting(
+            "quick_paste_search_scope",
+            &settings.quick_paste_search_scope,
+        )?;
+        self.set_setting(
             "quick_paste_show_hotkey_text",
             if settings.quick_paste_show_hotkey_text {
                 "true"
@@ -1654,6 +1728,7 @@ impl Store {
                 "false"
             },
         )?;
+        self.set_setting("multi_paste_separator", &settings.multi_paste_separator)?;
         self.set_setting(
             "quick_paste_description_word_wrap",
             if settings.quick_paste_description_word_wrap {
@@ -1781,7 +1856,7 @@ impl Store {
             .conn
             .query_row(
                 r#"
-                SELECT id, device_id, description, primary_text, created_at, updated_at,
+                SELECT id, device_id, description, primary_text, quick_paste_text, created_at, updated_at,
                        deleted_at, content_hash, pinned, source_app, group_id
                 FROM clips
                 WHERE content_hash = ?1 AND deleted_at IS NULL
@@ -1820,13 +1895,14 @@ impl Store {
             device_id: row.get(1)?,
             description: row.get(2)?,
             primary_text: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
-            deleted_at: row.get(6)?,
-            content_hash: row.get(7)?,
-            pinned: row.get::<_, i64>(8)? != 0,
-            source_app: row.get(9)?,
-            group_id: row.get(10)?,
+            quick_paste_text: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+            deleted_at: row.get(7)?,
+            content_hash: row.get(8)?,
+            pinned: row.get::<_, i64>(9)? != 0,
+            source_app: row.get(10)?,
+            group_id: row.get(11)?,
             formats: Vec::new(),
         })
     }
@@ -1966,6 +2042,25 @@ mod tests {
 
         assert_eq!(first.id, second.id);
         assert_eq!(store.list_clips(20).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stores_quick_paste_aliases() {
+        let store = Store::open_memory().unwrap();
+        let clip = store.save_text_clip("device-a", "primary text").unwrap();
+
+        let updated = store
+            .update_clip_quick_paste_text(&clip.id, Some("alias"))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.quick_paste_text.as_deref(), Some("alias"));
+        assert_eq!(
+            store.search_clips("alias", 20).unwrap()[0]
+                .quick_paste_text
+                .as_deref(),
+            Some("alias")
+        );
     }
 
     #[test]
@@ -2140,6 +2235,8 @@ mod tests {
         settings.sync_enabled = true;
         settings.total_paste_count = 7;
         settings.trip_paste_count = 3;
+        settings.quick_paste_search_scope = "text".to_owned();
+        settings.multi_paste_separator = "\n---\n".to_owned();
 
         store.save_settings(&settings).unwrap();
         assert_eq!(store.settings().unwrap(), settings);
