@@ -35,6 +35,7 @@ use std::sync::mpsc::{self, Receiver};
 
 const HISTORY_ROWS: usize = 20;
 const GROUP_ROWS: usize = 5;
+const FIRST_TEN_ROWS: usize = 10;
 const HISTORY_PAGE_STEP: usize = 10;
 const MIN_CAPTURE_INTERVAL_MS: u64 = 250;
 const UNLIMITED_HISTORY_QUERY_LIMIT: u32 = 10_000;
@@ -767,15 +768,54 @@ script_mod! {
                                         flow: Down
                                         spacing: theme.space_2
                                         FieldRow{hotkey_show_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_show_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_show_2_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_show_2_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_show_3_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_show_3_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                         FieldRow{hotkey_search_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_search_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_text_only_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_text_only_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                         FieldRow{hotkey_copy_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_copy_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                         FieldRow{hotkey_delete_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_delete_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                         FieldRow{hotkey_pin_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_pin_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                         FieldRow{hotkey_edit_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_edit_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                         FieldRow{hotkey_capture_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_capture_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{hotkey_copy_capture_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_copy_capture_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                         FieldRow{hotkey_sync_label := Label{width: 180 text: "" draw_text.color: theme.color_label_inner} hotkey_sync_input := TextInput{width: Fill height: 34 empty_text: ""}}
                                     }
                                     save_hotkeys_button := ActionButton{width: Fit text: ""}
+                                }
+
+                                first_ten_settings := AppCard{
+                                    width: Fill
+                                    first_ten_title := SectionTitle{text: ""}
+                                    first_ten_status := MutedLabel{text: ""}
+                                    FieldRow{
+                                        first_ten_send_paste_button := DenseButton{text: ""}
+                                        first_ten_move_top_button := DenseButton{text: ""}
+                                        first_ten_use_group_button := DenseButton{text: ""}
+                                    }
+                                    first_ten_grid := View{
+                                        width: Fill
+                                        height: Fit
+                                        flow: Down
+                                        spacing: theme.space_1
+                                        FieldRow{first_ten_1_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_1_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_6_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_6_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_2_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_2_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_7_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_7_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_3_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_3_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_8_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_8_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_4_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_4_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_9_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_9_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_5_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_5_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_10_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_10_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                    }
+                                    first_ten_plain_status := MutedLabel{text: ""}
+                                    first_ten_plain_grid := View{
+                                        width: Fill
+                                        height: Fit
+                                        flow: Down
+                                        spacing: theme.space_1
+                                        FieldRow{first_ten_plain_1_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_1_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_plain_6_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_6_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_plain_2_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_2_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_plain_7_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_7_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_plain_3_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_3_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_plain_8_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_8_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_plain_4_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_4_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_plain_9_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_9_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                        FieldRow{first_ten_plain_5_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_5_input := TextInput{width: Fill height: 34 empty_text: ""} first_ten_plain_10_label := Label{width: 90 text: "" draw_text.color: theme.color_label_inner} first_ten_plain_10_input := TextInput{width: Fill height: 34 empty_text: ""}}
+                                    }
+                                    save_first_ten_button := ActionButton{width: Fit text: ""}
                                 }
 
                                 copy_buffers_settings := AppCard{
@@ -836,6 +876,10 @@ script_mod! {
                                         lines_per_row_label := Label{text: "" draw_text.color: theme.color_label_inner}
                                         lines_per_row_input := TextInput{width: 90 height: 34 empty_text: ""}
                                         save_quick_paste_button := ActionButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        font_size_label := Label{text: "" draw_text.color: theme.color_label_inner}
+                                        font_size_input := TextInput{width: 90 height: 34 empty_text: ""}
                                     }
                                     FieldRow{
                                         paste_delay_label := Label{text: "" draw_text.color: theme.color_label_inner}
@@ -1163,7 +1207,11 @@ enum PasteDispatch {
 enum GlobalHotkeyAction {
     ShowHistory,
     CaptureNow,
+    CopyAndCapture,
     SyncNow,
+    TextOnlyPaste,
+    FirstTen(usize),
+    FirstTenPlainText(usize),
     Clip(String),
     Group(i64),
     CopyBufferCopy(usize),
@@ -2258,6 +2306,30 @@ impl MatchEvent for App {
         if self.button(cx, ids!(save_hotkeys_button)).clicked(actions) {
             self.save_hotkey_settings(cx);
         }
+        if self
+            .button(cx, ids!(first_ten_send_paste_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.first_ten_send_paste);
+        }
+        if self
+            .button(cx, ids!(first_ten_move_top_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.first_ten_move_to_top);
+        }
+        if self
+            .button(cx, ids!(first_ten_use_group_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| &mut settings.first_ten_use_active_group);
+        }
+        if self
+            .button(cx, ids!(save_first_ten_button))
+            .clicked(actions)
+        {
+            self.save_first_ten_settings(cx);
+        }
         for index in 0..GROUP_ROWS {
             if self
                 .button(cx, copy_buffer_sound_id(index))
@@ -2352,6 +2424,17 @@ impl MatchEvent for App {
         }
     }
 
+    fn handle_window_lost_focus(&mut self, cx: &mut Cx, _window_id: &WindowId) {
+        if self.active_page == ClientPage::Main
+            && (self.menu_visible || self.group_panel_visible || self.editor_visible)
+        {
+            self.menu_visible = false;
+            self.group_panel_visible = false;
+            self.editor_visible = false;
+            self.apply_page_visibility(cx);
+        }
+    }
+
     fn handle_key_down(&mut self, cx: &mut Cx, event: &KeyEvent) {
         if self.active_page == ClientPage::Settings && event.key_code == KeyCode::Escape {
             self.show_main_page(cx);
@@ -2360,6 +2443,8 @@ impl MatchEvent for App {
 
         if self.active_page == ClientPage::Settings {
             if self.shortcut_matches(|settings| &settings.hotkey_show_history, event)
+                || self.shortcut_matches(|settings| &settings.hotkey_show_history_2, event)
+                || self.shortcut_matches(|settings| &settings.hotkey_show_history_3, event)
                 || self.shortcut_matches(|settings| &settings.hotkey_search, event)
             {
                 self.show_main_page(cx);
@@ -2394,6 +2479,8 @@ impl MatchEvent for App {
         }
 
         if self.shortcut_matches(|settings| &settings.hotkey_show_history, event)
+            || self.shortcut_matches(|settings| &settings.hotkey_show_history_2, event)
+            || self.shortcut_matches(|settings| &settings.hotkey_show_history_3, event)
             || self.shortcut_matches(|settings| &settings.hotkey_search, event)
         {
             self.show_main_page(cx);
@@ -2430,8 +2517,19 @@ impl MatchEvent for App {
             self.capture_clipboard(cx);
             return;
         }
+        if self.shortcut_matches(|settings| &settings.hotkey_copy_and_capture, event) {
+            self.copy_and_capture_clipboard(cx);
+            return;
+        }
         if self.shortcut_matches(|settings| &settings.hotkey_sync_now, event) {
             self.sync_now(cx);
+            return;
+        }
+        if self.shortcut_matches(|settings| &settings.hotkey_text_only_paste, event) {
+            if self.text_entry_has_focus(cx) {
+                return;
+            }
+            self.text_only_paste_current_clipboard(cx);
             return;
         }
 
@@ -2807,18 +2905,43 @@ impl App {
             ids!(max_history_input),
             ids!(capture_interval_input),
             ids!(lines_per_row_input),
+            ids!(font_size_input),
             ids!(paste_delay_input),
             ids!(transparency_input),
             ids!(server_input),
             ids!(token_input),
             ids!(hotkey_show_input),
+            ids!(hotkey_show_2_input),
+            ids!(hotkey_show_3_input),
             ids!(hotkey_search_input),
+            ids!(hotkey_text_only_input),
             ids!(hotkey_copy_input),
             ids!(hotkey_delete_input),
             ids!(hotkey_pin_input),
             ids!(hotkey_edit_input),
             ids!(hotkey_capture_input),
+            ids!(hotkey_copy_capture_input),
             ids!(hotkey_sync_input),
+            ids!(first_ten_1_input),
+            ids!(first_ten_2_input),
+            ids!(first_ten_3_input),
+            ids!(first_ten_4_input),
+            ids!(first_ten_5_input),
+            ids!(first_ten_6_input),
+            ids!(first_ten_7_input),
+            ids!(first_ten_8_input),
+            ids!(first_ten_9_input),
+            ids!(first_ten_10_input),
+            ids!(first_ten_plain_1_input),
+            ids!(first_ten_plain_2_input),
+            ids!(first_ten_plain_3_input),
+            ids!(first_ten_plain_4_input),
+            ids!(first_ten_plain_5_input),
+            ids!(first_ten_plain_6_input),
+            ids!(first_ten_plain_7_input),
+            ids!(first_ten_plain_8_input),
+            ids!(first_ten_plain_9_input),
+            ids!(first_ten_plain_10_input),
             ids!(group_name_input),
             ids!(group_hotkey_input),
             ids!(export_path_input),
@@ -2921,6 +3044,8 @@ impl App {
         self.widget(cx, ids!(behavior_settings))
             .set_visible(cx, matches!(tab, SettingsTab::Types));
         self.widget(cx, ids!(hotkeys_settings))
+            .set_visible(cx, matches!(tab, SettingsTab::Keyboard));
+        self.widget(cx, ids!(first_ten_settings))
             .set_visible(cx, matches!(tab, SettingsTab::Keyboard));
         self.widget(cx, ids!(copy_buffers_settings))
             .set_visible(cx, matches!(tab, SettingsTab::CopyBuffers));
@@ -3041,14 +3166,22 @@ impl App {
             (ids!(hotkeys_title), "app.hotkeys"),
             (ids!(hotkeys_status), "app.hotkeys_status"),
             (ids!(hotkey_show_label), "app.hotkey_show"),
+            (ids!(hotkey_show_2_label), "app.hotkey_show_2"),
+            (ids!(hotkey_show_3_label), "app.hotkey_show_3"),
             (ids!(hotkey_search_label), "app.hotkey_search"),
+            (ids!(hotkey_text_only_label), "app.hotkey_text_only"),
             (ids!(hotkey_copy_label), "app.hotkey_copy"),
             (ids!(hotkey_delete_label), "app.hotkey_delete"),
             (ids!(hotkey_pin_label), "app.hotkey_pin"),
             (ids!(hotkey_edit_label), "app.hotkey_edit"),
             (ids!(hotkey_capture_label), "app.hotkey_capture"),
+            (ids!(hotkey_copy_capture_label), "app.hotkey_copy_capture"),
             (ids!(hotkey_sync_label), "app.hotkey_sync"),
             (ids!(save_hotkeys_button), "app.save_hotkeys"),
+            (ids!(first_ten_title), "app.first_ten_hotkeys"),
+            (ids!(first_ten_status), "app.first_ten_status"),
+            (ids!(first_ten_plain_status), "app.first_ten_plain_status"),
+            (ids!(save_first_ten_button), "app.save_first_ten"),
             (ids!(filter_all_button), "app.filter_all"),
             (ids!(filter_pinned_button), "app.filter_pinned"),
             (ids!(filter_text_button), "app.filter_text"),
@@ -3101,6 +3234,7 @@ impl App {
             (ids!(quick_paste_title), "app.quick_paste_options"),
             (ids!(search_scope_label), "app.search_scope"),
             (ids!(lines_per_row_label), "app.lines_per_row"),
+            (ids!(font_size_label), "app.font_size"),
             (ids!(paste_delay_label), "app.paste_delay"),
             (ids!(transparency_label), "app.transparency"),
             (
@@ -3476,6 +3610,30 @@ impl App {
                 messages.text("app.paste_active_off")
             },
         );
+        self.widget(cx, ids!(first_ten_send_paste_button)).set_text(
+            cx,
+            if state.settings.first_ten_send_paste {
+                messages.text("app.first_ten_send_paste_on")
+            } else {
+                messages.text("app.first_ten_send_paste_off")
+            },
+        );
+        self.widget(cx, ids!(first_ten_move_top_button)).set_text(
+            cx,
+            if state.settings.first_ten_move_to_top {
+                messages.text("app.first_ten_move_top_on")
+            } else {
+                messages.text("app.first_ten_move_top_off")
+            },
+        );
+        self.widget(cx, ids!(first_ten_use_group_button)).set_text(
+            cx,
+            if state.settings.first_ten_use_active_group {
+                messages.text("app.first_ten_group_on")
+            } else {
+                messages.text("app.first_ten_group_off")
+            },
+        );
         self.widget(cx, ids!(update_order_button)).set_text(
             cx,
             if state.settings.quick_paste_update_order_on_copy {
@@ -3572,6 +3730,15 @@ impl App {
             .set_empty_text(cx, messages.text("app.group_name_placeholder").to_owned());
         self.text_input(cx, ids!(group_hotkey_input))
             .set_empty_text(cx, messages.text("app.group_hotkey_placeholder").to_owned());
+        for index in 0..FIRST_TEN_ROWS {
+            self.text_input(cx, first_ten_input_id(index))
+                .set_empty_text(cx, messages.text("app.first_ten_placeholder").to_owned());
+            self.text_input(cx, first_ten_plain_input_id(index))
+                .set_empty_text(
+                    cx,
+                    messages.text("app.first_ten_plain_placeholder").to_owned(),
+                );
+        }
         self.text_input(cx, ids!(export_path_input))
             .set_empty_text(cx, messages.text("app.export_path_placeholder").to_owned());
         self.text_input(cx, ids!(import_path_input))
@@ -3596,6 +3763,8 @@ impl App {
             .set_text(cx, &state.settings.capture_interval_ms.to_string());
         self.widget(cx, ids!(lines_per_row_input))
             .set_text(cx, &state.settings.quick_paste_lines_per_row.to_string());
+        self.widget(cx, ids!(font_size_input))
+            .set_text(cx, &state.settings.quick_paste_font_size.to_string());
         self.widget(cx, ids!(paste_delay_input))
             .set_text(cx, &state.settings.quick_paste_paste_delay_ms.to_string());
         self.widget(cx, ids!(transparency_input)).set_text(
@@ -3628,8 +3797,14 @@ impl App {
             .set_text(cx, &state.settings.privacy_content_exclude);
         self.widget(cx, ids!(hotkey_show_input))
             .set_text(cx, &state.settings.hotkey_show_history);
+        self.widget(cx, ids!(hotkey_show_2_input))
+            .set_text(cx, &state.settings.hotkey_show_history_2);
+        self.widget(cx, ids!(hotkey_show_3_input))
+            .set_text(cx, &state.settings.hotkey_show_history_3);
         self.widget(cx, ids!(hotkey_search_input))
             .set_text(cx, &state.settings.hotkey_search);
+        self.widget(cx, ids!(hotkey_text_only_input))
+            .set_text(cx, &state.settings.hotkey_text_only_paste);
         self.widget(cx, ids!(hotkey_copy_input))
             .set_text(cx, &state.settings.hotkey_copy_selected);
         self.widget(cx, ids!(hotkey_delete_input))
@@ -3640,8 +3815,14 @@ impl App {
             .set_text(cx, &state.settings.hotkey_edit_selected);
         self.widget(cx, ids!(hotkey_capture_input))
             .set_text(cx, &state.settings.hotkey_capture_now);
+        self.widget(cx, ids!(hotkey_copy_capture_input))
+            .set_text(cx, &state.settings.hotkey_copy_and_capture);
         self.widget(cx, ids!(hotkey_sync_input))
             .set_text(cx, &state.settings.hotkey_sync_now);
+        self.apply_first_ten_labels(cx, messages);
+        self.apply_first_ten_values(cx, &state.settings);
+        self.apply_first_ten_plain_labels(cx, messages);
+        self.apply_first_ten_plain_values(cx, &state.settings);
         self.apply_copy_buffer_labels(cx, messages);
         self.apply_copy_buffer_values(cx, &state.settings);
 
@@ -3754,6 +3935,44 @@ impl App {
         }
     }
 
+    fn apply_first_ten_labels(&self, cx: &mut Cx, messages: &I18nBundle) {
+        for index in 0..FIRST_TEN_ROWS {
+            self.widget(cx, first_ten_label_id(index)).set_text(
+                cx,
+                &messages
+                    .text("app.first_ten_position")
+                    .replace("{index}", &(index + 1).to_string()),
+            );
+        }
+    }
+
+    fn apply_first_ten_values(&self, cx: &mut Cx, settings: &Settings) {
+        for index in 0..FIRST_TEN_ROWS {
+            self.widget(cx, first_ten_input_id(index))
+                .set_text(cx, vec_item_or_empty(&settings.first_ten_hotkeys, index));
+        }
+    }
+
+    fn apply_first_ten_plain_labels(&self, cx: &mut Cx, messages: &I18nBundle) {
+        for index in 0..FIRST_TEN_ROWS {
+            self.widget(cx, first_ten_plain_label_id(index)).set_text(
+                cx,
+                &messages
+                    .text("app.first_ten_plain_position")
+                    .replace("{index}", &(index + 1).to_string()),
+            );
+        }
+    }
+
+    fn apply_first_ten_plain_values(&self, cx: &mut Cx, settings: &Settings) {
+        for index in 0..FIRST_TEN_ROWS {
+            self.widget(cx, first_ten_plain_input_id(index)).set_text(
+                cx,
+                vec_item_or_empty(&settings.first_ten_plain_hotkeys, index),
+            );
+        }
+    }
+
     fn apply_copy_buffer_labels(&self, cx: &mut Cx, messages: &I18nBundle) {
         for index in 0..GROUP_ROWS {
             self.widget(cx, copy_buffer_label_id(index)).set_text(
@@ -3824,6 +4043,7 @@ impl App {
             ids!(appearance_settings),
             ids!(behavior_settings),
             ids!(hotkeys_settings),
+            ids!(first_ten_settings),
             ids!(copy_buffers_settings),
             ids!(quick_paste_settings),
             ids!(sync_settings),
@@ -4039,13 +4259,21 @@ impl App {
         let row_height = self
             .state
             .as_ref()
-            .map(|state| state.settings.quick_paste_lines_per_row.clamp(1, 5) as f64 * 30.0)
+            .map(|state| history_row_height(&state.settings))
             .unwrap_or(30.0);
+        let row_font_size = self
+            .state
+            .as_ref()
+            .map(|state| state.settings.quick_paste_font_size.clamp(8, 24) as f64)
+            .unwrap_or(10.0);
         for index in 0..HISTORY_ROWS {
             let id = row_id(index);
             let mut row = self.widget(cx, id);
             script_apply_eval!(cx, row, {
                 height: #(row_height)
+                draw_text +: {
+                    text_style +: {font_size: #(row_font_size)}
+                }
             });
             if let Some(clip) = clips.get(index) {
                 let selected = selected_id.as_deref() == Some(clip.id.as_str());
@@ -4676,6 +4904,26 @@ impl App {
         }
     }
 
+    fn copy_and_capture_clipboard(&mut self, cx: &mut Cx) {
+        if !platform_copy_command_available() {
+            self.set_status(cx, "app.status_copy_unavailable");
+            return;
+        }
+
+        if let Err(error) = run_platform_copy_command() {
+            self.set_status_text(cx, &error.to_string());
+            return;
+        }
+
+        let delay_ms = self
+            .state
+            .as_ref()
+            .map(|state| state.settings.quick_paste_paste_delay_ms)
+            .unwrap_or(120);
+        thread::sleep(Duration::from_millis(u64::from(delay_ms)));
+        self.capture_clipboard(cx);
+    }
+
     fn capture_current_clipboard_if_enabled(&mut self, cx: &mut Cx) -> bool {
         let enabled = self
             .state
@@ -4777,6 +5025,34 @@ impl App {
         }
     }
 
+    fn set_first_ten_paste_status(
+        &mut self,
+        cx: &mut Cx,
+        clipboard_status: String,
+        send_paste: bool,
+    ) {
+        let dispatch = if send_paste {
+            self.dispatch_paste_to_active_window_forced(cx)
+        } else {
+            PasteDispatch::Disabled
+        };
+        match dispatch {
+            PasteDispatch::Disabled => self.set_status_text(cx, &clipboard_status),
+            PasteDispatch::Scheduled => {
+                let message =
+                    self.template("app.status_paste_sent", &[("{status}", clipboard_status)]);
+                self.set_status_text(cx, &message);
+            }
+            PasteDispatch::Unavailable => {
+                let message = self.template(
+                    "app.status_paste_unavailable",
+                    &[("{status}", clipboard_status)],
+                );
+                self.set_status_text(cx, &message);
+            }
+        }
+    }
+
     fn dispatch_paste_to_active_window(&mut self, cx: &mut Cx) -> PasteDispatch {
         let Some(settings) = self.state.as_ref().map(|state| state.settings.clone()) else {
             return PasteDispatch::Disabled;
@@ -4784,6 +5060,29 @@ impl App {
         if !settings.quick_paste_paste_in_active_window {
             return PasteDispatch::Disabled;
         }
+        self.dispatch_paste_to_active_window_for_settings(cx, &settings)
+    }
+
+    fn dispatch_paste_to_active_window_forced(&mut self, cx: &mut Cx) -> PasteDispatch {
+        let Some(settings) = self.state.as_ref().map(|state| state.settings.clone()) else {
+            return PasteDispatch::Disabled;
+        };
+        self.dispatch_paste_to_active_window_for_settings(cx, &settings)
+    }
+
+    fn dispatch_paste_to_active_window_for_settings(
+        &mut self,
+        cx: &mut Cx,
+        settings: &Settings,
+    ) -> PasteDispatch {
+        self.dispatch_paste_to_active_window_with_delay(cx, settings.quick_paste_paste_delay_ms)
+    }
+
+    fn dispatch_paste_to_active_window_with_delay(
+        &mut self,
+        cx: &mut Cx,
+        delay_ms: u32,
+    ) -> PasteDispatch {
         if !platform_paste_command_available() {
             return PasteDispatch::Unavailable;
         }
@@ -4793,7 +5092,7 @@ impl App {
         self.editor_visible = false;
         self.apply_page_visibility(cx);
         self.minimize_main_window(cx);
-        spawn_platform_paste_command(settings.quick_paste_paste_delay_ms);
+        spawn_platform_paste_command(delay_ms);
         PasteDispatch::Scheduled
     }
 
@@ -4811,6 +5110,38 @@ impl App {
             Some(Ok(true)) => {
                 self.refresh_history(cx);
                 self.set_paste_success_status(cx, self.text("app.status_copied_plain_text"));
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
+    fn text_only_paste_current_clipboard(&mut self, cx: &mut Cx) {
+        let delay_ms = self
+            .state
+            .as_ref()
+            .map(|state| state.settings.text_only_paste_delay_ms)
+            .unwrap_or(0);
+        let result = self.with_state_mut(ClientState::text_only_paste_current_clipboard);
+        match result {
+            Some(Ok(true)) => {
+                let clipboard_status = self.text("app.status_text_only_paste_ready");
+                match self.dispatch_paste_to_active_window_with_delay(cx, delay_ms) {
+                    PasteDispatch::Disabled => self.set_status_text(cx, &clipboard_status),
+                    PasteDispatch::Scheduled => {
+                        let message = self
+                            .template("app.status_paste_sent", &[("{status}", clipboard_status)]);
+                        self.set_status_text(cx, &message);
+                    }
+                    PasteDispatch::Unavailable => {
+                        let message = self.template(
+                            "app.status_paste_unavailable",
+                            &[("{status}", clipboard_status)],
+                        );
+                        self.set_status_text(cx, &message);
+                    }
+                }
             }
             Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
@@ -4919,6 +5250,85 @@ impl App {
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
         }
+    }
+
+    fn copy_first_ten_position(&mut self, cx: &mut Cx, index: usize) {
+        let Some((clip, send_paste, move_to_top)) = self.first_ten_clip_at(index) else {
+            self.set_status(cx, "app.status_no_clip");
+            return;
+        };
+        let result =
+            self.with_state_mut(|state| state.copy_clip_to_clipboard_with_order(clip, move_to_top));
+        match result {
+            Some(Ok(true)) => {
+                self.refresh_history(cx);
+                self.set_first_ten_paste_status(
+                    cx,
+                    self.template(
+                        "app.status_first_ten_copied",
+                        &[("{index}", (index + 1).to_string())],
+                    ),
+                    send_paste,
+                );
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_clip"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
+    fn copy_first_ten_position_plain_text(&mut self, cx: &mut Cx, index: usize) {
+        let Some((clip, send_paste, move_to_top)) = self.first_ten_clip_at(index) else {
+            self.set_status(cx, "app.status_no_clip");
+            return;
+        };
+        let result = self.with_state_mut(|state| {
+            state.copy_clip_plain_text_to_clipboard_with_order(clip, move_to_top)
+        });
+        match result {
+            Some(Ok(true)) => {
+                self.refresh_history(cx);
+                self.set_first_ten_paste_status(
+                    cx,
+                    self.template(
+                        "app.status_first_ten_plain_copied",
+                        &[("{index}", (index + 1).to_string())],
+                    ),
+                    send_paste,
+                );
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_plain_text_unavailable"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
+    fn first_ten_clip_at(&self, index: usize) -> Option<(Clip, bool, bool)> {
+        if index >= FIRST_TEN_ROWS {
+            return None;
+        }
+        let state = self.state.as_ref()?;
+        let settings = &state.settings;
+        let active_group_id = settings
+            .first_ten_use_active_group
+            .then_some(self.active_group_id)
+            .flatten();
+        let show_groups_in_main = settings.quick_paste_show_groups_in_main;
+        let clip = state
+            .store
+            .list_clips(history_query_limit(settings))
+            .ok()?
+            .into_iter()
+            .filter(|clip| active_group_id.is_none() || clip.group_id == active_group_id)
+            .filter(|clip| {
+                show_groups_in_main || active_group_id.is_some() || clip.group_id.is_none()
+            })
+            .nth(index)?;
+        Some((
+            clip,
+            settings.first_ten_send_paste,
+            settings.first_ten_move_to_top,
+        ))
     }
 
     fn copy_clip_by_id(&mut self, cx: &mut Cx, id: &str) {
@@ -5717,6 +6127,13 @@ impl App {
                     return;
                 }
             };
+        let font_size = match parse_u32_setting(&self.widget(cx, ids!(font_size_input)).text()) {
+            Some(value) if (8..=24).contains(&value) => value,
+            _ => {
+                self.set_status(cx, "app.status_invalid_number");
+                return;
+            }
+        };
         let paste_delay_ms =
             match parse_u32_setting(&self.widget(cx, ids!(paste_delay_input)).text()) {
                 Some(value) if value <= 5_000 => value,
@@ -5730,6 +6147,7 @@ impl App {
 
         if let Some(state) = &mut self.state {
             state.settings.quick_paste_lines_per_row = lines_per_row;
+            state.settings.quick_paste_font_size = font_size;
             state.settings.quick_paste_transparency_percent = transparency_percent;
             state.settings.quick_paste_paste_delay_ms = paste_delay_ms;
             state.settings.multi_paste_separator = multi_paste_separator;
@@ -5739,6 +6157,7 @@ impl App {
             }
         }
         self.apply_i18n(cx);
+        self.refresh_history(cx);
         self.set_status(cx, "app.status_settings_saved");
     }
 
@@ -5843,12 +6262,16 @@ impl App {
     fn save_hotkey_settings(&mut self, cx: &mut Cx) {
         let hotkeys = HotkeySettingsInput {
             show_history: self.widget(cx, ids!(hotkey_show_input)).text(),
+            show_history_2: self.widget(cx, ids!(hotkey_show_2_input)).text(),
+            show_history_3: self.widget(cx, ids!(hotkey_show_3_input)).text(),
             search: self.widget(cx, ids!(hotkey_search_input)).text(),
+            text_only_paste: self.widget(cx, ids!(hotkey_text_only_input)).text(),
             copy_selected: self.widget(cx, ids!(hotkey_copy_input)).text(),
             delete_selected: self.widget(cx, ids!(hotkey_delete_input)).text(),
             toggle_pin: self.widget(cx, ids!(hotkey_pin_input)).text(),
             edit_selected: self.widget(cx, ids!(hotkey_edit_input)).text(),
             capture_now: self.widget(cx, ids!(hotkey_capture_input)).text(),
+            copy_and_capture: self.widget(cx, ids!(hotkey_copy_capture_input)).text(),
             sync_now: self.widget(cx, ids!(hotkey_sync_input)).text(),
         };
         if let Some(invalid) = hotkeys.invalid_shortcut() {
@@ -5858,13 +6281,11 @@ impl App {
             );
             return;
         }
-        if let Some(conflict) = first_shortcut_conflict(
-            hotkeys
-                .values()
-                .into_iter()
-                .map(String::as_str)
-                .filter(|value| !value.trim().is_empty()),
-        ) {
+        let mut candidates = hotkeys.values().into_iter().cloned().collect::<Vec<_>>();
+        candidates.extend(self.current_first_ten_hotkey_values());
+        candidates.extend(self.current_copy_buffer_hotkey_values());
+        candidates.extend(self.group_and_clip_hotkey_values(None, None));
+        if let Some(conflict) = first_shortcut_conflict(candidates.iter().map(String::as_str)) {
             self.set_status_text(
                 cx,
                 &self.template("app.status_hotkey_conflict", &[("{value}", conflict)]),
@@ -5874,13 +6295,63 @@ impl App {
 
         if let Some(state) = &mut self.state {
             state.settings.hotkey_show_history = hotkeys.show_history;
+            state.settings.hotkey_show_history_2 = hotkeys.show_history_2;
+            state.settings.hotkey_show_history_3 = hotkeys.show_history_3;
             state.settings.hotkey_search = hotkeys.search;
+            state.settings.hotkey_text_only_paste = hotkeys.text_only_paste;
             state.settings.hotkey_copy_selected = hotkeys.copy_selected;
             state.settings.hotkey_delete_selected = hotkeys.delete_selected;
             state.settings.hotkey_toggle_pin = hotkeys.toggle_pin;
             state.settings.hotkey_edit_selected = hotkeys.edit_selected;
             state.settings.hotkey_capture_now = hotkeys.capture_now;
+            state.settings.hotkey_copy_and_capture = hotkeys.copy_and_capture;
             state.settings.hotkey_sync_now = hotkeys.sync_now;
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.register_global_hotkeys();
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn save_first_ten_settings(&mut self, cx: &mut Cx) {
+        let mut hotkeys = Vec::new();
+        let mut plain_hotkeys = Vec::new();
+        for index in 0..FIRST_TEN_ROWS {
+            hotkeys.push(self.widget(cx, first_ten_input_id(index)).text());
+            plain_hotkeys.push(self.widget(cx, first_ten_plain_input_id(index)).text());
+        }
+
+        if let Some(invalid) = hotkeys
+            .iter()
+            .chain(plain_hotkeys.iter())
+            .find(|value| !value.trim().is_empty() && Shortcut::parse(value).is_none())
+            .cloned()
+        {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_hotkey_invalid", &[("{value}", invalid)]),
+            );
+            return;
+        }
+
+        let mut candidates = self.current_main_hotkey_values();
+        candidates.extend(self.current_copy_buffer_hotkey_values());
+        candidates.extend(hotkeys.iter().cloned());
+        candidates.extend(plain_hotkeys.iter().cloned());
+        candidates.extend(self.group_and_clip_hotkey_values(None, None));
+        if let Some(conflict) = first_shortcut_conflict(candidates.iter().map(String::as_str)) {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_hotkey_conflict", &[("{value}", conflict)]),
+            );
+            return;
+        }
+
+        if let Some(state) = &mut self.state {
+            state.settings.first_ten_hotkeys = hotkeys;
+            state.settings.first_ten_plain_hotkeys = plain_hotkeys;
             if let Err(error) = state.persist_settings() {
                 self.set_status_text(cx, &error.to_string());
                 return;
@@ -5922,13 +6393,13 @@ impl App {
             );
             return;
         }
-        if let Some(conflict) = first_shortcut_conflict(
-            copy.iter()
-                .chain(paste.iter())
-                .chain(cut.iter())
-                .map(String::as_str)
-                .filter(|value| !value.trim().is_empty()),
-        ) {
+        let mut candidates = self.current_main_hotkey_values();
+        candidates.extend(self.current_first_ten_hotkey_values());
+        candidates.extend(copy.iter().cloned());
+        candidates.extend(paste.iter().cloned());
+        candidates.extend(cut.iter().cloned());
+        candidates.extend(self.group_and_clip_hotkey_values(None, None));
+        if let Some(conflict) = first_shortcut_conflict(candidates.iter().map(String::as_str)) {
             self.set_status_text(
                 cx,
                 &self.template("app.status_hotkey_conflict", &[("{value}", conflict)]),
@@ -6063,6 +6534,89 @@ impl App {
         }
     }
 
+    fn current_main_hotkey_values(&self) -> Vec<String> {
+        self.state
+            .as_ref()
+            .map(|state| {
+                [
+                    &state.settings.hotkey_show_history,
+                    &state.settings.hotkey_show_history_2,
+                    &state.settings.hotkey_show_history_3,
+                    &state.settings.hotkey_search,
+                    &state.settings.hotkey_text_only_paste,
+                    &state.settings.hotkey_copy_selected,
+                    &state.settings.hotkey_delete_selected,
+                    &state.settings.hotkey_toggle_pin,
+                    &state.settings.hotkey_edit_selected,
+                    &state.settings.hotkey_capture_now,
+                    &state.settings.hotkey_copy_and_capture,
+                    &state.settings.hotkey_sync_now,
+                ]
+                .into_iter()
+                .map(|value| value.to_owned())
+                .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn current_copy_buffer_hotkey_values(&self) -> Vec<String> {
+        self.state
+            .as_ref()
+            .map(|state| {
+                state
+                    .settings
+                    .copy_buffer_copy_hotkeys
+                    .iter()
+                    .chain(state.settings.copy_buffer_paste_hotkeys.iter())
+                    .chain(state.settings.copy_buffer_cut_hotkeys.iter())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn current_first_ten_hotkey_values(&self) -> Vec<String> {
+        self.state
+            .as_ref()
+            .map(|state| {
+                state
+                    .settings
+                    .first_ten_hotkeys
+                    .iter()
+                    .chain(state.settings.first_ten_plain_hotkeys.iter())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn group_and_clip_hotkey_values(
+        &self,
+        exclude_group_id: Option<i64>,
+        exclude_clip_id: Option<&str>,
+    ) -> Vec<String> {
+        let Some(state) = self.state.as_ref() else {
+            return Vec::new();
+        };
+        let mut values = state
+            .groups
+            .iter()
+            .filter(|group| Some(group.id) != exclude_group_id)
+            .map(|group| group.hotkey.clone())
+            .collect::<Vec<_>>();
+        values.extend(
+            state
+                .store
+                .list_clips(history_query_limit(&state.settings))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|clip| exclude_clip_id != Some(clip.id.as_str()))
+                .filter_map(|clip| clip.hotkey)
+                .collect::<Vec<_>>(),
+        );
+        values
+    }
+
     fn shortcut_matches(
         &self,
         shortcut: impl FnOnce(&Settings) -> &String,
@@ -6127,12 +6681,16 @@ impl App {
 
         let setting_hotkeys = [
             &state.settings.hotkey_show_history,
+            &state.settings.hotkey_show_history_2,
+            &state.settings.hotkey_show_history_3,
             &state.settings.hotkey_search,
+            &state.settings.hotkey_text_only_paste,
             &state.settings.hotkey_copy_selected,
             &state.settings.hotkey_delete_selected,
             &state.settings.hotkey_toggle_pin,
             &state.settings.hotkey_edit_selected,
             &state.settings.hotkey_capture_now,
+            &state.settings.hotkey_copy_and_capture,
             &state.settings.hotkey_sync_now,
         ];
         setting_hotkeys
@@ -6144,6 +6702,8 @@ impl App {
                 .iter()
                 .chain(state.settings.copy_buffer_paste_hotkeys.iter())
                 .chain(state.settings.copy_buffer_cut_hotkeys.iter())
+                .chain(state.settings.first_ten_hotkeys.iter())
+                .chain(state.settings.first_ten_plain_hotkeys.iter())
                 .any(|hotkey| shortcut_canonical(hotkey).as_deref() == Some(canonical.as_str()))
             || state.groups.iter().any(|group| {
                 shortcut_canonical(&group.hotkey).as_deref() == Some(canonical.as_str())
@@ -6170,12 +6730,16 @@ impl App {
 
         let setting_hotkeys = [
             &state.settings.hotkey_show_history,
+            &state.settings.hotkey_show_history_2,
+            &state.settings.hotkey_show_history_3,
             &state.settings.hotkey_search,
+            &state.settings.hotkey_text_only_paste,
             &state.settings.hotkey_copy_selected,
             &state.settings.hotkey_delete_selected,
             &state.settings.hotkey_toggle_pin,
             &state.settings.hotkey_edit_selected,
             &state.settings.hotkey_capture_now,
+            &state.settings.hotkey_copy_and_capture,
             &state.settings.hotkey_sync_now,
         ];
         setting_hotkeys
@@ -6187,6 +6751,8 @@ impl App {
                 .iter()
                 .chain(state.settings.copy_buffer_paste_hotkeys.iter())
                 .chain(state.settings.copy_buffer_cut_hotkeys.iter())
+                .chain(state.settings.first_ten_hotkeys.iter())
+                .chain(state.settings.first_ten_plain_hotkeys.iter())
                 .any(|hotkey| shortcut_canonical(hotkey).as_deref() == Some(canonical.as_str()))
             || state.groups.iter().any(|group| {
                 group.id != exclude_group_id
@@ -6319,7 +6885,13 @@ impl App {
                 self.show_main_page(cx);
             }
             GlobalHotkeyAction::CaptureNow => self.capture_clipboard(cx),
+            GlobalHotkeyAction::CopyAndCapture => self.copy_and_capture_clipboard(cx),
             GlobalHotkeyAction::SyncNow => self.sync_now(cx),
+            GlobalHotkeyAction::TextOnlyPaste => self.text_only_paste_current_clipboard(cx),
+            GlobalHotkeyAction::FirstTen(index) => self.copy_first_ten_position(cx, index),
+            GlobalHotkeyAction::FirstTenPlainText(index) => {
+                self.copy_first_ten_position_plain_text(cx, index);
+            }
             GlobalHotkeyAction::Clip(id) => self.copy_clip_by_id(cx, &id),
             GlobalHotkeyAction::Group(id) => self.set_group_filter_by_id(cx, id),
             GlobalHotkeyAction::CopyBufferCopy(index) => {
@@ -6658,6 +7230,20 @@ impl ClientState {
         Ok(true)
     }
 
+    fn text_only_paste_current_clipboard(&mut self) -> Result<bool> {
+        let text = {
+            let clipboard = self.clipboard_mut()?;
+            let Some(text) = read_optional_clipboard(clipboard.get_text())? else {
+                return Ok(false);
+            };
+            clipboard.set_text(text.clone())?;
+            text
+        };
+        self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
+        self.record_paste()?;
+        Ok(true)
+    }
+
     fn copy_selected_transformed(&mut self, transform: TextTransform) -> Result<bool> {
         let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
@@ -6807,6 +7393,16 @@ impl ClientState {
     }
 
     fn copy_clip_to_clipboard(&mut self, clip: Clip) -> Result<bool> {
+        let update_order =
+            self.settings.quick_paste_update_order_on_copy && clip.deleted_at.is_none();
+        self.copy_clip_to_clipboard_with_order(clip, update_order)
+    }
+
+    fn copy_clip_to_clipboard_with_order(
+        &mut self,
+        clip: Clip,
+        update_order: bool,
+    ) -> Result<bool> {
         let copied_hash = {
             let clipboard = self.clipboard_mut()?;
             if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
@@ -6822,7 +7418,7 @@ impl ClientState {
             self.selected_id = Some(clip.id.clone());
             self.selected_ids.clear();
             self.mark_clip_pasted(&clip.id);
-            if self.settings.quick_paste_update_order_on_copy && clip.deleted_at.is_none() {
+            if update_order && clip.deleted_at.is_none() {
                 let _ = self.store.move_clip_to_top(&clip.id)?;
             }
             self.record_paste()?;
@@ -6830,6 +7426,33 @@ impl ClientState {
         } else {
             Ok(false)
         }
+    }
+
+    fn copy_clip_plain_text_to_clipboard_with_order(
+        &mut self,
+        clip: Clip,
+        update_order: bool,
+    ) -> Result<bool> {
+        let Some(text) = plain_text_payload(&clip) else {
+            return Ok(false);
+        };
+        let delay_ms = self.settings.text_only_paste_delay_ms;
+        let text = {
+            let clipboard = self.clipboard_mut()?;
+            let text = render_template_text_for_clip(&clip, text, clipboard);
+            apply_text_paste_delay(delay_ms);
+            clipboard.set_text(text.clone())?;
+            text
+        };
+        self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
+        self.selected_id = Some(clip.id.clone());
+        self.selected_ids.clear();
+        self.mark_clip_pasted(&clip.id);
+        if update_order && clip.deleted_at.is_none() {
+            let _ = self.store.move_clip_to_top(&clip.id)?;
+        }
+        self.record_paste()?;
+        Ok(true)
     }
 
     fn put_selected_on_copy_buffer(&mut self, index: usize, cut: bool) -> Result<bool> {
@@ -7641,6 +8264,28 @@ fn platform_paste_command_available() -> bool {
     }
 }
 
+fn platform_copy_command_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if env::var_os("WAYLAND_DISPLAY").is_some() {
+            command_exists("wtype") || command_exists("ydotool") || command_exists("dotool")
+        } else {
+            command_exists("xdotool")
+                || command_exists("wtype")
+                || command_exists("ydotool")
+                || command_exists("dotool")
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        true
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
 fn run_platform_paste_command() -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -7677,6 +8322,42 @@ fn run_platform_paste_command() -> Result<()> {
     }
 }
 
+fn run_platform_copy_command() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        run_linux_copy_command()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("osascript")
+            .args([
+                "-e",
+                "tell application \"System Events\" to keystroke \"c\" using command down",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^c')",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        anyhow::bail!("copy automation is not supported on this platform")
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn run_linux_paste_command() -> Result<()> {
     if env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -7703,6 +8384,34 @@ fn run_linux_paste_command() -> Result<()> {
     }
 
     anyhow::bail!("no supported Linux paste command found")
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_copy_command() -> Result<()> {
+    if env::var_os("WAYLAND_DISPLAY").is_some() {
+        for command in [
+            paste_command("wtype", &["-M", "ctrl", "-P", "c", "-p", "c", "-m", "ctrl"]),
+            paste_command("ydotool", &["key", "29:1", "46:1", "46:0", "29:0"]),
+            paste_command("dotool", &["key", "ctrl+c"]),
+        ] {
+            if run_available_command(command)? {
+                return Ok(());
+            }
+        }
+    }
+
+    for command in [
+        paste_command("xdotool", &["key", "--clearmodifiers", "ctrl+c"]),
+        paste_command("wtype", &["-M", "ctrl", "-P", "c", "-p", "c", "-m", "ctrl"]),
+        paste_command("ydotool", &["key", "29:1", "46:1", "46:0", "29:0"]),
+        paste_command("dotool", &["key", "ctrl+c"]),
+    ] {
+        if run_available_command(command)? {
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("no supported Linux copy command found")
 }
 
 #[cfg(target_os = "linux")]
@@ -8430,6 +9139,12 @@ fn history_query_limit(settings: &Settings) -> u32 {
     }
 }
 
+fn history_row_height(settings: &Settings) -> f64 {
+    let line_count = settings.quick_paste_lines_per_row.clamp(1, 5) as f64;
+    let line_height = (settings.quick_paste_font_size.clamp(8, 24) as f64 + 20.0).max(30.0);
+    line_count * line_height
+}
+
 fn query_history_clips(
     store: &Store,
     query: &str,
@@ -8857,25 +9572,33 @@ enum CaptureOutcome {
 
 struct HotkeySettingsInput {
     show_history: String,
+    show_history_2: String,
+    show_history_3: String,
     search: String,
+    text_only_paste: String,
     copy_selected: String,
     delete_selected: String,
     toggle_pin: String,
     edit_selected: String,
     capture_now: String,
+    copy_and_capture: String,
     sync_now: String,
 }
 
 impl HotkeySettingsInput {
-    fn values(&self) -> [&String; 8] {
+    fn values(&self) -> [&String; 12] {
         [
             &self.show_history,
+            &self.show_history_2,
+            &self.show_history_3,
             &self.search,
+            &self.text_only_paste,
             &self.copy_selected,
             &self.delete_selected,
             &self.toggle_pin,
             &self.edit_selected,
             &self.capture_now,
+            &self.copy_and_capture,
             &self.sync_now,
         ]
     }
@@ -8895,6 +9618,7 @@ struct Shortcut {
     primary: bool,
     shift: bool,
     alt: bool,
+    logo: bool,
     key_code: KeyCode,
 }
 
@@ -8903,6 +9627,7 @@ impl Shortcut {
         let mut primary = false;
         let mut shift = false;
         let mut alt = false;
+        let mut logo = false;
         let mut key_code = None;
 
         for token in value
@@ -8915,6 +9640,7 @@ impl Shortcut {
                 "ctrl" | "control" | "cmd" | "command" | "primary" => primary = true,
                 "shift" => shift = true,
                 "alt" | "option" => alt = true,
+                "win" | "windows" | "super" | "logo" | "meta" => logo = true,
                 _ => key_code = parse_key_code(&normalized),
             }
         }
@@ -8923,26 +9649,35 @@ impl Shortcut {
             primary,
             shift,
             alt,
+            logo,
             key_code: key_code?,
         })
     }
 
     fn matches(self, event: &KeyEvent) -> bool {
+        let logo_matches = if self.logo {
+            event.modifiers.logo
+        } else if cfg!(target_vendor = "apple") && self.primary {
+            true
+        } else {
+            !event.modifiers.logo
+        };
         self.key_code == event.key_code
             && self.primary == event.modifiers.is_primary()
             && self.shift == event.modifiers.shift
             && self.alt == event.modifiers.alt
+            && logo_matches
     }
 
     fn canonical(self) -> String {
         format!(
-            "{}:{}:{}:{:?}",
-            self.primary, self.shift, self.alt, self.key_code
+            "{}:{}:{}:{}:{:?}",
+            self.primary, self.shift, self.alt, self.logo, self.key_code
         )
     }
 
     fn has_global_modifier(self) -> bool {
-        self.primary || self.shift || self.alt
+        self.primary || self.shift || self.alt || self.logo
     }
 
     fn is_function_key(self) -> bool {
@@ -8999,8 +9734,26 @@ fn build_global_hotkey_registry(state: &ClientState) -> Result<Option<Registered
     add_global_hotkey(
         &mut bindings,
         &mut seen,
+        &state.settings.hotkey_show_history_2,
+        GlobalHotkeyAction::ShowHistory,
+    );
+    add_global_hotkey(
+        &mut bindings,
+        &mut seen,
+        &state.settings.hotkey_show_history_3,
+        GlobalHotkeyAction::ShowHistory,
+    );
+    add_global_hotkey(
+        &mut bindings,
+        &mut seen,
         &state.settings.hotkey_capture_now,
         GlobalHotkeyAction::CaptureNow,
+    );
+    add_global_hotkey(
+        &mut bindings,
+        &mut seen,
+        &state.settings.hotkey_copy_and_capture,
+        GlobalHotkeyAction::CopyAndCapture,
     );
     add_global_hotkey(
         &mut bindings,
@@ -9008,6 +9761,41 @@ fn build_global_hotkey_registry(state: &ClientState) -> Result<Option<Registered
         &state.settings.hotkey_sync_now,
         GlobalHotkeyAction::SyncNow,
     );
+    add_global_hotkey(
+        &mut bindings,
+        &mut seen,
+        &state.settings.hotkey_text_only_paste,
+        GlobalHotkeyAction::TextOnlyPaste,
+    );
+
+    for (index, hotkey) in state
+        .settings
+        .first_ten_hotkeys
+        .iter()
+        .take(FIRST_TEN_ROWS)
+        .enumerate()
+    {
+        add_global_hotkey(
+            &mut bindings,
+            &mut seen,
+            hotkey,
+            GlobalHotkeyAction::FirstTen(index),
+        );
+    }
+    for (index, hotkey) in state
+        .settings
+        .first_ten_plain_hotkeys
+        .iter()
+        .take(FIRST_TEN_ROWS)
+        .enumerate()
+    {
+        add_global_hotkey(
+            &mut bindings,
+            &mut seen,
+            hotkey,
+            GlobalHotkeyAction::FirstTenPlainText(index),
+        );
+    }
 
     for group in &state.groups {
         if !group.hotkey.trim().is_empty() {
@@ -9097,6 +9885,9 @@ fn shortcut_to_global_hotkey(value: &str) -> Option<HotKey> {
     }
     if shortcut.alt {
         modifiers |= GlobalHotKeyModifiers::ALT;
+    }
+    if shortcut.logo {
+        modifiers |= GlobalHotKeyModifiers::SUPER;
     }
     Some(HotKey::new(
         (!modifiers.is_empty()).then_some(modifiers),
@@ -9353,6 +10144,66 @@ fn copy_buffer_sound_id(index: usize) -> &'static [LiveId] {
         2 => ids!(copy_buffer_3_sound_button),
         3 => ids!(copy_buffer_4_sound_button),
         _ => ids!(copy_buffer_5_sound_button),
+    }
+}
+
+fn first_ten_label_id(index: usize) -> &'static [LiveId] {
+    match index {
+        0 => ids!(first_ten_1_label),
+        1 => ids!(first_ten_2_label),
+        2 => ids!(first_ten_3_label),
+        3 => ids!(first_ten_4_label),
+        4 => ids!(first_ten_5_label),
+        5 => ids!(first_ten_6_label),
+        6 => ids!(first_ten_7_label),
+        7 => ids!(first_ten_8_label),
+        8 => ids!(first_ten_9_label),
+        _ => ids!(first_ten_10_label),
+    }
+}
+
+fn first_ten_input_id(index: usize) -> &'static [LiveId] {
+    match index {
+        0 => ids!(first_ten_1_input),
+        1 => ids!(first_ten_2_input),
+        2 => ids!(first_ten_3_input),
+        3 => ids!(first_ten_4_input),
+        4 => ids!(first_ten_5_input),
+        5 => ids!(first_ten_6_input),
+        6 => ids!(first_ten_7_input),
+        7 => ids!(first_ten_8_input),
+        8 => ids!(first_ten_9_input),
+        _ => ids!(first_ten_10_input),
+    }
+}
+
+fn first_ten_plain_label_id(index: usize) -> &'static [LiveId] {
+    match index {
+        0 => ids!(first_ten_plain_1_label),
+        1 => ids!(first_ten_plain_2_label),
+        2 => ids!(first_ten_plain_3_label),
+        3 => ids!(first_ten_plain_4_label),
+        4 => ids!(first_ten_plain_5_label),
+        5 => ids!(first_ten_plain_6_label),
+        6 => ids!(first_ten_plain_7_label),
+        7 => ids!(first_ten_plain_8_label),
+        8 => ids!(first_ten_plain_9_label),
+        _ => ids!(first_ten_plain_10_label),
+    }
+}
+
+fn first_ten_plain_input_id(index: usize) -> &'static [LiveId] {
+    match index {
+        0 => ids!(first_ten_plain_1_input),
+        1 => ids!(first_ten_plain_2_input),
+        2 => ids!(first_ten_plain_3_input),
+        3 => ids!(first_ten_plain_4_input),
+        4 => ids!(first_ten_plain_5_input),
+        5 => ids!(first_ten_plain_6_input),
+        6 => ids!(first_ten_plain_7_input),
+        7 => ids!(first_ten_plain_8_input),
+        8 => ids!(first_ten_plain_9_input),
+        _ => ids!(first_ten_plain_10_input),
     }
 }
 
@@ -9648,12 +10499,16 @@ mod tests {
     fn blank_configured_hotkeys_disable_actions() {
         let input = HotkeySettingsInput {
             show_history: String::new(),
+            show_history_2: String::new(),
+            show_history_3: String::new(),
             search: "Ctrl+F".to_owned(),
+            text_only_paste: String::new(),
             copy_selected: "Enter".to_owned(),
             delete_selected: "Delete".to_owned(),
             toggle_pin: "Ctrl+P".to_owned(),
             edit_selected: "Ctrl+E".to_owned(),
             capture_now: String::new(),
+            copy_and_capture: String::new(),
             sync_now: "Ctrl+Shift+S".to_owned(),
         };
 
@@ -9687,6 +10542,16 @@ mod tests {
         assert_eq!(number_key_index(KeyCode::Key0), Some(9));
         assert_eq!(number_key_index(KeyCode::Numpad0), Some(9));
         assert_eq!(paste_position_key_index(KeyCode::Key0), Some(9));
+    }
+
+    #[test]
+    fn shortcut_parser_accepts_ditto_win_modifier_name() {
+        let shortcut = Shortcut::parse("Win+Alt+1").unwrap();
+
+        assert!(shortcut.logo);
+        assert!(shortcut.alt);
+        assert_eq!(shortcut.key_code, KeyCode::Key1);
+        assert!(shortcut_to_global_hotkey("Super+1").is_some());
     }
 
     #[test]

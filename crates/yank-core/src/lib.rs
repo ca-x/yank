@@ -141,7 +141,13 @@ pub struct Settings {
     pub multi_paste_separator: String,
     pub quick_paste_description_word_wrap: bool,
     pub quick_paste_lines_per_row: u32,
+    pub quick_paste_font_size: u32,
     pub quick_paste_transparency_percent: u32,
+    pub first_ten_hotkeys: Vec<String>,
+    pub first_ten_plain_hotkeys: Vec<String>,
+    pub first_ten_send_paste: bool,
+    pub first_ten_move_to_top: bool,
+    pub first_ten_use_active_group: bool,
     pub text_only_paste_delay_ms: u32,
     pub expire_after_days: u32,
     pub max_database_mb: u32,
@@ -157,12 +163,16 @@ pub struct Settings {
     pub total_paste_count: u64,
     pub trip_paste_count: u64,
     pub hotkey_show_history: String,
+    pub hotkey_show_history_2: String,
+    pub hotkey_show_history_3: String,
     pub hotkey_search: String,
+    pub hotkey_text_only_paste: String,
     pub hotkey_copy_selected: String,
     pub hotkey_delete_selected: String,
     pub hotkey_toggle_pin: String,
     pub hotkey_edit_selected: String,
     pub hotkey_capture_now: String,
+    pub hotkey_copy_and_capture: String,
     pub hotkey_sync_now: String,
 }
 
@@ -209,7 +219,13 @@ impl Default for Settings {
             multi_paste_separator: "\n".to_owned(),
             quick_paste_description_word_wrap: true,
             quick_paste_lines_per_row: 1,
+            quick_paste_font_size: 10,
             quick_paste_transparency_percent: 0,
+            first_ten_hotkeys: vec![String::new(); 10],
+            first_ten_plain_hotkeys: vec![String::new(); 10],
+            first_ten_send_paste: true,
+            first_ten_move_to_top: false,
+            first_ten_use_active_group: false,
             text_only_paste_delay_ms: 0,
             expire_after_days: 0,
             max_database_mb: 500,
@@ -225,12 +241,16 @@ impl Default for Settings {
             total_paste_count: 0,
             trip_paste_count: 0,
             hotkey_show_history: "Ctrl+Backtick".to_owned(),
+            hotkey_show_history_2: String::new(),
+            hotkey_show_history_3: String::new(),
             hotkey_search: "Ctrl+F".to_owned(),
+            hotkey_text_only_paste: String::new(),
             hotkey_copy_selected: "Enter".to_owned(),
             hotkey_delete_selected: "Delete".to_owned(),
             hotkey_toggle_pin: "Ctrl+P".to_owned(),
             hotkey_edit_selected: "Ctrl+E".to_owned(),
             hotkey_capture_now: "Ctrl+Shift+C".to_owned(),
+            hotkey_copy_and_capture: String::new(),
             hotkey_sync_now: "Ctrl+Shift+S".to_owned(),
         }
     }
@@ -1624,9 +1644,23 @@ impl Store {
             "quick_paste_lines_per_row",
             settings.quick_paste_lines_per_row,
         )?;
+        settings.quick_paste_font_size =
+            self.get_u32_setting("quick_paste_font_size", settings.quick_paste_font_size)?;
         settings.quick_paste_transparency_percent = self.get_u32_setting(
             "quick_paste_transparency_percent",
             settings.quick_paste_transparency_percent,
+        )?;
+        settings.first_ten_hotkeys =
+            self.get_json_setting("first_ten_hotkeys", settings.first_ten_hotkeys)?;
+        settings.first_ten_plain_hotkeys =
+            self.get_json_setting("first_ten_plain_hotkeys", settings.first_ten_plain_hotkeys)?;
+        settings.first_ten_send_paste =
+            self.get_bool_setting("first_ten_send_paste", settings.first_ten_send_paste)?;
+        settings.first_ten_move_to_top =
+            self.get_bool_setting("first_ten_move_to_top", settings.first_ten_move_to_top)?;
+        settings.first_ten_use_active_group = self.get_bool_setting(
+            "first_ten_use_active_group",
+            settings.first_ten_use_active_group,
         )?;
         settings.text_only_paste_delay_ms = self.get_u32_setting(
             "text_only_paste_delay_ms",
@@ -1661,8 +1695,14 @@ impl Store {
             self.get_u64_setting("trip_paste_count", settings.trip_paste_count)?;
         settings.hotkey_show_history =
             self.get_string_setting("hotkey_show_history", settings.hotkey_show_history)?;
+        settings.hotkey_show_history_2 =
+            self.get_string_setting("hotkey_show_history_2", settings.hotkey_show_history_2)?;
+        settings.hotkey_show_history_3 =
+            self.get_string_setting("hotkey_show_history_3", settings.hotkey_show_history_3)?;
         settings.hotkey_search =
             self.get_string_setting("hotkey_search", settings.hotkey_search)?;
+        settings.hotkey_text_only_paste =
+            self.get_string_setting("hotkey_text_only_paste", settings.hotkey_text_only_paste)?;
         settings.hotkey_copy_selected =
             self.get_string_setting("hotkey_copy_selected", settings.hotkey_copy_selected)?;
         settings.hotkey_delete_selected =
@@ -1673,6 +1713,8 @@ impl Store {
             self.get_string_setting("hotkey_edit_selected", settings.hotkey_edit_selected)?;
         settings.hotkey_capture_now =
             self.get_string_setting("hotkey_capture_now", settings.hotkey_capture_now)?;
+        settings.hotkey_copy_and_capture =
+            self.get_string_setting("hotkey_copy_and_capture", settings.hotkey_copy_and_capture)?;
         settings.hotkey_sync_now =
             self.get_string_setting("hotkey_sync_now", settings.hotkey_sync_now)?;
         Ok(settings)
@@ -1928,8 +1970,38 @@ impl Store {
             &settings.quick_paste_lines_per_row.to_string(),
         )?;
         self.set_setting(
+            "quick_paste_font_size",
+            &settings.quick_paste_font_size.to_string(),
+        )?;
+        self.set_setting(
             "quick_paste_transparency_percent",
             &settings.quick_paste_transparency_percent.to_string(),
+        )?;
+        self.set_json_setting("first_ten_hotkeys", &settings.first_ten_hotkeys)?;
+        self.set_json_setting("first_ten_plain_hotkeys", &settings.first_ten_plain_hotkeys)?;
+        self.set_setting(
+            "first_ten_send_paste",
+            if settings.first_ten_send_paste {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "first_ten_move_to_top",
+            if settings.first_ten_move_to_top {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "first_ten_use_active_group",
+            if settings.first_ten_use_active_group {
+                "true"
+            } else {
+                "false"
+            },
         )?;
         self.set_setting(
             "text_only_paste_delay_ms",
@@ -1955,12 +2027,16 @@ impl Store {
         self.set_setting("total_paste_count", &settings.total_paste_count.to_string())?;
         self.set_setting("trip_paste_count", &settings.trip_paste_count.to_string())?;
         self.set_setting("hotkey_show_history", &settings.hotkey_show_history)?;
+        self.set_setting("hotkey_show_history_2", &settings.hotkey_show_history_2)?;
+        self.set_setting("hotkey_show_history_3", &settings.hotkey_show_history_3)?;
         self.set_setting("hotkey_search", &settings.hotkey_search)?;
+        self.set_setting("hotkey_text_only_paste", &settings.hotkey_text_only_paste)?;
         self.set_setting("hotkey_copy_selected", &settings.hotkey_copy_selected)?;
         self.set_setting("hotkey_delete_selected", &settings.hotkey_delete_selected)?;
         self.set_setting("hotkey_toggle_pin", &settings.hotkey_toggle_pin)?;
         self.set_setting("hotkey_edit_selected", &settings.hotkey_edit_selected)?;
         self.set_setting("hotkey_capture_now", &settings.hotkey_capture_now)?;
+        self.set_setting("hotkey_copy_and_capture", &settings.hotkey_copy_and_capture)?;
         self.set_setting("hotkey_sync_now", &settings.hotkey_sync_now)?;
         Ok(())
     }
@@ -2564,7 +2640,17 @@ mod tests {
         settings.sync_enabled = true;
         settings.total_paste_count = 7;
         settings.trip_paste_count = 3;
+        settings.hotkey_show_history_2 = "Super+V".to_owned();
+        settings.hotkey_show_history_3 = "Ctrl+Alt+V".to_owned();
+        settings.hotkey_text_only_paste = "Ctrl+Alt+T".to_owned();
+        settings.hotkey_copy_and_capture = "Ctrl+Alt+C".to_owned();
         settings.quick_paste_search_scope = "text".to_owned();
+        settings.quick_paste_font_size = 13;
+        settings.first_ten_hotkeys = vec!["Ctrl+Alt+1".to_owned(); 10];
+        settings.first_ten_plain_hotkeys = vec!["Ctrl+Shift+Alt+1".to_owned(); 10];
+        settings.first_ten_send_paste = false;
+        settings.first_ten_move_to_top = true;
+        settings.first_ten_use_active_group = true;
         settings.multi_paste_separator = "\n---\n".to_owned();
 
         store.save_settings(&settings).unwrap();
