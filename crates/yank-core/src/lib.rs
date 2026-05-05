@@ -120,6 +120,9 @@ pub struct Settings {
     pub show_in_taskbar: bool,
     pub quick_paste_position: String,
     pub quick_paste_find_as_you_type: bool,
+    pub quick_paste_regex_search: bool,
+    pub quick_paste_wildcard_search: bool,
+    pub quick_paste_case_sensitive_search: bool,
     pub quick_paste_show_hotkey_text: bool,
     pub quick_paste_show_leading_whitespace: bool,
     pub quick_paste_show_thumbnails: bool,
@@ -147,6 +150,8 @@ pub struct Settings {
     pub copy_buffer_paste_hotkeys: Vec<String>,
     pub copy_buffer_cut_hotkeys: Vec<String>,
     pub copy_buffer_play_sound: Vec<bool>,
+    pub total_paste_count: u64,
+    pub trip_paste_count: u64,
     pub hotkey_show_history: String,
     pub hotkey_search: String,
     pub hotkey_copy_selected: String,
@@ -179,6 +184,9 @@ impl Default for Settings {
             show_in_taskbar: true,
             quick_paste_position: "cursor".to_owned(),
             quick_paste_find_as_you_type: true,
+            quick_paste_regex_search: false,
+            quick_paste_wildcard_search: false,
+            quick_paste_case_sensitive_search: false,
             quick_paste_show_hotkey_text: true,
             quick_paste_show_leading_whitespace: false,
             quick_paste_show_thumbnails: true,
@@ -206,6 +214,8 @@ impl Default for Settings {
             copy_buffer_paste_hotkeys: default_copy_buffer_hotkeys("Ctrl+Shift+V"),
             copy_buffer_cut_hotkeys: default_copy_buffer_hotkeys("Ctrl+Shift+X"),
             copy_buffer_play_sound: vec![false; 5],
+            total_paste_count: 0,
+            trip_paste_count: 0,
             hotkey_show_history: "Ctrl+Backtick".to_owned(),
             hotkey_search: "Ctrl+F".to_owned(),
             hotkey_copy_selected: "Enter".to_owned(),
@@ -218,8 +228,8 @@ impl Default for Settings {
     }
 }
 
-fn default_copy_buffer_hotkeys(prefix: &str) -> Vec<String> {
-    (1..=5).map(|index| format!("{prefix}+{index}")).collect()
+fn default_copy_buffer_hotkeys(_prefix: &str) -> Vec<String> {
+    vec![String::new(); 5]
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -242,6 +252,22 @@ impl ClipFormat {
         Self {
             format: "text/html;charset=utf-8".to_owned(),
             mime: Some("text/html".to_owned()),
+            data: value.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn rtf(value: &str) -> Self {
+        Self {
+            format: "text/rtf;charset=utf-8".to_owned(),
+            mime: Some("text/rtf".to_owned()),
+            data: value.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn color(value: &str) -> Self {
+        Self {
+            format: "application/x-yank-color".to_owned(),
+            mime: Some("text/plain".to_owned()),
             data: value.as_bytes().to_vec(),
         }
     }
@@ -270,6 +296,14 @@ impl ClipFormat {
         self.mime.as_deref() == Some("text/html") || self.format.starts_with("text/html")
     }
 
+    pub fn is_rtf(&self) -> bool {
+        self.mime.as_deref() == Some("text/rtf") || self.format.starts_with("text/rtf")
+    }
+
+    pub fn is_color(&self) -> bool {
+        self.format == "application/x-yank-color"
+    }
+
     pub fn text_value(&self) -> Option<&str> {
         if self.is_text() {
             std::str::from_utf8(&self.data).ok()
@@ -280,6 +314,22 @@ impl ClipFormat {
 
     pub fn html_value(&self) -> Option<&str> {
         if self.is_html() {
+            std::str::from_utf8(&self.data).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn rtf_value(&self) -> Option<&str> {
+        if self.is_rtf() {
+            std::str::from_utf8(&self.data).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn color_value(&self) -> Option<&str> {
+        if self.is_color() {
             std::str::from_utf8(&self.data).ok()
         } else {
             None
@@ -492,6 +542,11 @@ impl Store {
                 sort_order INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS copy_buffers (
+                slot INTEGER PRIMARY KEY NOT NULL,
+                clip_id TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS sync_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 clip_id TEXT NOT NULL,
@@ -504,6 +559,7 @@ impl Store {
             CREATE INDEX IF NOT EXISTS clips_device_idx ON clips(device_id);
             CREATE INDEX IF NOT EXISTS clips_group_idx ON clips(group_id);
             CREATE INDEX IF NOT EXISTS clip_groups_sort_idx ON clip_groups(sort_order ASC, name ASC);
+            CREATE INDEX IF NOT EXISTS copy_buffers_clip_idx ON copy_buffers(clip_id);
             "#,
         )?;
         self.ensure_column(
@@ -851,6 +907,50 @@ impl Store {
         self.get_group(id)
     }
 
+    pub fn set_group_hotkey(&self, id: i64, hotkey: &str) -> Result<Option<Group>> {
+        let changed = self.conn.execute(
+            "UPDATE clip_groups SET hotkey = ?1 WHERE id = ?2",
+            params![hotkey.trim(), id],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.get_group(id)
+    }
+
+    pub fn move_group(&self, id: i64, delta: i64) -> Result<bool> {
+        if delta == 0 {
+            return Ok(true);
+        }
+
+        let mut groups = self.list_groups()?;
+        let Some(index) = groups.iter().position(|group| group.id == id) else {
+            return Ok(false);
+        };
+        let target = if delta < 0 {
+            index.saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            index
+                .saturating_add(delta as usize)
+                .min(groups.len().saturating_sub(1))
+        };
+        if target == index {
+            return Ok(true);
+        }
+
+        let group = groups.remove(index);
+        groups.insert(target, group);
+        let tx = self.conn.unchecked_transaction()?;
+        for (index, group) in groups.iter().enumerate() {
+            tx.execute(
+                "UPDATE clip_groups SET sort_order = ?1 WHERE id = ?2",
+                params![index as i64, group.id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn delete_group(&self, id: i64) -> Result<bool> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -894,10 +994,95 @@ impl Store {
         Ok(changed)
     }
 
+    pub fn set_copy_buffer_clip(&self, slot: usize, clip_id: &str) -> Result<bool> {
+        let active = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM clips WHERE id = ?1 AND deleted_at IS NULL",
+                params![clip_id],
+                |_| Ok(()),
+            )
+            .optional()?;
+        if active.is_none() {
+            return Ok(false);
+        }
+
+        self.conn.execute(
+            r#"
+            INSERT INTO copy_buffers (slot, clip_id)
+            VALUES (?1, ?2)
+            ON CONFLICT(slot) DO UPDATE SET clip_id = excluded.clip_id
+            "#,
+            params![slot as i64, clip_id],
+        )?;
+        Ok(true)
+    }
+
+    pub fn copy_buffer_clip(&self, slot: usize) -> Result<Option<Clip>> {
+        let clip = self
+            .conn
+            .query_row(
+                r#"
+                SELECT c.id, c.device_id, c.description, c.primary_text, c.created_at, c.updated_at,
+                       c.deleted_at, c.content_hash, c.pinned, c.source_app, c.group_id
+                FROM copy_buffers b
+                INNER JOIN clips c ON c.id = b.clip_id
+                WHERE b.slot = ?1 AND c.deleted_at IS NULL
+                "#,
+                params![slot as i64],
+                |row| self.clip_from_row(row),
+            )
+            .optional()?;
+        clip.map(|clip| self.with_formats(clip)).transpose()
+    }
+
     pub fn export_active_clips_json(&self, path: impl AsRef<Path>) -> Result<usize> {
         let clips = self.list_clips(u32::MAX)?;
         let data = serde_json::to_vec_pretty(&clips)?;
         fs::write(path, data)?;
+        Ok(clips.len())
+    }
+
+    pub fn export_active_clips(&self, path: impl AsRef<Path>) -> Result<usize> {
+        let path = path.as_ref();
+        let clips = self.list_clips(u32::MAX)?;
+        match path.extension().and_then(|value| value.to_str()) {
+            Some(ext) if ext.eq_ignore_ascii_case("txt") => {
+                let text = clips
+                    .iter()
+                    .map(|clip| {
+                        clip.primary_text
+                            .as_deref()
+                            .unwrap_or(clip.description.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                fs::write(path, text)?;
+            }
+            Some(ext) if ext.eq_ignore_ascii_case("csv") => {
+                let mut csv =
+                    "id,created_at,updated_at,pinned,source_app,group_id,description,text\n"
+                        .to_owned();
+                for clip in &clips {
+                    csv.push_str(&format!(
+                        "{},{},{},{},{},{},{},{}\n",
+                        csv_escape(&clip.id),
+                        clip.created_at,
+                        clip.updated_at,
+                        clip.pinned as i64,
+                        csv_escape(clip.source_app.as_deref().unwrap_or_default()),
+                        clip.group_id.map(|id| id.to_string()).unwrap_or_default(),
+                        csv_escape(&clip.description),
+                        csv_escape(clip.primary_text.as_deref().unwrap_or_default()),
+                    ));
+                }
+                fs::write(path, csv)?;
+            }
+            _ => {
+                let data = serde_json::to_vec_pretty(&clips)?;
+                fs::write(path, data)?;
+            }
+        }
         Ok(clips.len())
     }
 
@@ -910,6 +1095,44 @@ impl Store {
             imported += 1;
         }
         Ok(imported)
+    }
+
+    pub fn delete_clips_older_than(&self, cutoff_updated_at: i64) -> Result<usize> {
+        let deleted_at = now_ts();
+        let changed = self.conn.execute(
+            r#"
+            UPDATE clips
+            SET deleted_at = ?1, updated_at = ?1
+            WHERE deleted_at IS NULL AND pinned = 0 AND updated_at < ?2
+            "#,
+            params![deleted_at, cutoff_updated_at],
+        )?;
+        Ok(changed)
+    }
+
+    pub fn purge_oldest_non_pinned_clips(&self, limit: u32) -> Result<usize> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let changed = self.conn.execute(
+            r#"
+            DELETE FROM clips
+            WHERE id IN (
+                SELECT id
+                FROM clips
+                WHERE pinned = 0
+                ORDER BY updated_at ASC, created_at ASC, id ASC
+                LIMIT ?1
+            )
+            "#,
+            params![limit],
+        )?;
+        Ok(changed)
+    }
+
+    pub fn vacuum(&self) -> Result<()> {
+        self.conn.execute_batch("VACUUM")?;
+        Ok(())
     }
 
     fn get_group(&self, id: i64) -> Result<Option<Group>> {
@@ -1091,6 +1314,18 @@ impl Store {
             "quick_paste_find_as_you_type",
             settings.quick_paste_find_as_you_type,
         )?;
+        settings.quick_paste_regex_search = self.get_bool_setting(
+            "quick_paste_regex_search",
+            settings.quick_paste_regex_search,
+        )?;
+        settings.quick_paste_wildcard_search = self.get_bool_setting(
+            "quick_paste_wildcard_search",
+            settings.quick_paste_wildcard_search,
+        )?;
+        settings.quick_paste_case_sensitive_search = self.get_bool_setting(
+            "quick_paste_case_sensitive_search",
+            settings.quick_paste_case_sensitive_search,
+        )?;
         settings.quick_paste_show_hotkey_text = self.get_bool_setting(
             "quick_paste_show_hotkey_text",
             settings.quick_paste_show_hotkey_text,
@@ -1176,6 +1411,10 @@ impl Store {
             self.get_json_setting("copy_buffer_cut_hotkeys", settings.copy_buffer_cut_hotkeys)?;
         settings.copy_buffer_play_sound =
             self.get_json_setting("copy_buffer_play_sound", settings.copy_buffer_play_sound)?;
+        settings.total_paste_count =
+            self.get_u64_setting("total_paste_count", settings.total_paste_count)?;
+        settings.trip_paste_count =
+            self.get_u64_setting("trip_paste_count", settings.trip_paste_count)?;
         settings.hotkey_show_history =
             self.get_string_setting("hotkey_show_history", settings.hotkey_show_history)?;
         settings.hotkey_search =
@@ -1290,6 +1529,30 @@ impl Store {
         self.set_setting(
             "quick_paste_find_as_you_type",
             if settings.quick_paste_find_as_you_type {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_regex_search",
+            if settings.quick_paste_regex_search {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_wildcard_search",
+            if settings.quick_paste_wildcard_search {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "quick_paste_case_sensitive_search",
+            if settings.quick_paste_case_sensitive_search {
                 "true"
             } else {
                 "false"
@@ -1428,6 +1691,8 @@ impl Store {
         )?;
         self.set_json_setting("copy_buffer_cut_hotkeys", &settings.copy_buffer_cut_hotkeys)?;
         self.set_json_setting("copy_buffer_play_sound", &settings.copy_buffer_play_sound)?;
+        self.set_setting("total_paste_count", &settings.total_paste_count.to_string())?;
+        self.set_setting("trip_paste_count", &settings.trip_paste_count.to_string())?;
         self.set_setting("hotkey_show_history", &settings.hotkey_show_history)?;
         self.set_setting("hotkey_search", &settings.hotkey_search)?;
         self.set_setting("hotkey_copy_selected", &settings.hotkey_copy_selected)?;
@@ -1632,6 +1897,15 @@ fn escape_like(value: &str) -> String {
         .replace('_', "\\_")
 }
 
+fn csv_escape(value: &str) -> String {
+    let escaped = value.replace('"', "\"\"");
+    if escaped.contains([',', '"', '\r', '\n']) {
+        format!("\"{escaped}\"")
+    } else {
+        escaped
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1671,6 +1945,17 @@ mod tests {
         assert_eq!(loaded.formats[1].image_rgba_dimensions(), Some((2, 1)));
         assert!(loaded.formats[2].is_html());
         assert_eq!(loaded.formats[2].html_value(), Some("<b>hello</b>"));
+    }
+
+    #[test]
+    fn recognizes_rtf_and_color_formats() {
+        let rtf = ClipFormat::rtf(r"{\rtf1 hello}");
+        let color = ClipFormat::color("#336699");
+
+        assert!(rtf.is_rtf());
+        assert_eq!(rtf.rtf_value(), Some(r"{\rtf1 hello}"));
+        assert!(color.is_color());
+        assert_eq!(color.color_value(), Some("#336699"));
     }
 
     #[test]
@@ -1725,8 +2010,49 @@ mod tests {
 
         let renamed = store.rename_group(group.id, "Signatures").unwrap().unwrap();
         assert_eq!(renamed.name, "Signatures");
+        let updated = store
+            .set_group_hotkey(group.id, "Ctrl+Alt+1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.hotkey, "Ctrl+Alt+1");
         assert!(store.delete_group(group.id).unwrap());
         assert_eq!(store.get_clip(&clip.id).unwrap().unwrap().group_id, None);
+    }
+
+    #[test]
+    fn group_sort_order_can_be_reordered() {
+        let store = Store::open_memory().unwrap();
+        let first = store.create_group("first").unwrap().unwrap();
+        let second = store.create_group("second").unwrap().unwrap();
+        let third = store.create_group("third").unwrap().unwrap();
+
+        assert!(store.move_group(third.id, -2).unwrap());
+        let groups = store.list_groups().unwrap();
+        assert_eq!(groups[0].id, third.id);
+        assert_eq!(groups[1].id, first.id);
+        assert_eq!(groups[2].id, second.id);
+
+        assert!(store.move_group(third.id, 1).unwrap());
+        let groups = store.list_groups().unwrap();
+        assert_eq!(groups[0].id, first.id);
+        assert_eq!(groups[1].id, third.id);
+    }
+
+    #[test]
+    fn copy_buffers_track_active_clips() {
+        let store = Store::open_memory().unwrap();
+        let first = store.save_text_clip("device-a", "buffer one").unwrap();
+        let second = store.save_text_clip("device-a", "buffer two").unwrap();
+
+        assert!(store.set_copy_buffer_clip(0, &first.id).unwrap());
+        assert_eq!(store.copy_buffer_clip(0).unwrap().unwrap().id, first.id);
+
+        assert!(store.set_copy_buffer_clip(0, &second.id).unwrap());
+        assert_eq!(store.copy_buffer_clip(0).unwrap().unwrap().id, second.id);
+
+        assert!(store.delete_clip(&second.id).unwrap());
+        assert!(store.copy_buffer_clip(0).unwrap().is_none());
+        assert!(!store.set_copy_buffer_clip(1, "missing").unwrap());
     }
 
     #[test]
@@ -1741,6 +2067,10 @@ mod tests {
         let target = Store::open_memory().unwrap();
         assert_eq!(target.import_clips_json(&path).unwrap(), 1);
         assert_eq!(target.search_clips("export", 10).unwrap().len(), 1);
+
+        let csv_path = dir.path().join("clips.csv");
+        assert_eq!(source.export_active_clips(&csv_path).unwrap(), 1);
+        assert!(fs::read_to_string(csv_path).unwrap().contains("export me"));
     }
 
     #[test]
@@ -1778,6 +2108,11 @@ mod tests {
                 .deleted_at
                 .is_none()
         );
+
+        assert_eq!(store.purge_oldest_non_pinned_clips(10).unwrap(), 2);
+        assert!(store.get_clip(&edit.id).unwrap().is_none());
+        assert!(store.get_clip(&old.id).unwrap().is_none());
+        assert!(store.get_clip(&keep.id).unwrap().is_some());
     }
 
     #[test]
@@ -1803,6 +2138,8 @@ mod tests {
         settings.server_url = Some("http://localhost:7219".to_owned());
         settings.token = Some("secret".to_owned());
         settings.sync_enabled = true;
+        settings.total_paste_count = 7;
+        settings.trip_paste_count = 3;
 
         store.save_settings(&settings).unwrap();
         assert_eq!(store.settings().unwrap(), settings);

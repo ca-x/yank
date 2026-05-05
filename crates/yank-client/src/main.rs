@@ -3,13 +3,15 @@ use arboard::{Clipboard, Error as ClipboardError, ImageData};
 use chrono::{DateTime, Local};
 use makepad_widgets::makepad_draw::text::{font::FontId, fonts::Fonts, loader::FontDefinition};
 use makepad_widgets::*;
+use regex::RegexBuilder;
 use std::{
     borrow::Cow,
     cell::RefCell,
+    collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     rc::Rc,
-    sync::mpsc::Receiver,
 };
 use yank_client::{
     paths,
@@ -23,7 +25,7 @@ use yank_core::{
 #[cfg(target_os = "linux")]
 use ksni::blocking::TrayMethods as _;
 #[cfg(target_os = "linux")]
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver};
 
 const HISTORY_ROWS: usize = 20;
 const GROUP_ROWS: usize = 5;
@@ -352,9 +354,20 @@ script_mod! {
                                     spacing: theme.space_1
                                     group_name_input := TextInput{width: Fill height: 32 empty_text: ""}
                                     group_new_button := MenuButton{text: ""}
+                                    group_rename_button := MenuButton{text: ""}
                                     group_assign_button := MenuButton{text: ""}
                                     group_clear_button := MenuButton{text: ""}
                                     group_delete_button := MenuButton{text: ""}
+                                }
+                                group_filter_row_e := View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: theme.space_1
+                                    group_hotkey_input := TextInput{width: Fill height: 32 empty_text: ""}
+                                    group_hotkey_button := MenuButton{text: ""}
+                                    group_up_button := MenuButton{text: ""}
+                                    group_down_button := MenuButton{text: ""}
                                 }
                             }
                             rows := ScrollYView{
@@ -692,6 +705,12 @@ script_mod! {
                                     }
                                     FieldRow{
                                         find_as_you_type_button := DenseButton{text: ""}
+                                        simple_search_button := DenseButton{text: ""}
+                                        regex_search_button := DenseButton{text: ""}
+                                        wildcard_search_button := DenseButton{text: ""}
+                                    }
+                                    FieldRow{
+                                        case_sensitive_search_button := DenseButton{text: ""}
                                         show_thumbnails_button := DenseButton{text: ""}
                                         draw_rtf_button := DenseButton{text: ""}
                                     }
@@ -833,8 +852,10 @@ pub struct App {
     initialized: bool,
     #[rust]
     poll_timer: Timer,
+    #[cfg(target_os = "linux")]
     #[rust]
     tray_timer: Timer,
+    #[cfg(target_os = "linux")]
     #[rust]
     tray_rx: Option<Receiver<TrayCommand>>,
     #[cfg(target_os = "linux")]
@@ -872,6 +893,25 @@ enum ClipFilter {
     Text,
     Images,
     Files,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SearchMode {
+    Simple,
+    Regex,
+    Wildcard,
+}
+
+impl SearchMode {
+    fn from_settings(settings: &Settings) -> Self {
+        if settings.quick_paste_regex_search {
+            Self::Regex
+        } else if settings.quick_paste_wildcard_search {
+            Self::Wildcard
+        } else {
+            Self::Simple
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -934,6 +974,7 @@ enum ClipMove {
     Last,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrayCommand {
     Open,
@@ -1325,6 +1366,18 @@ impl MatchEvent for App {
         if self.button(cx, ids!(group_new_button)).clicked(actions) {
             self.create_group_from_input(cx);
         }
+        if self.button(cx, ids!(group_rename_button)).clicked(actions) {
+            self.rename_active_group_from_input(cx);
+        }
+        if self.button(cx, ids!(group_hotkey_button)).clicked(actions) {
+            self.save_active_group_hotkey(cx);
+        }
+        if self.button(cx, ids!(group_up_button)).clicked(actions) {
+            self.move_active_group(cx, -1);
+        }
+        if self.button(cx, ids!(group_down_button)).clicked(actions) {
+            self.move_active_group(cx, 1);
+        }
         if self.button(cx, ids!(group_assign_button)).clicked(actions) {
             self.assign_selected_to_active_group(cx);
         }
@@ -1592,7 +1645,7 @@ impl MatchEvent for App {
             .button(cx, ids!(start_on_login_button))
             .clicked(actions)
         {
-            self.toggle_bool_setting(cx, |settings| &mut settings.start_on_login);
+            self.toggle_start_on_login(cx);
         }
         if self.button(cx, ids!(show_tray_button)).clicked(actions) {
             self.toggle_bool_setting(cx, |settings| &mut settings.show_tray_icon);
@@ -1612,6 +1665,27 @@ impl MatchEvent for App {
             .clicked(actions)
         {
             self.toggle_bool_setting(cx, |settings| &mut settings.quick_paste_find_as_you_type);
+        }
+        if self.button(cx, ids!(simple_search_button)).clicked(actions) {
+            self.set_search_mode(cx, SearchMode::Simple);
+        }
+        if self.button(cx, ids!(regex_search_button)).clicked(actions) {
+            self.set_search_mode(cx, SearchMode::Regex);
+        }
+        if self
+            .button(cx, ids!(wildcard_search_button))
+            .clicked(actions)
+        {
+            self.set_search_mode(cx, SearchMode::Wildcard);
+        }
+        if self
+            .button(cx, ids!(case_sensitive_search_button))
+            .clicked(actions)
+        {
+            self.toggle_bool_setting(cx, |settings| {
+                &mut settings.quick_paste_case_sensitive_search
+            });
+            self.refresh_history(cx);
         }
         if self
             .button(cx, ids!(show_hotkey_text_button))
@@ -1721,7 +1795,7 @@ impl MatchEvent for App {
             self.delete_non_pinned(cx);
         }
         if self.button(cx, ids!(reset_counts_button)).clicked(actions) {
-            self.set_status(cx, "app.status_stats_reset");
+            self.reset_trip_counts(cx);
         }
         if self.button(cx, ids!(update_order_button)).clicked(actions) {
             self.toggle_bool_setting(cx, |settings| {
@@ -1748,6 +1822,7 @@ impl MatchEvent for App {
         if self.poll_timer.is_timer(event).is_some() {
             self.poll_clipboard(cx);
         }
+        #[cfg(target_os = "linux")]
         if self.tray_timer.is_timer(event).is_some() {
             self.drain_tray_commands(cx);
         }
@@ -1840,6 +1915,31 @@ impl MatchEvent for App {
         if self.shortcut_matches(|settings| &settings.hotkey_sync_now, event) {
             self.sync_now(cx);
             return;
+        }
+
+        if !self.text_entry_has_focus(cx) {
+            if let Some(index) = self.group_hotkey_matches(event) {
+                self.set_group_filter_by_index(cx, index);
+                return;
+            }
+            if let Some(index) = self
+                .copy_buffer_shortcut_matches(event, |settings| &settings.copy_buffer_copy_hotkeys)
+            {
+                self.put_selected_on_copy_buffer(cx, index, false);
+                return;
+            }
+            if let Some(index) = self
+                .copy_buffer_shortcut_matches(event, |settings| &settings.copy_buffer_cut_hotkeys)
+            {
+                self.put_selected_on_copy_buffer(cx, index, true);
+                return;
+            }
+            if let Some(index) = self
+                .copy_buffer_shortcut_matches(event, |settings| &settings.copy_buffer_paste_hotkeys)
+            {
+                self.copy_buffer_to_clipboard(cx, index);
+                return;
+            }
         }
 
         if event.modifiers.is_primary()
@@ -2001,6 +2101,9 @@ impl App {
         }
 
         match event.key_code {
+            KeyCode::Escape if event.modifiers.shift => {
+                std::process::exit(0);
+            }
             KeyCode::Escape => {
                 if self.menu_visible || self.group_panel_visible || self.editor_visible {
                     self.menu_visible = false;
@@ -2076,6 +2179,19 @@ impl App {
                 self.toggle_group_panel(cx);
                 true
             }
+            KeyCode::Space if event.modifiers.is_primary() && !search_focus => {
+                self.toggle_pinned_filter(cx);
+                true
+            }
+            KeyCode::KeyW
+                if !search_focus && !event.modifiers.is_primary() && !event.modifiers.alt =>
+            {
+                self.toggle_bool_setting(cx, |settings| {
+                    &mut settings.quick_paste_description_word_wrap
+                });
+                self.refresh_history(cx);
+                true
+            }
             KeyCode::KeyN
                 if !search_focus && !event.modifiers.is_primary() && !event.modifiers.alt =>
             {
@@ -2092,6 +2208,14 @@ impl App {
             }
             KeyCode::F3 if !search_focus => {
                 self.show_editor(cx);
+                true
+            }
+            KeyCode::F7 if event.modifiers.is_primary() && !search_focus => {
+                self.group_panel_visible = true;
+                self.menu_visible = false;
+                self.editor_visible = false;
+                self.apply_page_visibility(cx);
+                self.widget(cx, ids!(group_name_input)).set_key_focus(cx);
                 true
             }
             KeyCode::F7 if !search_focus => {
@@ -2130,6 +2254,7 @@ impl App {
             ids!(hotkey_capture_input),
             ids!(hotkey_sync_input),
             ids!(group_name_input),
+            ids!(group_hotkey_input),
             ids!(export_path_input),
             ids!(import_path_input),
             ids!(text_delay_input),
@@ -2285,6 +2410,29 @@ impl App {
         text
     }
 
+    fn choice_text(messages: &I18nBundle, key: &str, active: bool) -> String {
+        let label = messages.text(key).to_owned();
+        if active {
+            messages
+                .text("app.active_choice")
+                .replace("{label}", &label)
+        } else {
+            label
+        }
+    }
+
+    fn set_choice_button_text(
+        &self,
+        cx: &mut Cx,
+        id: &[LiveId],
+        messages: &I18nBundle,
+        key: &str,
+        active: bool,
+    ) {
+        self.widget(cx, id)
+            .set_text(cx, &Self::choice_text(messages, key, active));
+    }
+
     fn apply_i18n(&mut self, cx: &mut Cx) {
         let Some(state) = self.state.as_ref() else {
             return;
@@ -2345,6 +2493,10 @@ impl App {
             (ids!(group_files_button), "app.filter_files"),
             (ids!(group_named_title), "app.named_groups"),
             (ids!(group_new_button), "app.new_group"),
+            (ids!(group_rename_button), "app.rename_group"),
+            (ids!(group_hotkey_button), "app.save_group_hotkey"),
+            (ids!(group_up_button), "app.group_up"),
+            (ids!(group_down_button), "app.group_down"),
             (ids!(group_assign_button), "app.assign_group"),
             (ids!(group_clear_button), "app.clear_group"),
             (ids!(group_delete_button), "app.delete_group"),
@@ -2527,6 +2679,37 @@ impl App {
                 messages.text("app.find_as_type_off")
             },
         );
+        let search_mode = SearchMode::from_settings(&state.settings);
+        self.set_choice_button_text(
+            cx,
+            ids!(simple_search_button),
+            messages,
+            "app.search_simple",
+            search_mode == SearchMode::Simple,
+        );
+        self.set_choice_button_text(
+            cx,
+            ids!(regex_search_button),
+            messages,
+            "app.search_regex",
+            search_mode == SearchMode::Regex,
+        );
+        self.set_choice_button_text(
+            cx,
+            ids!(wildcard_search_button),
+            messages,
+            "app.search_wildcard",
+            search_mode == SearchMode::Wildcard,
+        );
+        self.widget(cx, ids!(case_sensitive_search_button))
+            .set_text(
+                cx,
+                if state.settings.quick_paste_case_sensitive_search {
+                    messages.text("app.case_sensitive_on")
+                } else {
+                    messages.text("app.case_sensitive_off")
+                },
+            );
         self.widget(cx, ids!(show_hotkey_text_button)).set_text(
             cx,
             if state.settings.quick_paste_show_hotkey_text {
@@ -2693,6 +2876,8 @@ impl App {
             );
         self.text_input(cx, ids!(group_name_input))
             .set_empty_text(cx, messages.text("app.group_name_placeholder").to_owned());
+        self.text_input(cx, ids!(group_hotkey_input))
+            .set_empty_text(cx, messages.text("app.group_hotkey_placeholder").to_owned());
         self.text_input(cx, ids!(export_path_input))
             .set_empty_text(cx, messages.text("app.export_path_placeholder").to_owned());
         self.text_input(cx, ids!(import_path_input))
@@ -3002,6 +3187,11 @@ impl App {
             self.text("app.duplicate_keep_existing")
         };
         let formats = enabled_capture_format_names(&state.messages, &state.settings);
+        let max_history = if state.settings.max_history == 0 {
+            self.text("app.max_history_unlimited")
+        } else {
+            state.settings.max_history.to_string()
+        };
         let status = self.template(
             "app.local_status",
             &[
@@ -3010,7 +3200,7 @@ impl App {
                 ("{duplicate}", duplicate_status),
                 ("{formats}", formats),
                 ("{interval}", state.settings.capture_interval_ms.to_string()),
-                ("{max}", state.settings.max_history.to_string()),
+                ("{max}", max_history),
             ],
         );
         self.widget(cx, ids!(local_status)).set_text(cx, &status);
@@ -3061,6 +3251,11 @@ impl App {
                         .map(format_timestamp)
                         .unwrap_or_else(|| "-".to_owned()),
                 ),
+                (
+                    "{total_pastes}",
+                    state.settings.total_paste_count.to_string(),
+                ),
+                ("{trip_pastes}", state.settings.trip_paste_count.to_string()),
                 ("{db}", database),
                 ("{bytes}", database_size),
             ],
@@ -3069,6 +3264,7 @@ impl App {
     }
 
     fn refresh_history(&mut self, cx: &mut Cx) {
+        let mut search_error = None;
         let (clips, selected_id, count) = {
             let Some(state) = self.state.as_mut() else {
                 return;
@@ -3085,10 +3281,14 @@ impl App {
             let limit = state.settings.max_history.max(HISTORY_ROWS as u32);
             let active_group_id = self.active_group_id;
             let show_groups_in_main = state.settings.quick_paste_show_groups_in_main;
-            let clips = state
-                .store
-                .search_clips(&state.query, limit)
-                .unwrap_or_default()
+            let clips =
+                match query_history_clips(&state.store, &state.query, limit, &state.settings) {
+                    Ok(clips) => clips,
+                    Err(error) => {
+                        search_error = Some(error.to_string());
+                        state.store.list_clips(limit).unwrap_or_default()
+                    }
+                }
                 .into_iter()
                 .filter(|clip| clip_matches_filter(clip, self.clip_filter))
                 .filter(|clip| active_group_id.is_none() || clip.group_id == active_group_id)
@@ -3112,13 +3312,29 @@ impl App {
             (clips, state.selected_id.clone(), count)
         };
 
+        if let Some(error) = search_error {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_search_invalid", &[("{error}", error)]),
+            );
+        }
+
         self.widget(cx, ids!(clip_count)).set_text(
             cx,
             &self.template("app.history_count", &[("{count}", count.to_string())]),
         );
 
+        let row_height = self
+            .state
+            .as_ref()
+            .map(|state| state.settings.quick_paste_lines_per_row.clamp(1, 5) as f64 * 30.0)
+            .unwrap_or(30.0);
         for index in 0..HISTORY_ROWS {
             let id = row_id(index);
+            let mut row = self.widget(cx, id);
+            script_apply_eval!(cx, row, {
+                height: #(row_height)
+            });
             if let Some(clip) = clips.get(index) {
                 let selected = selected_id.as_deref() == Some(clip.id.as_str());
                 let row_text = self.row_text(index, clip, selected);
@@ -3140,15 +3356,29 @@ impl App {
     }
 
     fn row_text(&self, index: usize, clip: &Clip, selected: bool) -> String {
-        let show_leading_whitespace = self
+        let (show_leading_whitespace, word_wrap, lines_per_row) = self
             .state
             .as_ref()
-            .map(|state| state.settings.quick_paste_show_leading_whitespace)
-            .unwrap_or(false);
+            .map(|state| {
+                (
+                    state.settings.quick_paste_show_leading_whitespace,
+                    state.settings.quick_paste_description_word_wrap,
+                    state.settings.quick_paste_lines_per_row,
+                )
+            })
+            .unwrap_or((false, true, 1));
         let empty_text = self.text("app.empty_text");
         let text = clip.primary_text.as_deref().map_or_else(
             || clip.description.clone(),
-            |text| summarize_row_text(text, show_leading_whitespace, &empty_text),
+            |text| {
+                summarize_row_text(
+                    text,
+                    show_leading_whitespace,
+                    word_wrap,
+                    lines_per_row,
+                    &empty_text,
+                )
+            },
         );
         let pin = if clip.pinned {
             self.text("app.pinned_marker")
@@ -3165,7 +3395,10 @@ impl App {
             .map(|name| self.template("app.group_marker", &[("{group}", name)]))
             .unwrap_or_default();
         let types = self.row_type_text(clip);
-        let source = clip.source_app.as_deref().unwrap_or("yank");
+        let source = clip
+            .source_app
+            .clone()
+            .unwrap_or_else(|| self.text("app.source_unknown"));
         let updated = format_timestamp(clip.updated_at);
         let key = if selected {
             "app.row_selected_template"
@@ -3180,7 +3413,7 @@ impl App {
                 ("{pasted}", pasted),
                 ("{group}", group),
                 ("{types}", types),
-                ("{source}", source.to_owned()),
+                ("{source}", source),
                 ("{updated}", updated),
                 ("{text}", text),
             ],
@@ -3255,6 +3488,18 @@ impl App {
         }
         self.widget(cx, ids!(groups_button))
             .set_text(cx, &self.clip_filter_label(&state.messages));
+        if self.group_panel_visible
+            && !self.widget(cx, ids!(group_name_input)).key_focus(cx)
+            && !self.widget(cx, ids!(group_hotkey_input)).key_focus(cx)
+            && let Some(group) = self
+                .active_group_id
+                .and_then(|id| state.groups.iter().find(|group| group.id == id))
+        {
+            self.widget(cx, ids!(group_name_input))
+                .set_text(cx, &group.name);
+            self.widget(cx, ids!(group_hotkey_input))
+                .set_text(cx, &group.hotkey);
+        }
     }
 
     fn refresh_detail(&mut self, cx: &mut Cx) {
@@ -3287,6 +3532,10 @@ impl App {
                         .join(state.messages.text("app.list_separator"))
                 })
                 .unwrap_or_default();
+            let source = clip
+                .source_app
+                .clone()
+                .unwrap_or_else(|| self.text("app.source_unknown"));
             self.widget(cx, ids!(selected_meta)).set_text(
                 cx,
                 &self.template(
@@ -3295,6 +3544,8 @@ impl App {
                         ("{id}", short_id(&clip.id)),
                         ("{formats}", clip.formats.len().to_string()),
                         ("{types}", types),
+                        ("{source}", source),
+                        ("{created}", format_timestamp(clip.created_at)),
                         ("{updated}", format_timestamp(clip.updated_at)),
                         ("{pin}", pin),
                     ],
@@ -3376,6 +3627,74 @@ impl App {
         }
     }
 
+    fn rename_active_group_from_input(&mut self, cx: &mut Cx) {
+        let Some(group_id) = self.active_group_id else {
+            self.set_status(cx, "app.status_group_select_first");
+            return;
+        };
+        let name = self.widget(cx, ids!(group_name_input)).text();
+        let result = self.with_state_mut(|state| state.rename_group(group_id, &name));
+        match result {
+            Some(Ok(Some(group))) => {
+                self.active_group_id = Some(group.id);
+                self.set_status(cx, "app.status_group_renamed");
+                self.refresh_history(cx);
+            }
+            Some(Ok(None)) => self.set_status(cx, "app.status_group_name_required"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_group_select_first"),
+        }
+    }
+
+    fn save_active_group_hotkey(&mut self, cx: &mut Cx) {
+        let Some(group_id) = self.active_group_id else {
+            self.set_status(cx, "app.status_group_select_first");
+            return;
+        };
+        let hotkey = self.widget(cx, ids!(group_hotkey_input)).text();
+        if !hotkey.trim().is_empty() && Shortcut::parse(&hotkey).is_none() {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_hotkey_invalid", &[("{value}", hotkey)]),
+            );
+            return;
+        }
+        if self.hotkey_conflicts(group_id, &hotkey) {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_hotkey_conflict", &[("{value}", hotkey)]),
+            );
+            return;
+        }
+        let result = self.with_state_mut(|state| state.set_group_hotkey(group_id, &hotkey));
+        match result {
+            Some(Ok(Some(_))) => {
+                self.set_status(cx, "app.status_group_hotkey_saved");
+                self.refresh_history(cx);
+            }
+            Some(Ok(None)) => self.set_status(cx, "app.status_group_select_first"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_group_select_first"),
+        }
+    }
+
+    fn move_active_group(&mut self, cx: &mut Cx, delta: i64) {
+        let Some(group_id) = self.active_group_id else {
+            self.set_status(cx, "app.status_group_select_first");
+            return;
+        };
+        let result = self.with_state_mut(|state| state.move_group(group_id, delta));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status(cx, "app.status_group_moved");
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_group_select_first"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_group_select_first"),
+        }
+    }
+
     fn assign_selected_to_active_group(&mut self, cx: &mut Cx) {
         let Some(group_id) = self.active_group_id else {
             self.set_status(cx, "app.status_group_select_first");
@@ -3434,14 +3753,16 @@ impl App {
         };
         let type_label = messages.text(key);
         if let Some(group_name) = self.active_group_name() {
-            format!(
-                "{}: {} / {}",
-                messages.text("app.groups"),
-                type_label,
-                group_name
-            )
+            messages
+                .text("app.group_filter_active")
+                .replace("{groups}", messages.text("app.groups"))
+                .replace("{type}", type_label)
+                .replace("{group}", &group_name)
         } else {
-            format!("{}: {}", messages.text("app.groups"), type_label)
+            messages
+                .text("app.group_filter_label")
+                .replace("{groups}", messages.text("app.groups"))
+                .replace("{type}", type_label)
         }
     }
 
@@ -3619,6 +3940,53 @@ impl App {
         let result = self.with_state_mut(ClientState::copy_generated_guid);
         match result {
             Some(Ok(())) => self.set_status(cx, "app.status_copied_transformed"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_clipboard_unavailable"),
+        }
+    }
+
+    fn put_selected_on_copy_buffer(&mut self, cx: &mut Cx, index: usize, cut: bool) {
+        let result = self.with_state_mut(|state| state.put_selected_on_copy_buffer(index));
+        let key = if cut {
+            "app.status_copy_buffer_cut_saved"
+        } else {
+            "app.status_copy_buffer_saved"
+        };
+        match result {
+            Some(Ok(true)) => {
+                self.play_copy_buffer_sound(index);
+                self.set_status_text(
+                    cx,
+                    &self.template(key, &[("{index}", (index + 1).to_string())]),
+                );
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status(cx, "app.status_no_selection"),
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_selection"),
+        }
+    }
+
+    fn copy_buffer_to_clipboard(&mut self, cx: &mut Cx, index: usize) {
+        let result = self.with_state_mut(|state| state.copy_buffer_to_clipboard(index));
+        match result {
+            Some(Ok(true)) => {
+                self.set_status_text(
+                    cx,
+                    &self.template(
+                        "app.status_copy_buffer_pasted",
+                        &[("{index}", (index + 1).to_string())],
+                    ),
+                );
+                self.refresh_history(cx);
+            }
+            Some(Ok(false)) => self.set_status_text(
+                cx,
+                &self.template(
+                    "app.status_copy_buffer_empty",
+                    &[("{index}", (index + 1).to_string())],
+                ),
+            ),
             Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
             None => self.set_status(cx, "app.status_clipboard_unavailable"),
         }
@@ -3867,6 +4235,18 @@ impl App {
         }
     }
 
+    fn reset_trip_counts(&mut self, cx: &mut Cx) {
+        let result = self.with_state_mut(ClientState::reset_trip_paste_count);
+        match result {
+            Some(Ok(())) => {
+                self.refresh_stats(cx);
+                self.set_status(cx, "app.status_stats_reset");
+            }
+            Some(Err(error)) => self.set_status_text(cx, &error.to_string()),
+            None => self.set_status(cx, "app.status_no_clip"),
+        }
+    }
+
     fn toggle_capture(&mut self, cx: &mut Cx) {
         if let Some(state) = &mut self.state {
             state.settings.capture_enabled = !state.settings.capture_enabled;
@@ -3908,6 +4288,30 @@ impl App {
                     state.settings.capture_files_enabled = !state.settings.capture_files_enabled
                 }
             }
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.set_status(cx, "app.status_settings_saved");
+    }
+
+    fn toggle_start_on_login(&mut self, cx: &mut Cx) {
+        let Some(enabled) = self
+            .state
+            .as_ref()
+            .map(|state| !state.settings.start_on_login)
+        else {
+            self.set_status(cx, "app.status_settings_saved");
+            return;
+        };
+        if let Err(error) = configure_start_on_login(enabled) {
+            self.set_status_text(cx, &error.to_string());
+            return;
+        }
+        if let Some(state) = &mut self.state {
+            state.settings.start_on_login = enabled;
             if let Err(error) = state.persist_settings() {
                 self.set_status_text(cx, &error.to_string());
                 return;
@@ -3970,7 +4374,7 @@ impl App {
     fn save_behavior_settings(&mut self, cx: &mut Cx) {
         let max_history = match parse_u32_setting(&self.widget(cx, ids!(max_history_input)).text())
         {
-            Some(value) if value > 0 => value,
+            Some(value) => value,
             _ => {
                 self.set_status(cx, "app.status_invalid_number");
                 return;
@@ -4046,6 +4450,29 @@ impl App {
         self.set_status(cx, "app.status_settings_saved");
     }
 
+    fn set_search_mode(&mut self, cx: &mut Cx, mode: SearchMode) {
+        if let Some(state) = &mut self.state {
+            state.settings.quick_paste_regex_search = mode == SearchMode::Regex;
+            state.settings.quick_paste_wildcard_search = mode == SearchMode::Wildcard;
+            if let Err(error) = state.persist_settings() {
+                self.set_status_text(cx, &error.to_string());
+                return;
+            }
+        }
+        self.apply_i18n(cx);
+        self.refresh_history(cx);
+        self.set_status(cx, "app.status_search_mode_updated");
+    }
+
+    fn toggle_pinned_filter(&mut self, cx: &mut Cx) {
+        let next = if self.clip_filter == ClipFilter::Pinned {
+            ClipFilter::All
+        } else {
+            ClipFilter::Pinned
+        };
+        self.set_clip_filter(cx, next);
+    }
+
     fn cycle_popup_position(&mut self, cx: &mut Cx) {
         if let Some(state) = &mut self.state {
             let next = QuickPastePosition::parse(&state.settings.quick_paste_position).next();
@@ -4113,6 +4540,19 @@ impl App {
             );
             return;
         }
+        if let Some(conflict) = first_shortcut_conflict(
+            hotkeys
+                .values()
+                .into_iter()
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty()),
+        ) {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_hotkey_conflict", &[("{value}", conflict)]),
+            );
+            return;
+        }
 
         if let Some(state) = &mut self.state {
             state.settings.hotkey_show_history = hotkeys.show_history;
@@ -4154,12 +4594,25 @@ impl App {
             .iter()
             .chain(paste.iter())
             .chain(cut.iter())
-            .find(|value| Shortcut::parse(value).is_none())
+            .find(|value| !value.trim().is_empty() && Shortcut::parse(value).is_none())
             .cloned()
         {
             self.set_status_text(
                 cx,
                 &self.template("app.status_hotkey_invalid", &[("{value}", invalid)]),
+            );
+            return;
+        }
+        if let Some(conflict) = first_shortcut_conflict(
+            copy.iter()
+                .chain(paste.iter())
+                .chain(cut.iter())
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty()),
+        ) {
+            self.set_status_text(
+                cx,
+                &self.template("app.status_hotkey_conflict", &[("{value}", conflict)]),
             );
             return;
         }
@@ -4192,6 +4645,18 @@ impl App {
         self.set_status(cx, "app.status_settings_saved");
     }
 
+    fn play_copy_buffer_sound(&self, index: usize) {
+        let enabled = self
+            .state
+            .as_ref()
+            .and_then(|state| state.settings.copy_buffer_play_sound.get(index))
+            .copied()
+            .unwrap_or(false);
+        if enabled {
+            try_play_notification_sound();
+        }
+    }
+
     fn save_advanced_settings(&mut self, cx: &mut Cx) {
         let text_only_paste_delay_ms =
             match parse_u32_setting(&self.widget(cx, ids!(text_delay_input)).text()) {
@@ -4222,6 +4687,7 @@ impl App {
         let privacy_app_exclude = self.widget(cx, ids!(privacy_app_input)).text();
         let privacy_content_exclude = self.widget(cx, ids!(privacy_content_input)).text();
 
+        let mut maintenance = AdvancedMaintenance::default();
         if let Some(state) = &mut self.state {
             state.settings.text_only_paste_delay_ms = text_only_paste_delay_ms;
             state.settings.expire_after_days = expire_after_days;
@@ -4235,9 +4701,46 @@ impl App {
                 self.set_status_text(cx, &error.to_string());
                 return;
             }
+            if expire_after_days > 0 {
+                let cutoff = Local::now()
+                    .timestamp()
+                    .saturating_sub(i64::from(expire_after_days).saturating_mul(86_400));
+                match state.store.delete_clips_older_than(cutoff) {
+                    Ok(count) => maintenance.expired = count,
+                    Err(error) => {
+                        self.set_status_text(cx, &error.to_string());
+                        return;
+                    }
+                }
+            }
+            match state.run_storage_maintenance() {
+                Ok(result) => maintenance.merge(result),
+                Err(error) => {
+                    self.set_status_text(cx, &error.to_string());
+                    return;
+                }
+            }
         }
         self.apply_i18n(cx);
-        self.set_status(cx, "app.status_settings_saved");
+        self.refresh_history(cx);
+        if maintenance.has_work() {
+            self.set_status_text(
+                cx,
+                &self.template(
+                    "app.status_settings_saved_maintenance",
+                    &[
+                        ("{expired}", maintenance.expired.to_string()),
+                        ("{purged}", maintenance.purged.to_string()),
+                        (
+                            "{backup}",
+                            maintenance.backup_path.unwrap_or_else(|| "-".to_owned()),
+                        ),
+                    ],
+                ),
+            );
+        } else {
+            self.set_status(cx, "app.status_settings_saved");
+        }
     }
 
     fn shortcut_matches(
@@ -4250,6 +4753,65 @@ impl App {
             .and_then(|state| Shortcut::parse(shortcut(&state.settings)))
             .map(|shortcut| shortcut.matches(event))
             .unwrap_or(false)
+    }
+
+    fn copy_buffer_shortcut_matches(
+        &self,
+        event: &KeyEvent,
+        shortcuts: impl FnOnce(&Settings) -> &Vec<String>,
+    ) -> Option<usize> {
+        let settings = &self.state.as_ref()?.settings;
+        shortcuts(settings)
+            .iter()
+            .take(GROUP_ROWS)
+            .position(|shortcut| {
+                Shortcut::parse(shortcut)
+                    .map(|shortcut| shortcut.matches(event))
+                    .unwrap_or(false)
+            })
+    }
+
+    fn group_hotkey_matches(&self, event: &KeyEvent) -> Option<usize> {
+        self.state.as_ref()?.groups.iter().position(|group| {
+            !group.hotkey.trim().is_empty()
+                && Shortcut::parse(&group.hotkey)
+                    .map(|shortcut| shortcut.matches(event))
+                    .unwrap_or(false)
+        })
+    }
+
+    fn hotkey_conflicts(&self, exclude_group_id: i64, value: &str) -> bool {
+        let Some(canonical) = shortcut_canonical(value) else {
+            return false;
+        };
+        let Some(state) = self.state.as_ref() else {
+            return false;
+        };
+
+        let setting_hotkeys = [
+            &state.settings.hotkey_show_history,
+            &state.settings.hotkey_search,
+            &state.settings.hotkey_copy_selected,
+            &state.settings.hotkey_delete_selected,
+            &state.settings.hotkey_toggle_pin,
+            &state.settings.hotkey_edit_selected,
+            &state.settings.hotkey_capture_now,
+            &state.settings.hotkey_sync_now,
+        ];
+        setting_hotkeys
+            .iter()
+            .any(|hotkey| shortcut_canonical(hotkey).as_deref() == Some(canonical.as_str()))
+            || state
+                .settings
+                .copy_buffer_copy_hotkeys
+                .iter()
+                .chain(state.settings.copy_buffer_paste_hotkeys.iter())
+                .chain(state.settings.copy_buffer_cut_hotkeys.iter())
+                .any(|hotkey| shortcut_canonical(hotkey).as_deref() == Some(canonical.as_str()))
+            || state.groups.iter().any(|group| {
+                group.id != exclude_group_id
+                    && shortcut_canonical(&group.hotkey).as_deref() == Some(canonical.as_str())
+            })
     }
 
     fn restart_poll_timer(&mut self, cx: &mut Cx) {
@@ -4270,32 +4832,46 @@ impl App {
     }
 
     fn restart_tray_timer(&mut self, cx: &mut Cx) {
-        if !self.tray_timer.is_empty() {
-            cx.stop_timer(self.tray_timer);
-            self.tray_timer = Timer::empty();
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = cx;
         }
-        self.tray_timer = cx.start_interval(0.25);
+        #[cfg(target_os = "linux")]
+        {
+            if !self.tray_timer.is_empty() {
+                cx.stop_timer(self.tray_timer);
+                self.tray_timer = Timer::empty();
+            }
+            self.tray_timer = cx.start_interval(0.25);
+        }
     }
 
     fn drain_tray_commands(&mut self, cx: &mut Cx) {
-        let mut commands = Vec::new();
-        if let Some(rx) = &self.tray_rx {
-            while let Ok(command) = rx.try_recv() {
-                commands.push(command);
-            }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = cx;
         }
-
-        for command in commands {
-            match command {
-                TrayCommand::Open => {
-                    self.show_main_page(cx);
-                    self.refresh_history(cx);
+        #[cfg(target_os = "linux")]
+        {
+            let mut commands = Vec::new();
+            if let Some(rx) = &self.tray_rx {
+                while let Ok(command) = rx.try_recv() {
+                    commands.push(command);
                 }
-                TrayCommand::Settings => self.show_settings_page(cx),
-                TrayCommand::CaptureNow => self.capture_clipboard(cx),
-                TrayCommand::SyncNow => self.sync_now(cx),
-                TrayCommand::ToggleCapture => self.toggle_capture(cx),
-                TrayCommand::Exit => std::process::exit(0),
+            }
+
+            for command in commands {
+                match command {
+                    TrayCommand::Open => {
+                        self.show_main_page(cx);
+                        self.refresh_history(cx);
+                    }
+                    TrayCommand::Settings => self.show_settings_page(cx),
+                    TrayCommand::CaptureNow => self.capture_clipboard(cx),
+                    TrayCommand::SyncNow => self.sync_now(cx),
+                    TrayCommand::ToggleCapture => self.toggle_capture(cx),
+                    TrayCommand::Exit => std::process::exit(0),
+                }
             }
         }
     }
@@ -4467,6 +5043,9 @@ impl ClientState {
         let Some(snapshot) = snapshot else {
             return Ok(CaptureOutcome::Empty);
         };
+        if snapshot_matches_app_exclude(&snapshot, &self.settings.privacy_app_exclude) {
+            return Ok(CaptureOutcome::Unchanged);
+        }
         if snapshot_matches_content_exclude(&snapshot, &self.settings.privacy_content_exclude) {
             return Ok(CaptureOutcome::Unchanged);
         }
@@ -4476,25 +5055,20 @@ impl ClientState {
             return Ok(CaptureOutcome::Unchanged);
         }
 
+        let mut incoming = Clip::from_formats(
+            &self.settings.device_id,
+            snapshot.description,
+            snapshot.primary_text,
+            snapshot.formats,
+        );
+        incoming.source_app = snapshot.source_app;
+
         let clip = if self.settings.duplicate_moves_to_top {
-            self.store.save_clip_deduplicated(
-                &Clip::from_formats(
-                    &self.settings.device_id,
-                    snapshot.description,
-                    snapshot.primary_text,
-                    snapshot.formats,
-                ),
-                true,
-            )?
+            self.store.save_clip_deduplicated(&incoming, true)?
         } else if let Some(existing) = self.store.find_active_by_content_hash(&hash)? {
             existing
         } else {
-            self.store.save_clip(&Clip::from_formats(
-                &self.settings.device_id,
-                snapshot.description,
-                snapshot.primary_text,
-                snapshot.formats,
-            ))?
+            self.store.save_clip(&incoming)?
         };
 
         self.last_clipboard_hash = Some(hash);
@@ -4509,13 +5083,23 @@ impl ClientState {
         let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
         };
-        let clipboard = self.clipboard_mut()?;
-        if restore_clip_to_clipboard(clipboard, &clip)? {
-            self.last_clipboard_hash = Some(clip.content_hash);
+        let copied_hash = {
+            let clipboard = self.clipboard_mut()?;
+            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
+                Some(hash)
+            } else if restore_clip_to_clipboard(clipboard, &clip)? {
+                Some(clip.content_hash.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(hash) = copied_hash {
+            self.last_clipboard_hash = Some(hash);
             self.mark_clip_pasted(&clip.id);
             if self.settings.quick_paste_update_order_on_copy {
                 let _ = self.store.move_clip_to_top(&clip.id)?;
             }
+            self.record_paste()?;
             Ok(true)
         } else {
             Ok(false)
@@ -4523,11 +5107,18 @@ impl ClientState {
     }
 
     fn copy_selected_plain_text(&mut self) -> Result<bool> {
-        let Some(text) = self.selected_clip().and_then(plain_text_payload) else {
+        let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
         };
-        let clipboard = self.clipboard_mut()?;
-        clipboard.set_text(text.clone())?;
+        let Some(text) = plain_text_payload(&clip) else {
+            return Ok(false);
+        };
+        let text = {
+            let clipboard = self.clipboard_mut()?;
+            let text = render_template_text_for_clip(&clip, text, clipboard);
+            clipboard.set_text(text.clone())?;
+            text
+        };
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
         if let Some(id) = self.selected_id.clone() {
             self.mark_clip_pasted(&id);
@@ -4535,16 +5126,24 @@ impl ClientState {
                 let _ = self.store.move_clip_to_top(&id)?;
             }
         }
+        self.record_paste()?;
         Ok(true)
     }
 
     fn copy_selected_transformed(&mut self, transform: TextTransform) -> Result<bool> {
-        let Some(text) = self.selected_clip().and_then(plain_text_payload) else {
+        let Some(clip) = self.selected_clip().cloned() else {
             return Ok(false);
         };
-        let clipboard = self.clipboard_mut()?;
-        let transformed = transform_text(&text, transform);
-        clipboard.set_text(transformed.clone())?;
+        let Some(text) = plain_text_payload(&clip) else {
+            return Ok(false);
+        };
+        let transformed = {
+            let clipboard = self.clipboard_mut()?;
+            let text = render_template_text_for_clip(&clip, text, clipboard);
+            let transformed = transform_text(&text, transform);
+            clipboard.set_text(transformed.clone())?;
+            transformed
+        };
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&transformed)]));
         if let Some(id) = self.selected_id.clone() {
             self.mark_clip_pasted(&id);
@@ -4552,6 +5151,7 @@ impl ClientState {
                 let _ = self.store.move_clip_to_top(&id)?;
             }
         }
+        self.record_paste()?;
         Ok(true)
     }
 
@@ -4560,7 +5160,45 @@ impl ClientState {
         let clipboard = self.clipboard_mut()?;
         clipboard.set_text(text.clone())?;
         self.last_clipboard_hash = Some(content_hash(&[ClipFormat::text(&text)]));
+        self.record_paste()?;
         Ok(())
+    }
+
+    fn put_selected_on_copy_buffer(&mut self, index: usize) -> Result<bool> {
+        let Some(id) = self.selected_id.clone() else {
+            return Ok(false);
+        };
+        self.store
+            .set_copy_buffer_clip(index, &id)
+            .map_err(Into::into)
+    }
+
+    fn copy_buffer_to_clipboard(&mut self, index: usize) -> Result<bool> {
+        let Some(clip) = self.store.copy_buffer_clip(index)? else {
+            return Ok(false);
+        };
+        let copied_hash = {
+            let clipboard = self.clipboard_mut()?;
+            if let Some(hash) = restore_template_to_clipboard(clipboard, &clip)? {
+                Some(hash)
+            } else if restore_clip_to_clipboard(clipboard, &clip)? {
+                Some(clip.content_hash.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(hash) = copied_hash {
+            self.last_clipboard_hash = Some(hash);
+            self.selected_id = Some(clip.id.clone());
+            self.mark_clip_pasted(&clip.id);
+            if self.settings.quick_paste_update_order_on_copy {
+                let _ = self.store.move_clip_to_top(&clip.id)?;
+            }
+            self.record_paste()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     fn copy_device_id(&mut self) -> Result<()> {
@@ -4574,6 +5212,17 @@ impl ClientState {
         self.pasted_clip_ids.retain(|existing| existing != id);
         self.pasted_clip_ids.insert(0, id.to_owned());
         self.pasted_clip_ids.truncate(64);
+    }
+
+    fn record_paste(&mut self) -> yank_core::Result<()> {
+        self.settings.total_paste_count = self.settings.total_paste_count.saturating_add(1);
+        self.settings.trip_paste_count = self.settings.trip_paste_count.saturating_add(1);
+        self.persist_settings()
+    }
+
+    fn reset_trip_paste_count(&mut self) -> yank_core::Result<()> {
+        self.settings.trip_paste_count = 0;
+        self.persist_settings()
     }
 
     fn clipboard_mut(&mut self) -> Result<&mut Clipboard> {
@@ -4620,6 +5269,24 @@ impl ClientState {
         let group = self.store.create_group(name)?;
         self.groups = self.store.list_groups()?;
         Ok(group)
+    }
+
+    fn rename_group(&mut self, id: i64, name: &str) -> yank_core::Result<Option<Group>> {
+        let group = self.store.rename_group(id, name)?;
+        self.groups = self.store.list_groups()?;
+        Ok(group)
+    }
+
+    fn set_group_hotkey(&mut self, id: i64, hotkey: &str) -> yank_core::Result<Option<Group>> {
+        let group = self.store.set_group_hotkey(id, hotkey)?;
+        self.groups = self.store.list_groups()?;
+        Ok(group)
+    }
+
+    fn move_group(&mut self, id: i64, delta: i64) -> yank_core::Result<bool> {
+        let moved = self.store.move_group(id, delta)?;
+        self.groups = self.store.list_groups()?;
+        Ok(moved)
     }
 
     fn delete_group(&mut self, id: i64) -> yank_core::Result<bool> {
@@ -4677,7 +5344,7 @@ impl ClientState {
 
     fn export_history(&mut self, path: &str) -> Result<(usize, String)> {
         let path = resolve_history_path(path, "yank-export.json")?;
-        let count = self.store.export_active_clips_json(&path)?;
+        let count = self.store.export_active_clips(&path)?;
         self.settings.export_path = path.to_string_lossy().into_owned();
         self.persist_settings()?;
         Ok((count, self.settings.export_path.clone()))
@@ -4690,6 +5357,19 @@ impl ClientState {
         self.persist_settings()?;
         self.store.enforce_max_history(self.settings.max_history)?;
         Ok((count, self.settings.import_path.clone()))
+    }
+
+    fn run_storage_maintenance(&mut self) -> Result<AdvancedMaintenance> {
+        let mut result = AdvancedMaintenance::default();
+        if let Some(path) = backup_database_if_configured(&self.settings.backup_path)? {
+            result.backup_path = Some(path);
+        }
+
+        let max_bytes = u64::from(self.settings.max_database_mb).saturating_mul(1024 * 1024);
+        if max_bytes > 0 {
+            result.purged = enforce_database_size_limit(&self.store, max_bytes)?;
+        }
+        Ok(result)
     }
 
     fn move_selected_clip(&mut self, direction: ClipMove) -> Result<bool> {
@@ -4741,6 +5421,7 @@ struct ClipboardSnapshot {
     description: String,
     primary_text: Option<String>,
     formats: Vec<ClipFormat>,
+    source_app: Option<String>,
 }
 
 fn read_clipboard_snapshot(
@@ -4797,9 +5478,19 @@ fn read_clipboard_snapshot(
         && let Some(text) = read_optional_clipboard(clipboard.get_text())?
         && !text.trim().is_empty()
     {
-        primary_text.get_or_insert(text.clone());
-        description.get_or_insert_with(|| yank_core::summarize_text(&text));
-        formats.push(ClipFormat::text(&text));
+        if let Some(rtf) = detect_rtf_value(&text) {
+            let searchable = rtf_to_text(rtf);
+            primary_text.get_or_insert(searchable.clone());
+            description.get_or_insert_with(|| yank_core::summarize_text(&searchable));
+            formats.push(ClipFormat::rtf(rtf));
+        } else {
+            primary_text.get_or_insert(text.clone());
+            description.get_or_insert_with(|| yank_core::summarize_text(&text));
+            formats.push(ClipFormat::text(&text));
+        }
+        if let Some(color) = detect_color_value(&text) {
+            formats.push(ClipFormat::color(&color));
+        }
     }
 
     if formats.is_empty() {
@@ -4815,6 +5506,7 @@ fn read_clipboard_snapshot(
         }),
         primary_text,
         formats,
+        source_app: current_source_application(),
     }))
 }
 
@@ -4838,6 +5530,234 @@ fn read_optional_clipboard_format<T>(
         ) => Ok(None),
         Err(error) => Err(anyhow::anyhow!("{error}")),
     }
+}
+
+fn detect_color_value(text: &str) -> Option<String> {
+    let value = text.trim();
+    if is_hex_color(value) || is_rgb_color(value) || is_hsl_color(value) {
+        Some(value.to_owned())
+    } else {
+        None
+    }
+}
+
+fn detect_rtf_value(text: &str) -> Option<&str> {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("{\\rtf").then_some(trimmed)
+}
+
+fn is_hex_color(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix('#') else {
+        return false;
+    };
+    matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn is_rgb_color(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let Some(body) = lower
+        .strip_prefix("rgb(")
+        .and_then(|body| body.strip_suffix(')'))
+        .or_else(|| {
+            lower
+                .strip_prefix("rgba(")
+                .and_then(|body| body.strip_suffix(')'))
+        })
+    else {
+        return false;
+    };
+    let parts = body.split(',').map(str::trim).collect::<Vec<_>>();
+    matches!(parts.len(), 3 | 4)
+        && parts
+            .iter()
+            .take(3)
+            .all(|part| part.parse::<u16>().is_ok_and(|value| value <= 255))
+}
+
+fn is_hsl_color(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let Some(body) = lower
+        .strip_prefix("hsl(")
+        .and_then(|body| body.strip_suffix(')'))
+        .or_else(|| {
+            lower
+                .strip_prefix("hsla(")
+                .and_then(|body| body.strip_suffix(')'))
+        })
+    else {
+        return false;
+    };
+    let parts = body.split(',').map(str::trim).collect::<Vec<_>>();
+    matches!(parts.len(), 3 | 4)
+        && parts
+            .first()
+            .is_some_and(|part| part.parse::<u16>().is_ok_and(|value| value <= 360))
+        && parts.iter().skip(1).take(2).all(|part| {
+            part.strip_suffix('%')
+                .is_some_and(|n| n.parse::<u8>().is_ok())
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn current_source_application() -> Option<String> {
+    let root = Command::new("xprop")
+        .args(["-root", "_NET_ACTIVE_WINDOW"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let root = String::from_utf8_lossy(&root.stdout);
+    let window_id = root
+        .split_whitespace()
+        .rev()
+        .find(|part| part.starts_with("0x") && *part != "0x0")?;
+
+    let details = Command::new("xprop")
+        .args(["-id", window_id, "WM_CLASS", "_NET_WM_NAME", "WM_NAME"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let details = String::from_utf8_lossy(&details.stdout);
+    parse_xprop_window_identity(&details)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_xprop_window_identity(details: &str) -> Option<String> {
+    for line in details.lines() {
+        if line.starts_with("WM_CLASS") {
+            let quoted = line
+                .split('"')
+                .skip(1)
+                .step_by(2)
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            if let Some(name) = quoted.last() {
+                return Some((*name).to_owned());
+            }
+        }
+    }
+    for line in details.lines() {
+        if (line.starts_with("_NET_WM_NAME") || line.starts_with("WM_NAME"))
+            && let Some(name) = line
+                .split('"')
+                .nth(1)
+                .filter(|part| !part.trim().is_empty())
+        {
+            return Some(name.trim().to_owned());
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn current_source_application() -> Option<String> {
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"System Events\" to get name of first application process whose frontmost is true",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+#[cfg(target_os = "windows")]
+fn current_source_application() -> Option<String> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Add-Type @'\nusing System;\nusing System.Runtime.InteropServices;\npublic class Fg { [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid); }\n'@; $hwnd=[Fg]::GetForegroundWindow(); $pid=0; [Fg]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null; (Get-Process -Id $pid).ProcessName",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn current_source_application() -> Option<String> {
+    None
+}
+
+fn try_play_notification_sound() {
+    #[cfg(target_os = "linux")]
+    {
+        for (program, args) in [
+            ("canberra-gtk-play", vec!["-i", "bell"]),
+            (
+                "paplay",
+                vec!["/usr/share/sounds/freedesktop/stereo/complete.oga"],
+            ),
+        ] {
+            if Command::new(program)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("afplay")
+            .arg("/System/Library/Sounds/Glass.aiff")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-NoProfile", "-Command", "[console]::beep(880,80)"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn configure_start_on_login(enabled: bool) -> Result<()> {
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok_or_else(|| anyhow::anyhow!("unable to resolve user config directory"))?;
+    let autostart_dir = config_home.join("autostart");
+    let desktop_file = autostart_dir.join("yank.desktop");
+    if enabled {
+        fs::create_dir_all(&autostart_dir)?;
+        let exe = env::current_exe()?;
+        let content = format!(
+            "[Desktop Entry]\nType=Application\nName=yank\nExec={}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+            desktop_exec_arg(&exe)
+        );
+        fs::write(desktop_file, content)?;
+    } else if desktop_file.exists() {
+        fs::remove_file(desktop_file)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_start_on_login(_enabled: bool) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_exec_arg(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace(' ', "\\ ")
 }
 
 fn restore_clip_to_clipboard(clipboard: &mut Clipboard, clip: &Clip) -> Result<bool> {
@@ -4880,7 +5800,30 @@ fn restore_clip_to_clipboard(clipboard: &mut Clipboard, clip: &Clip) -> Result<b
         return Ok(true);
     }
 
+    if let Some(text) = clip
+        .formats
+        .iter()
+        .find_map(ClipFormat::rtf_value)
+        .map(rtf_to_text)
+        .filter(|text| !text.trim().is_empty())
+    {
+        clipboard.set_text(text)?;
+        return Ok(true);
+    }
+
     Ok(false)
+}
+
+fn restore_template_to_clipboard(clipboard: &mut Clipboard, clip: &Clip) -> Result<Option<String>> {
+    if clip.group_id.is_none() {
+        return Ok(None);
+    }
+    let Some(text) = plain_text_payload(clip).filter(|text| has_template_placeholder(text)) else {
+        return Ok(None);
+    };
+    let rendered = render_template_text_for_clip(clip, text, clipboard);
+    clipboard.set_text(rendered.clone())?;
+    Ok(Some(content_hash(&[ClipFormat::text(&rendered)])))
 }
 
 fn image_rgba_payload(format: &ClipFormat) -> Option<(usize, usize, Vec<u8>)> {
@@ -4917,11 +5860,104 @@ fn plain_text_payload(clip: &Clip) -> Option<String> {
     {
         return Some(text);
     }
+    if let Some(text) = clip
+        .formats
+        .iter()
+        .find_map(ClipFormat::rtf_value)
+        .map(rtf_to_text)
+        .filter(|text| !text.trim().is_empty())
+    {
+        return Some(text);
+    }
     clip.formats
         .iter()
         .find_map(ClipFormat::file_list_paths)
         .filter(|paths| !paths.is_empty())
         .map(|paths| paths.join("\n"))
+}
+
+fn has_template_placeholder(text: &str) -> bool {
+    ["{date}", "{time}", "{datetime}", "{clipboard}"]
+        .iter()
+        .any(|placeholder| text.contains(placeholder))
+}
+
+fn render_template_text_for_clip(clip: &Clip, text: String, clipboard: &mut Clipboard) -> String {
+    if clip.group_id.is_some() && has_template_placeholder(&text) {
+        let current_clipboard = clipboard.get_text().ok();
+        render_template_text(&text, current_clipboard.as_deref().unwrap_or_default())
+    } else {
+        text
+    }
+}
+
+fn render_template_text(text: &str, clipboard_text: &str) -> String {
+    let now = Local::now();
+    text.replace("{date}", &now.format("%Y-%m-%d").to_string())
+        .replace("{time}", &now.format("%H:%M:%S").to_string())
+        .replace("{datetime}", &now.format("%Y-%m-%d %H:%M:%S").to_string())
+        .replace("{clipboard}", clipboard_text)
+}
+
+fn rtf_to_text(rtf: &str) -> String {
+    let mut output = String::new();
+    let mut chars = rtf.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '{' | '}' => {}
+            '\\' => {
+                let Some(next) = chars.peek().copied() else {
+                    break;
+                };
+                match next {
+                    '\\' | '{' | '}' => {
+                        output.push(next);
+                        chars.next();
+                    }
+                    '\'' => {
+                        chars.next();
+                        let hi = chars.next().and_then(|ch| ch.to_digit(16));
+                        let lo = chars.next().and_then(|ch| ch.to_digit(16));
+                        if let (Some(hi), Some(lo)) = (hi, lo) {
+                            output.push(char::from_u32((hi * 16) + lo).unwrap_or(' '));
+                        }
+                    }
+                    _ if next.is_ascii_alphabetic() => {
+                        let mut control = String::new();
+                        while let Some(part) = chars.peek().copied() {
+                            if part.is_ascii_alphabetic() {
+                                control.push(part);
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                        while let Some(part) = chars.peek().copied() {
+                            if part == '-' || part.is_ascii_digit() {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                        if chars.peek() == Some(&' ') {
+                            chars.next();
+                        }
+                        match control.as_str() {
+                            "par" | "line" => output.push('\n'),
+                            "tab" => output.push('\t'),
+                            _ => {}
+                        }
+                    }
+                    _ => {
+                        chars.next();
+                    }
+                }
+            }
+            '\r' | '\n' => output.push(' '),
+            other => output.push(other),
+        }
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn transform_text(text: &str, transform: TextTransform) -> String {
@@ -5123,6 +6159,12 @@ fn clip_format_names<'a>(messages: &'a I18nBundle, clip: &Clip) -> Vec<&'a str> 
     if clip.formats.iter().any(ClipFormat::is_html) {
         names.push(messages.text("app.format_html"));
     }
+    if clip.formats.iter().any(ClipFormat::is_rtf) {
+        names.push(messages.text("app.format_rtf"));
+    }
+    if clip.formats.iter().any(ClipFormat::is_color) {
+        names.push(messages.text("app.format_color"));
+    }
     if clip
         .formats
         .iter()
@@ -5149,17 +6191,104 @@ fn clip_matches_filter(clip: &Clip, filter: ClipFilter) -> bool {
     }
 }
 
+fn query_history_clips(
+    store: &Store,
+    query: &str,
+    limit: u32,
+    settings: &Settings,
+) -> Result<Vec<Clip>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return store.list_clips(limit).map_err(Into::into);
+    }
+
+    match SearchMode::from_settings(settings) {
+        SearchMode::Simple if !settings.quick_paste_case_sensitive_search => {
+            store.search_clips(query, limit).map_err(Into::into)
+        }
+        SearchMode::Simple => {
+            let clips = store.list_clips(limit)?;
+            Ok(clips
+                .into_iter()
+                .filter(|clip| searchable_clip_text(clip).contains(query))
+                .collect())
+        }
+        SearchMode::Regex => {
+            let regex = RegexBuilder::new(query)
+                .case_insensitive(!settings.quick_paste_case_sensitive_search)
+                .build()?;
+            let clips = store.list_clips(limit)?;
+            Ok(clips
+                .into_iter()
+                .filter(|clip| regex.is_match(&searchable_clip_text(clip)))
+                .collect())
+        }
+        SearchMode::Wildcard => {
+            let regex = RegexBuilder::new(&wildcard_to_regex(query))
+                .case_insensitive(!settings.quick_paste_case_sensitive_search)
+                .build()?;
+            let clips = store.list_clips(limit)?;
+            Ok(clips
+                .into_iter()
+                .filter(|clip| regex.is_match(&searchable_clip_text(clip)))
+                .collect())
+        }
+    }
+}
+
+fn searchable_clip_text(clip: &Clip) -> String {
+    [
+        clip.description.as_str(),
+        clip.primary_text.as_deref().unwrap_or_default(),
+        clip.source_app.as_deref().unwrap_or_default(),
+        &format_timestamp(clip.created_at),
+        &format_timestamp(clip.updated_at),
+    ]
+    .join("\n")
+}
+
+fn wildcard_to_regex(query: &str) -> String {
+    let mut pattern = String::new();
+    for ch in query.chars() {
+        match ch {
+            '*' => pattern.push_str(".*"),
+            '?' => pattern.push('.'),
+            _ => pattern.push_str(&regex::escape(&ch.to_string())),
+        }
+    }
+    pattern
+}
+
+fn snapshot_matches_app_exclude(snapshot: &ClipboardSnapshot, rules: &str) -> bool {
+    snapshot
+        .source_app
+        .as_deref()
+        .is_some_and(|source| rules_match_text(source, rules))
+}
+
 fn snapshot_matches_content_exclude(snapshot: &ClipboardSnapshot, rules: &str) -> bool {
     let text = snapshot
         .primary_text
         .as_deref()
-        .unwrap_or(&snapshot.description)
-        .to_ascii_lowercase();
+        .unwrap_or(&snapshot.description);
+    rules_match_text(text, rules)
+}
+
+fn rules_match_text(text: &str, rules: &str) -> bool {
     rules
         .lines()
         .map(str::trim)
         .filter(|rule| !rule.is_empty())
-        .any(|rule| text.contains(&rule.to_ascii_lowercase()))
+        .any(|rule| {
+            RegexBuilder::new(rule)
+                .case_insensitive(true)
+                .build()
+                .map(|regex| regex.is_match(text))
+                .unwrap_or_else(|_| {
+                    text.to_ascii_lowercase()
+                        .contains(&rule.to_ascii_lowercase())
+                })
+        })
 }
 
 fn resolve_history_path(value: &str, default_file: &str) -> Result<PathBuf> {
@@ -5185,6 +6314,65 @@ fn default_path_text(value: &str, default_file: &str) -> String {
     }
 }
 
+fn backup_database_if_configured(value: &str) -> Result<Option<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let source = paths::database_path()?;
+    if !source.exists() {
+        return Ok(None);
+    }
+
+    let requested = PathBuf::from(trimmed);
+    let target = if requested.extension().is_none() {
+        let directory = if requested.is_absolute() {
+            requested
+        } else {
+            paths::data_dir()?.join(requested)
+        };
+        fs::create_dir_all(&directory)?;
+        directory.join(format!(
+            "yank-backup-{}.sqlite",
+            Local::now().format("%Y%m%d-%H%M%S")
+        ))
+    } else if requested.is_absolute() {
+        requested
+    } else {
+        paths::data_dir()?.join(requested)
+    };
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(&source, &target)?;
+    Ok(Some(target.to_string_lossy().into_owned()))
+}
+
+fn enforce_database_size_limit(store: &Store, max_bytes: u64) -> Result<usize> {
+    let Some(path) = paths::database_path().ok().filter(|path| path.exists()) else {
+        return Ok(0);
+    };
+
+    let mut purged = 0usize;
+    for _ in 0..128 {
+        let size = fs::metadata(&path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        if size <= max_bytes {
+            break;
+        }
+        let removed = store.purge_oldest_non_pinned_clips(100)?;
+        if removed == 0 {
+            break;
+        }
+        purged = purged.saturating_add(removed);
+        store.vacuum()?;
+    }
+    Ok(purged)
+}
+
 fn vec_item_or_empty(values: &[String], index: usize) -> &str {
     values.get(index).map(String::as_str).unwrap_or("")
 }
@@ -5192,6 +6380,27 @@ fn vec_item_or_empty(values: &[String], index: usize) -> &str {
 fn ensure_bool_len(values: &mut Vec<bool>, len: usize) {
     if values.len() < len {
         values.resize(len, false);
+    }
+}
+
+#[derive(Debug, Default)]
+struct AdvancedMaintenance {
+    expired: usize,
+    purged: usize,
+    backup_path: Option<String>,
+}
+
+impl AdvancedMaintenance {
+    fn merge(&mut self, other: Self) {
+        self.expired = self.expired.saturating_add(other.expired);
+        self.purged = self.purged.saturating_add(other.purged);
+        if other.backup_path.is_some() {
+            self.backup_path = other.backup_path;
+        }
+    }
+
+    fn has_work(&self) -> bool {
+        self.expired > 0 || self.purged > 0 || self.backup_path.is_some()
     }
 }
 
@@ -5224,7 +6433,13 @@ fn summarize_paths(paths: &[String]) -> String {
         .join(", ")
 }
 
-fn summarize_row_text(text: &str, show_leading_whitespace: bool, empty_text: &str) -> String {
+fn summarize_row_text(
+    text: &str,
+    show_leading_whitespace: bool,
+    word_wrap: bool,
+    lines_per_row: u32,
+    empty_text: &str,
+) -> String {
     if show_leading_whitespace {
         let visible = text
             .chars()
@@ -5236,6 +6451,20 @@ fn summarize_row_text(text: &str, show_leading_whitespace: bool, empty_text: &st
             })
             .take(160)
             .collect::<String>();
+        if visible.trim().is_empty() {
+            empty_text.to_owned()
+        } else {
+            visible
+        }
+    } else if word_wrap && lines_per_row > 1 {
+        let visible = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(lines_per_row as usize)
+            .map(|line| line.chars().take(120).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
         if visible.trim().is_empty() {
             empty_text.to_owned()
         } else {
@@ -5305,8 +6534,8 @@ struct HotkeySettingsInput {
 }
 
 impl HotkeySettingsInput {
-    fn invalid_shortcut(&self) -> Option<String> {
-        for value in [
+    fn values(&self) -> [&String; 8] {
+        [
             &self.show_history,
             &self.search,
             &self.copy_selected,
@@ -5315,7 +6544,11 @@ impl HotkeySettingsInput {
             &self.edit_selected,
             &self.capture_now,
             &self.sync_now,
-        ] {
+        ]
+    }
+
+    fn invalid_shortcut(&self) -> Option<String> {
+        for value in self.values() {
             if Shortcut::parse(value).is_none() {
                 return Some(value.clone());
             }
@@ -5367,6 +6600,35 @@ impl Shortcut {
             && self.shift == event.modifiers.shift
             && self.alt == event.modifiers.alt
     }
+
+    fn canonical(self) -> String {
+        format!(
+            "{}:{}:{}:{:?}",
+            self.primary, self.shift, self.alt, self.key_code
+        )
+    }
+}
+
+fn shortcut_canonical(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Shortcut::parse(value).map(Shortcut::canonical)
+    }
+}
+
+fn first_shortcut_conflict<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let mut seen = HashSet::new();
+    for value in values {
+        let Some(canonical) = shortcut_canonical(value) else {
+            continue;
+        };
+        if !seen.insert(canonical) {
+            return Some(value.to_owned());
+        }
+    }
+    None
 }
 
 fn parse_key_code(value: &str) -> Option<KeyCode> {
@@ -5379,11 +6641,27 @@ fn parse_key_code(value: &str) -> Option<KeyCode> {
         "space" => Some(KeyCode::Space),
         "tab" => Some(KeyCode::Tab),
         "backtick" | "`" => Some(KeyCode::Backtick),
+        "insert" | "ins" => Some(KeyCode::Insert),
+        "home" => Some(KeyCode::Home),
+        "end" => Some(KeyCode::End),
+        "pageup" | "pgup" => Some(KeyCode::PageUp),
+        "pagedown" | "pgdn" => Some(KeyCode::PageDown),
+        "up" | "arrowup" => Some(KeyCode::ArrowUp),
+        "down" | "arrowdown" => Some(KeyCode::ArrowDown),
+        "left" | "arrowleft" => Some(KeyCode::ArrowLeft),
+        "right" | "arrowright" => Some(KeyCode::ArrowRight),
+        "f1" => Some(KeyCode::F1),
         "f2" => Some(KeyCode::F2),
         "f3" => Some(KeyCode::F3),
         "f4" => Some(KeyCode::F4),
         "f5" => Some(KeyCode::F5),
+        "f6" => Some(KeyCode::F6),
         "f7" => Some(KeyCode::F7),
+        "f8" => Some(KeyCode::F8),
+        "f9" => Some(KeyCode::F9),
+        "f10" => Some(KeyCode::F10),
+        "f11" => Some(KeyCode::F11),
+        "f12" => Some(KeyCode::F12),
         "0" => Some(KeyCode::Key0),
         "1" => Some(KeyCode::Key1),
         "2" => Some(KeyCode::Key2),
