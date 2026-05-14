@@ -1369,6 +1369,53 @@ impl AppPalette {
             },
         }
     }
+
+    fn button_style(
+        self,
+        color: Vec4,
+        hover: Vec4,
+        focus: Vec4,
+        border: Vec4,
+        border_focus: Vec4,
+    ) -> ButtonStyle {
+        ButtonStyle {
+            color,
+            hover,
+            focus,
+            border,
+            border_focus,
+            text: self.text,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ButtonStyle {
+    color: Vec4,
+    hover: Vec4,
+    focus: Vec4,
+    border: Vec4,
+    border_focus: Vec4,
+    text: Vec4,
+}
+
+#[derive(Clone, Copy)]
+struct HistoryRowVisualState {
+    index: usize,
+    selected: bool,
+    multi_selected: bool,
+    pasted: bool,
+}
+
+impl HistoryRowVisualState {
+    fn idle(index: usize) -> Self {
+        Self {
+            index,
+            selected: false,
+            multi_selected: false,
+            pasted: false,
+        }
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -4223,12 +4270,13 @@ impl App {
             self.apply_button_style(
                 cx,
                 id,
-                palette.surface,
-                palette.row_hover,
-                palette.row_focus,
-                palette.border_muted,
-                palette.accent,
-                palette.text,
+                palette.button_style(
+                    palette.surface,
+                    palette.row_hover,
+                    palette.row_focus,
+                    palette.border_muted,
+                    palette.accent,
+                ),
             );
         }
 
@@ -4236,12 +4284,13 @@ impl App {
             self.apply_button_style(
                 cx,
                 id,
-                palette.inset,
-                palette.row_hover,
-                palette.row_selected,
-                palette.border_muted,
-                palette.accent,
-                palette.text,
+                palette.button_style(
+                    palette.inset,
+                    palette.row_hover,
+                    palette.row_selected,
+                    palette.border_muted,
+                    palette.accent,
+                ),
             );
         }
 
@@ -4249,12 +4298,13 @@ impl App {
             self.apply_button_style(
                 cx,
                 id,
-                palette.surface,
-                palette.row_hover,
-                palette.row_focus,
-                palette.border_muted,
-                palette.accent_hover,
-                palette.text,
+                palette.button_style(
+                    palette.surface,
+                    palette.row_hover,
+                    palette.row_focus,
+                    palette.border_muted,
+                    palette.accent_hover,
+                ),
             );
         }
 
@@ -4262,12 +4312,13 @@ impl App {
             self.apply_button_style(
                 cx,
                 id,
-                palette.surface,
-                palette.row_hover,
-                palette.row_focus,
-                palette.danger,
-                palette.danger,
-                palette.text,
+                palette.button_style(
+                    palette.surface,
+                    palette.row_hover,
+                    palette.row_focus,
+                    palette.danger,
+                    palette.danger,
+                ),
             );
         }
 
@@ -4275,12 +4326,13 @@ impl App {
             self.apply_button_style(
                 cx,
                 id,
-                palette.elevated,
-                palette.row_hover,
-                palette.row_focus,
-                palette.border_muted,
-                palette.accent_hover,
-                palette.text,
+                palette.button_style(
+                    palette.elevated,
+                    palette.row_hover,
+                    palette.row_focus,
+                    palette.border_muted,
+                    palette.accent_hover,
+                ),
             );
         }
 
@@ -4288,12 +4340,13 @@ impl App {
             self.apply_button_style(
                 cx,
                 id,
-                palette.elevated,
-                palette.row_hover,
-                palette.row_focus,
-                palette.danger,
-                palette.danger,
-                palette.text,
+                palette.button_style(
+                    palette.elevated,
+                    palette.row_hover,
+                    palette.row_focus,
+                    palette.danger,
+                    palette.danger,
+                ),
             );
         }
 
@@ -4301,12 +4354,13 @@ impl App {
             self.apply_button_style(
                 cx,
                 id,
-                palette.elevated,
-                palette.row_hover,
-                palette.row_focus,
-                palette.warning,
-                palette.success,
-                palette.text,
+                palette.button_style(
+                    palette.elevated,
+                    palette.row_hover,
+                    palette.row_focus,
+                    palette.warning,
+                    palette.success,
+                ),
             );
         }
 
@@ -4315,7 +4369,12 @@ impl App {
         self.apply_search_option_button_styles(cx);
 
         for index in 0..HISTORY_ROWS {
-            self.apply_history_row_style(cx, row_id(index), palette, index, false, false, false);
+            self.apply_history_row_style(
+                cx,
+                row_id(index),
+                palette,
+                HistoryRowVisualState::idle(index),
+            );
         }
 
         self.ui.redraw(cx);
@@ -4349,17 +4408,15 @@ impl App {
         });
     }
 
-    fn apply_button_style(
-        &self,
-        cx: &mut Cx,
-        id: &[LiveId],
-        color: Vec4,
-        hover: Vec4,
-        focus: Vec4,
-        border: Vec4,
-        border_focus: Vec4,
-        text: Vec4,
-    ) {
+    fn apply_button_style(&self, cx: &mut Cx, id: &[LiveId], style: ButtonStyle) {
+        let ButtonStyle {
+            color,
+            hover,
+            focus,
+            border,
+            border_focus,
+            text,
+        } = style;
         let mut widget = self.widget(cx, id);
         script_apply_eval!(cx, widget, {
             draw_bg +: {
@@ -4382,23 +4439,20 @@ impl App {
         cx: &mut Cx,
         id: &[LiveId],
         palette: AppPalette,
-        index: usize,
-        selected: bool,
-        multi_selected: bool,
-        pasted: bool,
+        state: HistoryRowVisualState,
     ) {
-        let color = if selected {
+        let color = if state.selected {
             palette.row_selected
-        } else if multi_selected {
+        } else if state.multi_selected {
             palette.row_multi
-        } else if index % 2 == 0 {
+        } else if state.index.is_multiple_of(2) {
             palette.row_even
         } else {
             palette.row_odd
         };
-        let border = if pasted {
+        let border = if state.pasted {
             palette.success
-        } else if selected || multi_selected {
+        } else if state.selected || state.multi_selected {
             palette.accent
         } else {
             palette.border_muted
@@ -4445,12 +4499,7 @@ impl App {
         self.apply_button_style(
             cx,
             id,
-            color,
-            hover,
-            palette.row_focus,
-            border,
-            palette.accent,
-            palette.text,
+            palette.button_style(color, hover, palette.row_focus, border, palette.accent),
         );
     }
 
@@ -4697,16 +4746,18 @@ impl App {
                     cx,
                     id,
                     palette,
-                    index,
-                    selected,
-                    multi_selected,
-                    self.clip_was_pasted(clip),
+                    HistoryRowVisualState {
+                        index,
+                        selected,
+                        multi_selected,
+                        pasted: self.clip_was_pasted(clip),
+                    },
                 );
                 let row_text = self.row_text(index, clip, selected, multi_selected);
                 self.widget(cx, id).set_visible(cx, true);
                 self.widget(cx, id).set_text(cx, &row_text);
             } else {
-                self.apply_history_row_style(cx, id, palette, index, false, false, false);
+                self.apply_history_row_style(cx, id, palette, HistoryRowVisualState::idle(index));
                 self.widget(cx, id).set_visible(cx, index == 0);
                 let empty_text = if index == 0 {
                     self.text("app.empty")
