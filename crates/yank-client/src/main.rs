@@ -61,10 +61,10 @@ script_mod! {
         height: Fit
         flow: Down
         spacing: theme.space_2
-        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_2, bottom: theme.space_2}
+        padding: theme.mspace_3{left: 14, right: 14, top: 10, bottom: 10}
         new_batch: true
         draw_bg.color: theme.color_bg_container
-        draw_bg.border_radius: 4.0
+        draw_bg.border_radius: 6.0
         draw_bg.border_size: 1.0
         draw_bg.border_color: theme.color_bg_highlight
     }
@@ -74,10 +74,10 @@ script_mod! {
         height: Fill
         flow: Down
         spacing: theme.space_2
-        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_2, bottom: theme.space_2}
+        padding: theme.mspace_3{left: 12, right: 12, top: 10, bottom: 10}
         new_batch: true
         draw_bg.color: theme.color_bg_container
-        draw_bg.border_radius: 4.0
+        draw_bg.border_radius: 6.0
         draw_bg.border_size: 1.0
         draw_bg.border_color: theme.color_bg_highlight
     }
@@ -111,6 +111,13 @@ script_mod! {
         draw_text.text_style.font_size: theme.font_size_code
     }
 
+    let MenuSectionLabel = Label{
+        width: Fill
+        height: Fit
+        draw_text.color: theme.color_label_inner_inactive
+        draw_text.text_style: theme.font_bold{font_size: theme.font_size_code}
+    }
+
     let SectionTitle = Label{
         width: Fill
         height: Fit
@@ -119,11 +126,11 @@ script_mod! {
     }
 
     let DenseButton = ButtonFlat{
-        height: 30
+        height: 32
         margin: 0.
-        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        padding: theme.mspace_2{left: 10, right: 10}
         draw_bg +: {
-            border_radius: 3.0
+            border_radius: 4.0
             border_size: 1.0
         }
         draw_text +: {
@@ -133,11 +140,11 @@ script_mod! {
 
     let MenuButton = ButtonFlat{
         width: Fit
-        height: 28
+        height: 30
         margin: 0.
-        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        padding: theme.mspace_2{left: 10, right: 10}
         draw_bg +: {
-            border_radius: 2.0
+            border_radius: 4.0
             border_size: 1.0
         }
         draw_text +: {
@@ -151,7 +158,7 @@ script_mod! {
         margin: 0.
         padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
         draw_bg +: {
-            border_radius: 2.0
+            border_radius: 4.0
             border_size: 1.0
         }
         draw_text +: {
@@ -161,12 +168,12 @@ script_mod! {
 
     let SettingsTabButton = ButtonFlat{
         width: Fill
-        height: 34
+        height: 36
         margin: 0.
-        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        padding: theme.mspace_2{left: 12, right: 12}
         align: Align{x: 0.0 y: 0.5}
         draw_bg +: {
-            border_radius: 2.0
+            border_radius: 4.0
             border_size: 1.0
         }
         draw_text +: {
@@ -179,7 +186,7 @@ script_mod! {
         margin: 0.
         padding: theme.mspace_2{left: theme.space_3, right: theme.space_3}
         draw_bg +: {
-            border_radius: 3.0
+            border_radius: 4.0
         }
         draw_text +: {
             text_style +: {font_size: theme.font_size_p}
@@ -188,13 +195,13 @@ script_mod! {
 
     let HistoryRow = ButtonFlat{
         width: Fill
-        height: 30
+        height: 32
         margin: 0.
-        padding: theme.mspace_2{left: theme.space_2, right: theme.space_2}
+        padding: theme.mspace_2{left: 10, right: 10}
         align: Align{x: 0.0 y: 0.5}
         label_walk: Walk{width: Fill, height: Fit}
         draw_bg +: {
-            border_radius: 0.0
+            border_radius: 2.0
             border_size: 1.0
             color: theme.color_bg_even
             color_hover: theme.color_bg_highlight_inline
@@ -213,10 +220,10 @@ script_mod! {
         width: Fill
         height: Fill
         flow: Down
-        padding: theme.mspace_3{left: theme.space_3, right: theme.space_3, top: theme.space_3, bottom: theme.space_3}
+        padding: theme.mspace_3{left: 14, right: 14, top: 12, bottom: 12}
         new_batch: true
         draw_bg.color: theme.color_inset
-        draw_bg.border_radius: 4.0
+        draw_bg.border_radius: 6.0
         draw_bg.border_size: 1.0
         draw_bg.border_color: theme.color_bg_highlight
     }
@@ -226,10 +233,10 @@ script_mod! {
         height: Fit
         flow: Down
         spacing: theme.space_1
-        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
+        padding: theme.mspace_3{left: 10, right: 10, top: 8, bottom: 8}
         new_batch: true
         draw_bg.color: theme.color_inset
-        draw_bg.border_radius: 3.0
+        draw_bg.border_radius: 5.0
         draw_bg.border_size: 1.0
         draw_bg.border_color: theme.color_bg_highlight
     }
@@ -250,8 +257,8 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Right
-                        spacing: theme.space_2
-                        padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_1, bottom: theme.space_1}
+                        spacing: 10
+                        padding: theme.mspace_3{left: 12, right: 12, top: 8, bottom: 8}
                         align: Align{y: 0.5}
                         draw_bg.color: theme.color_app_caption_bar
 
@@ -277,10 +284,11 @@ script_mod! {
                         status_shell := RoundedView{
                             width: 188
                             height: Fit
-                            padding: theme.mspace_2{left: theme.space_2, right: theme.space_2, top: theme.space_1, bottom: theme.space_1}
+                            padding: theme.mspace_2{left: 10, right: 10, top: 6, bottom: 6}
                             new_batch: true
                             draw_bg.color: theme.color_bg_highlight_inline
-                            draw_bg.border_radius: 2.0
+                            draw_bg.border_radius: 4.0
+                            draw_bg.border_size: 1.0
                             status := TextBox{
                                 width: Fill
                                 height: Fit
@@ -297,19 +305,19 @@ script_mod! {
                         width: Fill
                         height: Fill
                         flow: Down
-                        spacing: theme.space_1
-                        padding: theme.mspace_3{left: theme.space_1, right: theme.space_1, top: theme.space_1, bottom: theme.space_1}
+                        spacing: 8
+                        padding: theme.mspace_3{left: 8, right: 8, top: 8, bottom: 8}
 
                         quick_paste_shell := PanelCard{
                             width: Fill
                             height: Fill
-                            spacing: theme.space_1
-                            padding: theme.mspace_3{left: theme.space_1, right: theme.space_1, top: theme.space_1, bottom: theme.space_1}
+                            spacing: 8
+                            padding: theme.mspace_3{left: 8, right: 8, top: 8, bottom: 8}
                             history_header := View{
                                 width: Fill
                                 height: Fit
                                 flow: Right
-                                spacing: theme.space_2
+                                spacing: 10
                                 align: Align{y: 0.5}
                                 history_title := SectionTitle{text: ""}
                                 clip_count := MetaLabel{text: ""}
@@ -319,7 +327,7 @@ script_mod! {
                                 width: Fill
                                 height: Fit
                                 flow: Right
-                                spacing: theme.space_1
+                                spacing: 6
                                 filter_all_button := MenuButton{text: ""}
                                 filter_pinned_button := MenuButton{text: ""}
                                 filter_text_button := MenuButton{text: ""}
@@ -385,7 +393,7 @@ script_mod! {
                                 width: Fill
                                 height: Fill
                                 flow: Down
-                                spacing: 0.
+                                spacing: 1.
                                 row_0 := HistoryRow{text: ""}
                                 row_1 := HistoryRow{text: ""}
                                 row_2 := HistoryRow{text: ""}
@@ -408,17 +416,23 @@ script_mod! {
                                 row_19 := HistoryRow{text: ""}
                             }
 
-                            editor_panel := View{
+                            editor_panel := RoundedView{
                                 width: Fill
                                 height: 218
                                 visible: false
                                 flow: Right
-                                spacing: theme.space_1
+                                spacing: 8
+                                padding: theme.mspace_3{left: 10, right: 10, top: 8, bottom: 8}
+                                new_batch: true
+                                draw_bg.color: theme.color_inset
+                                draw_bg.border_radius: 5.0
+                                draw_bg.border_size: 1.0
+                                draw_bg.border_color: theme.color_bg_highlight
                                 edit_group := View{
                                     width: Fill
                                     height: Fill
                                     flow: Down
-                                    spacing: theme.space_1
+                                    spacing: 6
                                     selected_title := SectionTitle{text: ""}
                                     selected_meta := MutedLabel{text: ""}
                                     quick_paste_alias_row := View{
@@ -449,7 +463,7 @@ script_mod! {
                                     width: Fit
                                     height: Fill
                                     flow: Down
-                                    spacing: theme.space_1
+                                    spacing: 6
                                     copy_selected_button := ActionButton{text: ""}
                                     save_edit_button := DenseButton{text: ""}
                                     pin_button := DenseButton{text: ""}
@@ -461,7 +475,8 @@ script_mod! {
                         menu_panel := AppCard{
                             visible: false
                             flow: Down
-                            spacing: theme.space_1
+                            spacing: 7
+                            menu_primary_title := MenuSectionLabel{text: ""}
                             menu_row_a := View{
                                 width: Fill
                                 height: Fit
@@ -501,6 +516,7 @@ script_mod! {
                                 menu_options_button := MenuButton{text: ""}
                                 menu_exit_button := MenuButton{text: ""}
                             }
+                            menu_view_title := MenuSectionLabel{text: ""}
                             menu_row_d := View{
                                 width: Fill
                                 height: Fit
@@ -511,6 +527,7 @@ script_mod! {
                                 menu_lines_button := MenuButton{text: ""}
                                 menu_transparency_button := MenuButton{text: ""}
                             }
+                            menu_transform_title := MenuSectionLabel{text: ""}
                             menu_row_e := View{
                                 width: Fill
                                 height: Fit
@@ -545,6 +562,7 @@ script_mod! {
                                 menu_time_button := MenuButton{text: ""}
                                 menu_guid_button := MenuButton{text: ""}
                             }
+                            menu_order_title := MenuSectionLabel{text: ""}
                             menu_row_h := View{
                                 width: Fill
                                 height: Fit
@@ -566,6 +584,7 @@ script_mod! {
                                 menu_copy_selection_button := MenuButton{text: ""}
                                 menu_clear_history_button := MenuButton{text: ""}
                             }
+                            menu_io_title := MenuSectionLabel{text: ""}
                             menu_row_j := View{
                                 width: Fill
                                 height: Fit
@@ -587,6 +606,7 @@ script_mod! {
                                 menu_export_qr_button := MenuButton{text: ""}
                                 menu_email_body_button := MenuButton{text: ""}
                             }
+                            menu_compare_title := MenuSectionLabel{text: ""}
                             menu_row_k := View{
                                 width: Fill
                                 height: Fit
@@ -616,6 +636,7 @@ script_mod! {
                                 menu_replace_top_sticky_button := MenuButton{text: ""}
                                 menu_remove_sticky_button := MenuButton{text: ""}
                             }
+                            menu_search_title := MenuSectionLabel{text: ""}
                             menu_row_n := View{
                                 width: Fill
                                 height: Fit
@@ -638,13 +659,18 @@ script_mod! {
                             }
                         }
 
-                        search_card := View{
+                        search_card := RoundedView{
                             width: Fill
-                            height: 40
+                            height: 46
                             flow: Right
-                            spacing: theme.space_1
-                            padding: theme.mspace_3{left: theme.space_1, right: theme.space_1, top: theme.space_1, bottom: theme.space_1}
+                            spacing: 8
+                            padding: theme.mspace_3{left: 8, right: 8, top: 7, bottom: 7}
                             align: Align{y: 0.5}
+                            new_batch: true
+                            draw_bg.color: theme.color_inset
+                            draw_bg.border_radius: 6.0
+                            draw_bg.border_size: 1.0
+                            draw_bg.border_color: theme.color_bg_highlight
                             groups_button := MenuButton{text: ""}
                             search_input := TextInput{width: Fill height: 32 empty_text: ""}
                             clear_search_button := DenseButton{text: ""}
@@ -663,8 +689,8 @@ script_mod! {
                             width: Fill
                             height: Fit
                             flow: Right
-                            spacing: theme.space_2
-                            padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_1, bottom: theme.space_1}
+                            spacing: 10
+                            padding: theme.mspace_3{left: 12, right: 12, top: 8, bottom: 8}
                             align: Align{y: 0.5}
                             draw_bg.color: theme.color_bg_container
                             settings_title_group := View{
@@ -682,13 +708,13 @@ script_mod! {
                             width: Fill
                             height: Fill
                             flow: Right
-                            spacing: theme.space_2
-                            padding: theme.mspace_3{left: theme.space_2, right: theme.space_2, top: theme.space_2, bottom: theme.space_2}
+                            spacing: 10
+                            padding: theme.mspace_3{left: 10, right: 10, top: 10, bottom: 10}
 
                             settings_tabs := AppCard{
-                                width: 158
+                                width: 166
                                 height: Fill
-                                spacing: theme.space_1
+                                spacing: 6
                                 settings_general_tab := SettingsTabButton{text: ""}
                                 settings_types_tab := SettingsTabButton{text: ""}
                                 settings_keyboard_tab := SettingsTabButton{text: ""}
@@ -1275,38 +1301,71 @@ struct AppPalette {
     app_bg: Vec4,
     header_bg: Vec4,
     surface: Vec4,
+    elevated: Vec4,
     inset: Vec4,
     border: Vec4,
-    row: Vec4,
+    border_muted: Vec4,
+    text: Vec4,
+    text_muted: Vec4,
+    row_even: Vec4,
+    row_odd: Vec4,
     row_hover: Vec4,
     row_focus: Vec4,
+    row_selected: Vec4,
+    row_multi: Vec4,
     accent: Vec4,
+    accent_hover: Vec4,
+    danger: Vec4,
+    success: Vec4,
+    warning: Vec4,
 }
 
 impl AppPalette {
     fn for_theme(theme: Theme) -> Self {
         match theme {
             Theme::Light => Self {
-                app_bg: vec4(0.91, 0.92, 0.94, 1.0),
-                header_bg: vec4(0.84, 0.86, 0.89, 1.0),
-                surface: vec4(0.97, 0.98, 0.99, 1.0),
-                inset: vec4(0.90, 0.92, 0.95, 1.0),
-                border: vec4(0.66, 0.69, 0.74, 1.0),
-                row: vec4(0.98, 0.99, 1.0, 1.0),
-                row_hover: vec4(0.87, 0.91, 0.98, 1.0),
-                row_focus: vec4(0.73, 0.82, 0.98, 1.0),
-                accent: vec4(0.22, 0.38, 0.74, 1.0),
+                app_bg: vec4(0.86, 0.88, 0.91, 1.0),
+                header_bg: vec4(0.78, 0.81, 0.85, 1.0),
+                surface: vec4(0.96, 0.97, 0.98, 1.0),
+                elevated: vec4(1.00, 1.00, 1.00, 1.0),
+                inset: vec4(0.90, 0.92, 0.94, 1.0),
+                border: vec4(0.55, 0.58, 0.64, 1.0),
+                border_muted: vec4(0.78, 0.80, 0.84, 1.0),
+                text: vec4(0.10, 0.12, 0.15, 1.0),
+                text_muted: vec4(0.35, 0.39, 0.45, 1.0),
+                row_even: vec4(0.99, 0.99, 1.00, 1.0),
+                row_odd: vec4(0.94, 0.95, 0.97, 1.0),
+                row_hover: vec4(0.84, 0.89, 0.97, 1.0),
+                row_focus: vec4(0.68, 0.79, 0.95, 1.0),
+                row_selected: vec4(0.74, 0.84, 0.98, 1.0),
+                row_multi: vec4(0.88, 0.93, 0.99, 1.0),
+                accent: vec4(0.10, 0.32, 0.68, 1.0),
+                accent_hover: vec4(0.17, 0.42, 0.80, 1.0),
+                danger: vec4(0.74, 0.18, 0.16, 1.0),
+                success: vec4(0.20, 0.55, 0.31, 1.0),
+                warning: vec4(0.72, 0.48, 0.13, 1.0),
             },
             Theme::Dark => Self {
-                app_bg: vec4(0.12, 0.13, 0.15, 1.0),
-                header_bg: vec4(0.16, 0.17, 0.20, 1.0),
-                surface: vec4(0.18, 0.19, 0.22, 1.0),
-                inset: vec4(0.10, 0.11, 0.13, 1.0),
-                border: vec4(0.31, 0.33, 0.38, 1.0),
-                row: vec4(0.15, 0.16, 0.19, 1.0),
+                app_bg: vec4(0.08, 0.09, 0.11, 1.0),
+                header_bg: vec4(0.13, 0.14, 0.17, 1.0),
+                surface: vec4(0.15, 0.16, 0.19, 1.0),
+                elevated: vec4(0.18, 0.19, 0.22, 1.0),
+                inset: vec4(0.09, 0.10, 0.12, 1.0),
+                border: vec4(0.36, 0.39, 0.45, 1.0),
+                border_muted: vec4(0.23, 0.25, 0.30, 1.0),
+                text: vec4(0.91, 0.93, 0.96, 1.0),
+                text_muted: vec4(0.62, 0.66, 0.72, 1.0),
+                row_even: vec4(0.12, 0.13, 0.16, 1.0),
+                row_odd: vec4(0.15, 0.16, 0.19, 1.0),
                 row_hover: vec4(0.22, 0.25, 0.31, 1.0),
-                row_focus: vec4(0.23, 0.32, 0.48, 1.0),
-                accent: vec4(0.47, 0.60, 0.92, 1.0),
+                row_focus: vec4(0.24, 0.34, 0.52, 1.0),
+                row_selected: vec4(0.21, 0.31, 0.48, 1.0),
+                row_multi: vec4(0.18, 0.25, 0.36, 1.0),
+                accent: vec4(0.52, 0.68, 0.96, 1.0),
+                accent_hover: vec4(0.62, 0.76, 1.00, 1.0),
+                danger: vec4(0.93, 0.36, 0.33, 1.0),
+                success: vec4(0.42, 0.75, 0.50, 1.0),
+                warning: vec4(0.88, 0.66, 0.30, 1.0),
             },
         }
     }
@@ -3137,6 +3196,7 @@ impl App {
             .set_visible(cx, matches!(tab, SettingsTab::Advanced));
         self.widget(cx, ids!(about_settings))
             .set_visible(cx, matches!(tab, SettingsTab::About));
+        self.apply_settings_tab_button_styles(cx);
         self.ui.redraw(cx);
     }
 
@@ -3279,6 +3339,13 @@ impl App {
             (ids!(group_clear_button), "app.clear_group"),
             (ids!(group_delete_button), "app.delete_group"),
             (ids!(system_menu_button), "app.menu"),
+            (ids!(menu_primary_title), "app.menu_section_primary"),
+            (ids!(menu_view_title), "app.menu_section_view"),
+            (ids!(menu_transform_title), "app.menu_section_transform"),
+            (ids!(menu_order_title), "app.menu_section_order"),
+            (ids!(menu_io_title), "app.menu_section_io"),
+            (ids!(menu_compare_title), "app.menu_section_compare"),
+            (ids!(menu_search_title), "app.menu_section_search"),
             (ids!(menu_copy_button), "app.copy_selected"),
             (ids!(menu_paste_plain_button), "app.paste_plain"),
             (ids!(menu_paste_no_order_button), "app.paste_no_order"),
@@ -3908,6 +3975,8 @@ impl App {
         self.refresh_group_panel(cx);
         self.apply_page_visibility(cx);
         self.apply_settings_tab_visibility(cx);
+        self.apply_filter_button_styles(cx);
+        self.apply_search_option_button_styles(cx);
         self.sync_tray_state();
         self.ui.redraw(cx);
     }
@@ -3945,6 +4014,7 @@ impl App {
             };
             self.widget(cx, id).set_text(cx, &text);
         }
+        self.apply_filter_button_styles(cx);
     }
 
     fn apply_settings_tab_labels(&self, cx: &mut Cx, messages: &I18nBundle) {
@@ -4111,10 +4181,24 @@ impl App {
 
         self.apply_solid_color(cx, ids!(app_header), palette.header_bg);
         self.apply_solid_color(cx, ids!(settings_header), palette.header_bg);
+        self.apply_text_color(cx, ids!(title), palette.text);
+        self.apply_text_color(cx, ids!(subtitle), palette.text_muted);
+        self.apply_text_color(cx, ids!(status), palette.text);
+        self.apply_text_color(cx, ids!(history_title), palette.text);
+        self.apply_text_color(cx, ids!(clip_count), palette.text_muted);
+        self.apply_text_color(cx, ids!(settings_title), palette.text);
+        self.apply_text_color(cx, ids!(settings_subtitle), palette.text_muted);
+        for id in menu_section_label_ids() {
+            self.apply_text_color(cx, id, palette.text_muted);
+        }
+
+        for id in [ids!(quick_paste_shell), ids!(menu_panel)] {
+            self.apply_surface_color(cx, id, palette.elevated, palette.border);
+        }
 
         for id in [
-            ids!(quick_paste_shell),
-            ids!(menu_panel),
+            ids!(search_card),
+            ids!(editor_panel),
             ids!(settings_tabs),
             ids!(appearance_settings),
             ids!(behavior_settings),
@@ -4132,22 +4216,106 @@ impl App {
         }
 
         for id in [ids!(status_shell), ids!(group_panel)] {
-            self.apply_surface_color(cx, id, palette.inset, palette.border);
+            self.apply_surface_color(cx, id, palette.inset, palette.border_muted);
         }
 
+        for id in main_button_ids() {
+            self.apply_button_style(
+                cx,
+                id,
+                palette.surface,
+                palette.row_hover,
+                palette.row_focus,
+                palette.border_muted,
+                palette.accent,
+                palette.text,
+            );
+        }
+
+        for id in settings_tab_ids() {
+            self.apply_button_style(
+                cx,
+                id,
+                palette.inset,
+                palette.row_hover,
+                palette.row_selected,
+                palette.border_muted,
+                palette.accent,
+                palette.text,
+            );
+        }
+
+        for id in settings_control_button_ids() {
+            self.apply_button_style(
+                cx,
+                id,
+                palette.surface,
+                palette.row_hover,
+                palette.row_focus,
+                palette.border_muted,
+                palette.accent_hover,
+                palette.text,
+            );
+        }
+
+        for id in settings_danger_button_ids() {
+            self.apply_button_style(
+                cx,
+                id,
+                palette.surface,
+                palette.row_hover,
+                palette.row_focus,
+                palette.danger,
+                palette.danger,
+                palette.text,
+            );
+        }
+
+        for id in menu_button_ids() {
+            self.apply_button_style(
+                cx,
+                id,
+                palette.elevated,
+                palette.row_hover,
+                palette.row_focus,
+                palette.border_muted,
+                palette.accent_hover,
+                palette.text,
+            );
+        }
+
+        for id in danger_button_ids() {
+            self.apply_button_style(
+                cx,
+                id,
+                palette.elevated,
+                palette.row_hover,
+                palette.row_focus,
+                palette.danger,
+                palette.danger,
+                palette.text,
+            );
+        }
+
+        for id in emphasis_button_ids() {
+            self.apply_button_style(
+                cx,
+                id,
+                palette.elevated,
+                palette.row_hover,
+                palette.row_focus,
+                palette.warning,
+                palette.success,
+                palette.text,
+            );
+        }
+
+        self.apply_settings_tab_button_styles(cx);
+        self.apply_filter_button_styles(cx);
+        self.apply_search_option_button_styles(cx);
+
         for index in 0..HISTORY_ROWS {
-            let mut row = self.widget(cx, row_id(index));
-            script_apply_eval!(cx, row, {
-                draw_bg +: {
-                    color: #(palette.row)
-                    color_hover: #(palette.row_hover)
-                    color_focus: #(palette.row_focus)
-                    color_down: #(palette.row_focus)
-                    border_color: #(palette.border)
-                    border_color_hover: #(palette.accent)
-                    border_color_focus: #(palette.accent)
-                }
-            });
+            self.apply_history_row_style(cx, row_id(index), palette, index, false, false, false);
         }
 
         self.ui.redraw(cx);
@@ -4170,6 +4338,168 @@ impl App {
                 border_color: #(border)
             }
         });
+    }
+
+    fn apply_text_color(&self, cx: &mut Cx, id: &[LiveId], color: Vec4) {
+        let mut widget = self.widget(cx, id);
+        script_apply_eval!(cx, widget, {
+            draw_text +: {
+                color: #(color)
+            }
+        });
+    }
+
+    fn apply_button_style(
+        &self,
+        cx: &mut Cx,
+        id: &[LiveId],
+        color: Vec4,
+        hover: Vec4,
+        focus: Vec4,
+        border: Vec4,
+        border_focus: Vec4,
+        text: Vec4,
+    ) {
+        let mut widget = self.widget(cx, id);
+        script_apply_eval!(cx, widget, {
+            draw_bg +: {
+                color: #(color)
+                color_hover: #(hover)
+                color_focus: #(focus)
+                color_down: #(focus)
+                border_color: #(border)
+                border_color_hover: #(border_focus)
+                border_color_focus: #(border_focus)
+            }
+            draw_text +: {
+                color: #(text)
+            }
+        });
+    }
+
+    fn apply_history_row_style(
+        &self,
+        cx: &mut Cx,
+        id: &[LiveId],
+        palette: AppPalette,
+        index: usize,
+        selected: bool,
+        multi_selected: bool,
+        pasted: bool,
+    ) {
+        let color = if selected {
+            palette.row_selected
+        } else if multi_selected {
+            palette.row_multi
+        } else if index % 2 == 0 {
+            palette.row_even
+        } else {
+            palette.row_odd
+        };
+        let border = if pasted {
+            palette.success
+        } else if selected || multi_selected {
+            palette.accent
+        } else {
+            palette.border_muted
+        };
+        let mut row = self.widget(cx, id);
+        script_apply_eval!(cx, row, {
+            draw_bg +: {
+                color: #(color)
+                color_hover: #(palette.row_hover)
+                color_focus: #(palette.row_focus)
+                color_down: #(palette.row_focus)
+                border_color: #(border)
+                border_color_hover: #(palette.accent_hover)
+                border_color_focus: #(palette.accent)
+            }
+            draw_text +: {
+                color: #(palette.text)
+            }
+        });
+    }
+
+    fn apply_choice_button_style(
+        &self,
+        cx: &mut Cx,
+        id: &[LiveId],
+        palette: AppPalette,
+        active: bool,
+    ) {
+        let color = if active {
+            palette.row_selected
+        } else {
+            palette.surface
+        };
+        let hover = if active {
+            palette.row_focus
+        } else {
+            palette.row_hover
+        };
+        let border = if active {
+            palette.accent
+        } else {
+            palette.border_muted
+        };
+        self.apply_button_style(
+            cx,
+            id,
+            color,
+            hover,
+            palette.row_focus,
+            border,
+            palette.accent,
+            palette.text,
+        );
+    }
+
+    fn state_palette(&self) -> Option<AppPalette> {
+        self.state
+            .as_ref()
+            .map(|state| AppPalette::for_theme(state.settings.theme))
+    }
+
+    fn apply_settings_tab_button_styles(&self, cx: &mut Cx) {
+        let Some(palette) = self.state_palette() else {
+            return;
+        };
+        for (id, tab) in settings_tab_button_specs() {
+            self.apply_choice_button_style(cx, id, palette, self.active_settings_tab == tab);
+        }
+    }
+
+    fn apply_filter_button_styles(&self, cx: &mut Cx) {
+        let Some(palette) = self.state_palette() else {
+            return;
+        };
+        for (id, filter) in filter_button_specs() {
+            self.apply_choice_button_style(cx, id, palette, self.clip_filter == filter);
+        }
+        self.apply_choice_button_style(
+            cx,
+            ids!(groups_button),
+            palette,
+            self.group_panel_visible
+                || self.clip_filter != ClipFilter::All
+                || self.active_group_id.is_some(),
+        );
+    }
+
+    fn apply_search_option_button_styles(&self, cx: &mut Cx) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let palette = AppPalette::for_theme(state.settings.theme);
+        let search_mode = SearchMode::from_settings(&state.settings);
+        let search_scope = SearchScope::from_settings(&state.settings);
+
+        for (id, mode) in search_mode_button_specs() {
+            self.apply_choice_button_style(cx, id, palette, search_mode == mode);
+        }
+        for (id, scope) in search_scope_button_specs() {
+            self.apply_choice_button_style(cx, id, palette, search_scope == scope);
+        }
     }
 
     fn refresh_local_status(&mut self, cx: &mut Cx) {
@@ -4342,6 +4672,11 @@ impl App {
             .as_ref()
             .map(|state| state.settings.quick_paste_font_size.clamp(8, 24) as f64)
             .unwrap_or(10.0);
+        let palette = self
+            .state
+            .as_ref()
+            .map(|state| AppPalette::for_theme(state.settings.theme))
+            .unwrap_or_else(|| AppPalette::for_theme(Theme::Light));
         for index in 0..HISTORY_ROWS {
             let id = row_id(index);
             let mut row = self.widget(cx, id);
@@ -4358,10 +4693,20 @@ impl App {
                     .as_ref()
                     .map(|state| state.selected_ids.iter().any(|id| id == &clip.id))
                     .unwrap_or(false);
+                self.apply_history_row_style(
+                    cx,
+                    id,
+                    palette,
+                    index,
+                    selected,
+                    multi_selected,
+                    self.clip_was_pasted(clip),
+                );
                 let row_text = self.row_text(index, clip, selected, multi_selected);
                 self.widget(cx, id).set_visible(cx, true);
                 self.widget(cx, id).set_text(cx, &row_text);
             } else {
+                self.apply_history_row_style(cx, id, palette, index, false, false, false);
                 self.widget(cx, id).set_visible(cx, index == 0);
                 let empty_text = if index == 0 {
                     self.text("app.empty")
@@ -4480,7 +4825,11 @@ impl App {
             .map(|state| state.settings.quick_paste_show_hotkey_text)
             .unwrap_or(true)
         {
-            (index + 1).to_string()
+            if index == FIRST_TEN_ROWS - 1 {
+                "0".to_owned()
+            } else {
+                (index + 1).to_string()
+            }
         } else {
             String::new()
         }
@@ -4521,9 +4870,11 @@ impl App {
         let Some(state) = self.state.as_ref() else {
             return;
         };
+        let palette = AppPalette::for_theme(state.settings.theme);
         for index in 0..GROUP_ROWS {
             let id = group_slot_id(index);
             if let Some(group) = state.groups.get(index) {
+                let active = self.active_group_id == Some(group.id);
                 let label = if self.active_group_id == Some(group.id) {
                     state
                         .messages
@@ -4534,13 +4885,16 @@ impl App {
                 };
                 self.widget(cx, id).set_visible(cx, true);
                 self.widget(cx, id).set_text(cx, &label);
+                self.apply_choice_button_style(cx, id, palette, active);
             } else {
                 self.widget(cx, id).set_visible(cx, false);
                 self.widget(cx, id).set_text(cx, "");
+                self.apply_choice_button_style(cx, id, palette, false);
             }
         }
         self.widget(cx, ids!(groups_button))
             .set_text(cx, &self.clip_filter_label(&state.messages));
+        self.apply_filter_button_styles(cx);
         if self.group_panel_visible
             && !self.widget(cx, ids!(group_name_input)).key_focus(cx)
             && !self.widget(cx, ids!(group_hotkey_input)).key_focus(cx)
@@ -10421,6 +10775,291 @@ fn paste_position_key_index(key_code: KeyCode) -> Option<usize> {
         _ => None,
     }
     .or_else(|| number_key_index(key_code))
+}
+
+fn settings_tab_button_specs() -> Vec<(&'static [LiveId], SettingsTab)> {
+    vec![
+        (ids!(settings_general_tab), SettingsTab::General),
+        (ids!(settings_types_tab), SettingsTab::Types),
+        (ids!(settings_keyboard_tab), SettingsTab::Keyboard),
+        (ids!(settings_copy_buffers_tab), SettingsTab::CopyBuffers),
+        (ids!(settings_quick_paste_tab), SettingsTab::QuickPaste),
+        (ids!(settings_sync_tab), SettingsTab::Sync),
+        (ids!(settings_stats_tab), SettingsTab::Stats),
+        (ids!(settings_utilities_tab), SettingsTab::Utilities),
+        (ids!(settings_advanced_tab), SettingsTab::Advanced),
+        (ids!(settings_about_tab), SettingsTab::About),
+    ]
+}
+
+fn filter_button_specs() -> Vec<(&'static [LiveId], ClipFilter)> {
+    vec![
+        (ids!(filter_all_button), ClipFilter::All),
+        (ids!(filter_pinned_button), ClipFilter::Pinned),
+        (ids!(filter_text_button), ClipFilter::Text),
+        (ids!(filter_image_button), ClipFilter::Images),
+        (ids!(filter_files_button), ClipFilter::Files),
+        (ids!(group_history_button), ClipFilter::All),
+        (ids!(group_pinned_button), ClipFilter::Pinned),
+        (ids!(group_text_button), ClipFilter::Text),
+        (ids!(group_image_button), ClipFilter::Images),
+        (ids!(group_files_button), ClipFilter::Files),
+    ]
+}
+
+fn search_mode_button_specs() -> Vec<(&'static [LiveId], SearchMode)> {
+    vec![
+        (ids!(simple_search_button), SearchMode::Simple),
+        (ids!(regex_search_button), SearchMode::Regex),
+        (ids!(wildcard_search_button), SearchMode::Wildcard),
+        (ids!(menu_search_simple_button), SearchMode::Simple),
+        (ids!(menu_search_regex_button), SearchMode::Regex),
+        (ids!(menu_search_wildcard_button), SearchMode::Wildcard),
+    ]
+}
+
+fn search_scope_button_specs() -> Vec<(&'static [LiveId], SearchScope)> {
+    vec![
+        (ids!(search_scope_all_button), SearchScope::All),
+        (
+            ids!(search_scope_description_button),
+            SearchScope::Description,
+        ),
+        (
+            ids!(search_scope_quick_paste_button),
+            SearchScope::QuickPaste,
+        ),
+        (ids!(search_scope_text_button), SearchScope::Text),
+        (ids!(search_scope_source_button), SearchScope::Source),
+        (ids!(search_scope_date_button), SearchScope::Date),
+        (
+            ids!(menu_search_description_button),
+            SearchScope::Description,
+        ),
+        (
+            ids!(menu_search_quick_paste_button),
+            SearchScope::QuickPaste,
+        ),
+        (ids!(menu_search_full_text_button), SearchScope::Text),
+    ]
+}
+
+fn main_button_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(settings_button),
+        ids!(groups_button),
+        ids!(clear_search_button),
+        ids!(system_menu_button),
+        ids!(filter_all_button),
+        ids!(filter_pinned_button),
+        ids!(filter_text_button),
+        ids!(filter_image_button),
+        ids!(filter_files_button),
+        ids!(group_history_button),
+        ids!(group_pinned_button),
+        ids!(group_text_button),
+        ids!(group_image_button),
+        ids!(group_files_button),
+        ids!(group_slot_0),
+        ids!(group_slot_1),
+        ids!(group_slot_2),
+        ids!(group_slot_3),
+        ids!(group_slot_4),
+        ids!(group_new_button),
+        ids!(group_rename_button),
+        ids!(group_assign_button),
+        ids!(group_clear_button),
+        ids!(group_hotkey_button),
+        ids!(group_up_button),
+        ids!(group_down_button),
+        ids!(save_edit_button),
+        ids!(pin_button),
+    ]
+}
+
+fn settings_tab_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(settings_general_tab),
+        ids!(settings_types_tab),
+        ids!(settings_keyboard_tab),
+        ids!(settings_copy_buffers_tab),
+        ids!(settings_quick_paste_tab),
+        ids!(settings_sync_tab),
+        ids!(settings_stats_tab),
+        ids!(settings_utilities_tab),
+        ids!(settings_advanced_tab),
+        ids!(settings_about_tab),
+    ]
+}
+
+fn settings_control_button_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(back_to_main_button),
+        ids!(language_button),
+        ids!(theme_button),
+        ids!(start_on_login_button),
+        ids!(show_tray_button),
+        ids!(show_taskbar_button),
+        ids!(popup_position_button),
+        ids!(copy_device_id_button),
+        ids!(duplicate_policy_button),
+        ids!(capture_text_button),
+        ids!(capture_html_button),
+        ids!(capture_image_button),
+        ids!(capture_files_button),
+        ids!(first_ten_send_paste_button),
+        ids!(first_ten_move_top_button),
+        ids!(first_ten_use_group_button),
+        ids!(copy_buffer_1_sound_button),
+        ids!(copy_buffer_2_sound_button),
+        ids!(copy_buffer_3_sound_button),
+        ids!(copy_buffer_4_sound_button),
+        ids!(copy_buffer_5_sound_button),
+        ids!(show_hotkey_text_button),
+        ids!(show_leading_ws_button),
+        ids!(find_as_you_type_button),
+        ids!(simple_search_button),
+        ids!(regex_search_button),
+        ids!(wildcard_search_button),
+        ids!(case_sensitive_search_button),
+        ids!(show_thumbnails_button),
+        ids!(draw_rtf_button),
+        ids!(search_scope_all_button),
+        ids!(search_scope_description_button),
+        ids!(search_scope_quick_paste_button),
+        ids!(search_scope_text_button),
+        ids!(search_scope_source_button),
+        ids!(search_scope_date_button),
+        ids!(ensure_visible_button),
+        ids!(show_groups_main_button),
+        ids!(prompt_delete_button),
+        ids!(always_show_scrollbar_button),
+        ids!(show_pasted_button),
+        ids!(elevated_paste_button),
+        ids!(paste_active_window_button),
+        ids!(reset_counts_button),
+        ids!(backup_database_button),
+        ids!(compact_database_button),
+        ids!(verify_database_button),
+        ids!(update_order_button),
+        ids!(multi_paste_reverse_button),
+        ids!(word_wrap_button),
+    ]
+}
+
+fn settings_danger_button_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(clear_history_button),
+        ids!(delete_non_pinned_button),
+        ids!(reset_counts_button),
+    ]
+}
+
+fn menu_section_label_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(menu_primary_title),
+        ids!(menu_view_title),
+        ids!(menu_transform_title),
+        ids!(menu_order_title),
+        ids!(menu_io_title),
+        ids!(menu_compare_title),
+        ids!(menu_search_title),
+    ]
+}
+
+fn menu_button_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(menu_copy_button),
+        ids!(menu_paste_plain_button),
+        ids!(menu_paste_no_order_button),
+        ids!(menu_view_full_button),
+        ids!(menu_multi_image_h_button),
+        ids!(menu_multi_image_v_button),
+        ids!(menu_edit_button),
+        ids!(menu_pin_button),
+        ids!(menu_capture_button),
+        ids!(menu_capture_toggle_button),
+        ids!(menu_sync_button),
+        ids!(menu_refresh_button),
+        ids!(menu_options_button),
+        ids!(menu_groups_button),
+        ids!(menu_position_button),
+        ids!(menu_lines_button),
+        ids!(menu_transparency_button),
+        ids!(menu_upper_button),
+        ids!(menu_lower_button),
+        ids!(menu_capitalize_button),
+        ids!(menu_sentence_button),
+        ids!(menu_invert_button),
+        ids!(menu_trim_button),
+        ids!(menu_no_lf_button),
+        ids!(menu_add_lf_button),
+        ids!(menu_add_2lf_button),
+        ids!(menu_camel_button),
+        ids!(menu_slug_button),
+        ids!(menu_posix_button),
+        ids!(menu_ascii_button),
+        ids!(menu_typo_button),
+        ids!(menu_time_button),
+        ids!(menu_guid_button),
+        ids!(menu_move_top_button),
+        ids!(menu_move_up_button),
+        ids!(menu_move_down_button),
+        ids!(menu_move_last_button),
+        ids!(menu_new_clip_button),
+        ids!(menu_properties_button),
+        ids!(menu_filter_clip_button),
+        ids!(menu_copy_selection_button),
+        ids!(menu_export_button),
+        ids!(menu_export_text_button),
+        ids!(menu_import_button),
+        ids!(menu_import_file_contents_button),
+        ids!(menu_export_google_translate_button),
+        ids!(menu_export_web_search_button),
+        ids!(menu_export_qr_button),
+        ids!(menu_email_body_button),
+        ids!(menu_compare_left_button),
+        ids!(menu_compare_against_button),
+        ids!(menu_compare_button),
+        ids!(menu_never_auto_delete_button),
+        ids!(menu_auto_delete_button),
+        ids!(menu_remove_hotkey_button),
+        ids!(menu_remove_quick_paste_button),
+        ids!(menu_make_top_sticky_button),
+        ids!(menu_make_last_sticky_button),
+        ids!(menu_replace_top_sticky_button),
+        ids!(menu_remove_sticky_button),
+        ids!(menu_search_description_button),
+        ids!(menu_search_full_text_button),
+        ids!(menu_search_quick_paste_button),
+        ids!(menu_search_simple_button),
+        ids!(menu_search_regex_button),
+        ids!(menu_search_wildcard_button),
+        ids!(menu_toggle_search_method_button),
+        ids!(menu_apply_last_search_button),
+    ]
+}
+
+fn danger_button_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(delete_button),
+        ids!(group_delete_button),
+        ids!(menu_delete_button),
+        ids!(menu_clear_history_button),
+        ids!(menu_delete_non_pinned_button),
+        ids!(menu_exit_button),
+    ]
+}
+
+fn emphasis_button_ids() -> Vec<&'static [LiveId]> {
+    vec![
+        ids!(group_assign_button),
+        ids!(pin_button),
+        ids!(menu_pin_button),
+        ids!(menu_make_top_sticky_button),
+        ids!(menu_make_last_sticky_button),
+        ids!(menu_replace_top_sticky_button),
+    ]
 }
 
 fn row_id(index: usize) -> &'static [LiveId] {
