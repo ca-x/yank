@@ -7,7 +7,7 @@ import sys
 
 
 def collect(destination: Path):
-    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1'], text=True))
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1'], text=True, encoding='utf-8'))
     parts = ['Yank dependency notices\nExact versions/sources are recorded in Cargo.lock.\n']
     for package in sorted(metadata['packages'], key=lambda p: (p['name'], p['version'])):
         root = Path(package['manifest_path']).parent
