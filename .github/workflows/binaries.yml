@@ -4,6 +4,12 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      target:
+        description: Packages to build
+        type: choice
+        options: [all, android]
+        default: all
 
 permissions:
   contents: read
@@ -16,6 +22,7 @@ jobs:
   verify:
     uses: ./.github/workflows/ci.yml
   desktop:
+    if: github.event_name != 'workflow_dispatch' || inputs.target != 'android'
     needs: verify
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -71,6 +78,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install native and Android SDK dependencies
         run: |
           bash scripts/package-linux-deps.sh
