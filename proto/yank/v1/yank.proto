@@ -1,0 +1,99 @@
+syntax = "proto3";
+package yank.v1;
+
+// Each binary transport carries an envelope. A transport frame is bounded to 16 MiB.
+message Envelope {
+  uint32 protocol_version = 1;
+  MessageKind kind = 2;
+  bytes payload = 3;
+}
+enum MessageKind {
+  MESSAGE_KIND_UNSPECIFIED = 0;
+  MESSAGE_KIND_CLIP = 1;
+  MESSAGE_KIND_PAGE = 2;
+  MESSAGE_KIND_MUTATION = 3;
+  MESSAGE_KIND_ACK = 4;
+  MESSAGE_KIND_PEER = 5;
+  MESSAGE_KIND_PEERS = 6;
+  MESSAGE_KIND_CREDENTIALS = 7;
+  MESSAGE_KIND_LOGIN = 8;
+  MESSAGE_KIND_PEER_REQUEST = 9;
+  MESSAGE_KIND_PEER_RESPONSE = 10;
+  MESSAGE_KIND_EMPTY = 11;
+  MESSAGE_KIND_ANNOUNCEMENT = 12;
+  MESSAGE_KIND_SERVER_INFO = 13;
+}
+message ClipboardFormat {
+  string format = 1;
+  optional string mime = 2;
+  bytes data = 3;
+}
+message Clip {
+  string id = 1;
+  string device_id = 2;
+  string description = 3;
+  string text = 4;
+  string kind = 5;
+  string collection = 6;
+  repeated ClipboardFormat formats = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
+  bool deleted = 10;
+  bool pinned = 11;
+  map<string, uint64> clock = 12;
+  string source_app = 13;
+  string version_id = 14;
+  uint64 write_order = 15;
+  string write_actor = 16;
+}
+message Page {
+  repeated Clip clips = 1;
+  int64 cursor = 2;
+  string epoch = 3;
+  bool more = 4;
+}
+message Mutation {
+  string operation = 1;
+  Clip clip = 2;
+}
+message Ack {
+  string operation = 1;
+  Clip clip = 2;
+}
+message Peer {
+  string id = 1;
+  string name = 2;
+  string code = 3;
+  repeated string relay_urls = 4;
+  repeated string direct_addresses = 5;
+}
+message Peers { repeated Peer peers = 1; }
+message Credentials { string username = 1; string password = 2; }
+message User { string id = 1; string username = 2; bool admin = 3; }
+message Login { string token = 1; User user = 2; int64 expires = 3; }
+message AccountHint { string server_url = 1; string username = 2; }
+message PairDecision { bool accept = 1; optional AccountHint account = 2; }
+message PairRequest { Peer peer = 1; optional AccountHint account = 2; }
+message SyncExchange { Page page = 1; int64 since = 2; string epoch = 3; }
+message PeerRequest {
+  oneof request {
+    PairRequest pair = 1;
+    SyncExchange exchange = 2;
+  }
+}
+message PeerResponse {
+  oneof response {
+    PairDecision paired = 1;
+    Page exchanged = 2;
+    string denied = 3;
+  }
+}
+message Empty {}
+// Possession of the device key is proved before public guest rendezvous registration.
+message Announcement { Peer peer = 1; int64 timestamp = 2; bytes signature = 3; }
+message ServerInfo {
+  string name = 1;
+  string version = 2;
+  string relay_url = 3;
+  bool storage = 4;
+}

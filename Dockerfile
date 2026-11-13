@@ -1,9 +1,10 @@
-FROM rust:1-bookworm AS builder
+FROM rust:1.97.0-bookworm AS builder
 
 WORKDIR /app
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
     && git config --global url."https://github.com/".insteadOf "git@github.com:"
+RUN apt-get update && apt-get install -y --no-install-recommends cmake clang pkg-config && rm -rf /var/lib/apt/lists/*
 COPY . .
 
 RUN cargo build --locked --release -p yank-server
@@ -28,8 +29,15 @@ COPY --from=builder /app/target/release/yank-server /usr/local/bin/yank-server
 
 ENV YANK_BIND=0.0.0.0:7219
 ENV YANK_DB=/data/yank-server.sqlite3
+ENV YANK_RELAY_BIND=0.0.0.0:7220
+# First boot requires runtime YANK_ADMIN_USERNAME and YANK_ADMIN_PASSWORD.
+# Supply these via your container secret/env provider; never bake them into an image.
+# Set YANK_RELAY_URL to the externally reachable relay address.
+# /data also holds yank-server.users/ with per-user storage databases.
 
 VOLUME ["/data"]
-EXPOSE 7219
+EXPOSE 7219/tcp 7220/tcp
+# Optional NAT address discovery; publish this port only when needed.
+EXPOSE 7842/udp
 
 ENTRYPOINT ["yank-server"]

@@ -1,136 +1,123 @@
-name: Binaries
+name: Release packages
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUSTUP_TOOLCHAIN: "1.97.0"
 
 jobs:
-  build:
-    name: binaries-${{ matrix.artifact }}
+  verify:
+    uses: ./.github/workflows/ci.yml
+  desktop:
+    needs: verify
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            artifact: linux-x86_64
-            client: target/release/yank-client
-            server: target/release/yank-server
-            exe_suffix: ""
+            platform: linux-x86_64
           - os: ubuntu-24.04-arm
-            artifact: linux-arm64
-            client: target/release/yank-client
-            server: target/release/yank-server
-            exe_suffix: ""
-          - os: macos-latest
-            artifact: macos-arm64
-            client: target/release/yank-client
-            server: target/release/yank-server
-            exe_suffix: ""
-          - os: windows-latest
-            artifact: windows-x86_64
-            client: target/release/yank-client.exe
-            server: target/release/yank-server.exe
-            exe_suffix: ".exe"
-          - os: windows-11-arm
-            artifact: windows-arm64
-            client: target/release/yank-client.exe
-            server: target/release/yank-server.exe
-            exe_suffix: ".exe"
-
+            platform: linux-arm64
+          - os: macos-14
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-x86_64
+          - os: windows-2022
+            platform: windows-x86_64
     steps:
       - uses: actions/checkout@v6.0.2
-
-      - name: Configure public GitHub git dependencies
-        run: |
-          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux native dependencies
-        if: runner.os == 'Linux'
-        timeout-minutes: 10
-        run: |
-          sudo apt-get -o Acquire::Retries=3 -o Dpkg::Lock::Timeout=120 update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libx11-dev libxcursor-dev libasound2-dev libpulse-dev libwayland-dev libxkbcommon-dev libegl1 libgl1-mesa-dri xvfb
-
-      - name: Build release binaries
-        run: cargo build --locked --release -p yank-client -p yank-server
-
-      - name: Smoke test Linux client startup
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          MAKEPAD_DISABLE_PULSE_AUDIO: "1"
-        run: |
-          set +e
-          timeout 10s xvfb-run -a "${{ matrix.client }}" > client-smoke.log 2>&1
-          status=$?
-          cat client-smoke.log
-          if grep -E "Apply error|no matching field|field .* not found|cannot assign field|Cannot find main file id|Could not load resource|File! open failed|RightWrap does not support fill childnodes" client-smoke.log; then
-            exit 1
-          fi
-          if grep -q "panicked at" client-smoke.log && ! grep -q "can't load LibEGL" client-smoke.log; then
-            exit 1
-          fi
-          if [ "$status" -ne 0 ] && grep -q "can't load LibEGL" client-smoke.log; then
-            exit 0
-          fi
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            exit "$status"
-          fi
-
-      - name: Stage release assets
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp "${{ matrix.client }}" "dist/yank-client-${{ github.ref_name }}-${{ matrix.artifact }}${{ matrix.exe_suffix }}"
-          cp "${{ matrix.server }}" "dist/yank-server-${{ github.ref_name }}-${{ matrix.artifact }}${{ matrix.exe_suffix }}"
-          cd dist
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum * > "SHA256SUMS-${{ matrix.artifact }}.txt"
-          else
-            shasum -a 256 * > "SHA256SUMS-${{ matrix.artifact }}.txt"
-          fi
-
-      - name: Upload release assets artifact
-        uses: actions/upload-artifact@v7.0.1
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: actions/setup-python@v6
         with:
-          name: release-assets-${{ matrix.artifact }}
+          python-version: "3.12"
+      - name: Install NSH Linux dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/package-linux-deps.sh
+      - name: Build standalone client and server
+        run: cargo build --locked --release -p yank-client -p yank-server
+      - name: Package and inspect
+        run: python scripts/package-desktop.py --platform ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: release-assets-${{ matrix.platform }}
           path: dist/*
           if-no-files-found: error
-
+  android:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.2
+        with:
+          repository: longbridge/nsh
+          ref: f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1
+          path: .nsh-toolchain
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install native and Android SDK dependencies
+        run: |
+          bash scripts/package-linux-deps.sh
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Build pinned NSH CLI and Android runtime from the same commit
+        working-directory: .nsh-toolchain
+        run: |
+          test "$(git rev-parse HEAD)" = f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1
+          cargo build --locked --release -p nsh-cli
+          ./target/release/nsh --version
+          cargo run --locked -p xtask -- android --release --abi arm64-v8a
+      - name: Package debug-signed APK (no store signing identity configured)
+        env:
+          # runtime.rs expects <root>/android/release. Reuse the pinned arm64
+          # runtime rather than triggering its fallback build of all three ABIs.
+          NSH_RUNTIME: ${{ github.workspace }}/.nsh-toolchain/target
+        run: bash scripts/package-android.sh "$GITHUB_WORKSPACE/.nsh-toolchain/target/release/nsh"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: release-assets-android-arm64-debug
+          path: dist/*
+          if-no-files-found: error
   release:
-    name: Upload GitHub Release assets
-    runs-on: ubuntu-latest
-    needs: build
+    if: github.ref_type == 'tag'
+    needs: [desktop, android]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Download release assets
-        uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.1
         with:
           pattern: release-assets-*
           path: dist
           merge-multiple: true
-
-      - name: Create or update GitHub Release
+      - name: Verify checksums
+        working-directory: dist
+        run: |
+          for manifest in SHA256SUMS-*.txt; do sha256sum -c "$manifest"; done
+      - name: Upload draft release for maintainer review
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "$GITHUB_REF_NAME" \
+              --notes 'Linux deb and desktop binaries. Android arm64 APK uses a debug signing key for testing only; it is not a store release and cannot guarantee update compatibility across builds. Desktop binaries are unsigned; macOS is not notarized.'
           fi
-          gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

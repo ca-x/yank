@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Yank · 剪贴板空间</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
+<body>
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="i-clip" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="16" rx="3"/><path d="M9 3h6v5H9zM9 12h6M9 16h4"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="m9 3 6 0-1 6 4 4v2H6v-2l4-4-1-6ZM12 15v7"/></symbol>
+<symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="11" rx="2"/><path d="M5 20h8M9 15v5"/><rect x="17" y="10" width="5" height="11" rx="1"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+</defs></svg>
+<div class="shell">
+<aside class="sidebar">
+<a class="brand" href="/" aria-label="Yank"><span class="brandmark"><svg><use href="#i-clip"/></svg></span><span>yank<span class="brand-sub">YOUR CLIPBOARD, CONNECTED</span></span></a>
+<div class="workspace"><span class="server-dot"></span><span>我的剪贴板空间<small>Self-hosted workspace</small></span><span class="badge">SERVER</span></div>
+<div class="section-label">资料库</div>
+<nav aria-label="主导航">
+<button class="nav-item selected" data-view="all"><svg><use href="#i-clip"/></svg>全部记录<span id="nav-count" class="count">—</span></button>
+<button class="nav-item" data-view="pinned"><svg><use href="#i-pin"/></svg>收藏<span id="pin-count" class="count">—</span></button>
+<button class="nav-item" data-view="devices"><svg><use href="#i-devices"/></svg>设备与中继</button>
+</nav>
+<button id="accounts-nav" class="nav-item" hidden>账号管理</button>
+<div class="section-label formats-label">内容类型</div><nav class="format-nav" aria-label="内容类型"><button class="nav-item" data-view="text"><span class="type-icon">T</span>文字</button><button class="nav-item" data-view="link"><span class="type-icon">↗</span>链接</button><button class="nav-item" data-view="image"><span class="type-icon">▧</span>图片</button><button class="nav-item" data-view="files"><span class="type-icon">▤</span>文件</button></nav>
+<div class="sidebar-bottom"><div class="privacy-note"><svg><use href="#i-check"/></svg><div>数据由你掌控<small>客户端决定是否上传存储</small></div></div><button id="connection" class="nav-item"><svg><use href="#i-settings"/></svg>连接与外观<span id="connection-dot" class="dot"></span></button></div>
+</aside>
+<main>
+<header class="topbar"><span>我的空间 <span class="crumb">/</span> <strong id="breadcrumb">全部记录</strong></span><div class="top-actions"><span id="connection-status" class="muted">尚未连接</span><button id="theme" class="quiet" aria-label="切换外观">外观 · 自动</button><button id="connect-top" class="button small">连接服务器</button></div></header>
+<div class="main-content">
+<div class="page-heading"><div><div class="eyebrow">CLIPBOARD LIBRARY</div><h1 id="page-title">随时找回，接着使用。</h1><p id="page-description">你的文字、链接和灵感，在这里井然有序。</p></div><button id="refresh" class="button secondary">刷新记录 <span aria-hidden="true">↻</span></button></div>
+<section id="library-view">
+<div class="library-toolbar"><label class="search"><svg><use href="#i-search"/></svg><input id="search" placeholder="搜索内容、标题或收藏板…" aria-label="搜索剪贴板"><kbd>/</kbd></label><span id="result-count" class="muted">连接后查看记录</span><button id="export" class="quiet">导出本页</button></div>
+<div class="library-layout"><section class="history-panel" aria-label="剪贴板记录"><div class="list-heading"><span>内容</span><span>来源 / 时间</span></div><div id="clips" role="list"></div><div id="empty" class="empty"><span class="empty-mark"><svg><use href="#i-clip"/></svg></span><h2>先连接你的空间</h2><p>登录账号，查看已上传的记录。<br>未上传的本地记录只在对应客户端中可见。</p><button id="empty-connect" class="button">连接服务器 <svg><use href="#i-arrow"/></svg></button></div><button id="more" class="button secondary load-more" hidden>加载更多</button></section>
+<aside id="inspector" class="inspector" aria-label="内容详情"><div class="inspector-heading"><span>内容预览</span><button id="close-detail" class="quiet" aria-label="关闭详情">关闭</button></div><div id="detail-empty" class="detail-empty">选择一条记录<br><small>查看完整内容和格式</small></div><div id="detail" hidden><span id="detail-kind" class="tag"></span><h2 id="detail-title" tabindex="-1"></h2><pre id="detail-content"></pre><dl id="detail-meta"></dl><div class="detail-actions"><button id="copy" class="button"><svg><use href="#i-copy"/></svg>复制文字</button><button id="pin" class="button secondary">收藏</button><button id="delete" class="button danger" aria-label="删除记录"><svg><use href="#i-trash"/></svg>删除</button></div></div></aside></div>
+<footer class="library-footer"><span><span class="dot online"></span> 本地优先 · 自主存储</span><span>↑ ↓ 选择 <kbd>Enter</kbd> 复制 <kbd>Esc</kbd> 关闭详情</span></footer>
+</section>
+<section id="accounts-view" hidden><div class="info-banner"><div><strong>账号隔离，各自掌控数据</strong><p>新账号由管理员创建。每个账号拥有独立的存储和设备发现范围。</p></div></div><div class="device-header"><h2>用户账号</h2></div><div id="accounts" class="device-grid"></div><form id="create-account" class="account-form"><h2>创建账号</h2><label>用户名<input id="new-username" required maxlength="80" autocomplete="off"></label><label>初始密码<input id="new-password" required type="password" autocomplete="new-password"></label><label class="checkbox"><input id="new-admin" type="checkbox">授予管理员权限</label><button class="button" type="submit">创建账号</button><p id="account-error" class="error" role="alert"></p></form></section>
+<section id="devices-view" hidden><div class="info-banner"><svg><use href="#i-devices"/></svg><div><strong>设备发现与数据存储，分别由你控制</strong><p>设备码配对需要对端确认。中继只转发加密数据；启用上传后，内容才会存入此服务器。</p></div></div><div class="device-header"><h2>在线设备</h2><span class="tag">默认中继 · 可切换直连 / 自动 NAT</span></div><div id="devices" class="device-grid"></div><p class="muted">此处显示最近 90 秒内向本服务器登记的设备；配对、解除绑定和连接模式请在客户端管理。</p></section>
+</div>
+</main></div>
+<dialog id="settings"><form id="settings-form"><div class="dialog-heading"><div><div class="eyebrow">YOUR WORKSPACE</div><h2>登录你的空间</h2></div><button type="button" id="change-password" class="quiet" hidden>修改密码…</button><button type="button" id="logout" class="quiet" hidden>退出账号</button><button type="button" id="close-settings" class="quiet" aria-label="关闭设置">关闭</button></div><p class="muted">使用管理员创建的账号登录。客户端与管理页使用同一账号，数据按账号隔离。</p><label for="username">用户名</label><input id="username" autocomplete="username" required maxlength="80"><label for="token">密码</label><input id="token" type="password" autocomplete="current-password" placeholder="输入密码" required><label class="checkbox"><input type="checkbox" id="remember">保持登录</label><div id="settings-error" class="error" role="alert"></div><div class="dialog-footer"><span class="muted">你的服务 · 你的数据</span><button class="button" type="submit">连接空间 <svg><use href="#i-arrow"/></svg></button></div></form></dialog>
+<dialog id="password-dialog"><form id="password-form"><div class="dialog-heading"><h2 id="password-title">修改密码</h2><button id="close-password" type="button" class="quiet">取消</button></div><p class="muted">密码更新后，该账号的全部登录会话将失效，需要重新登录。</p><label id="old-password-label" for="old-password">当前密码</label><input id="old-password" type="password" autocomplete="current-password"><label for="replacement-password">新密码</label><input id="replacement-password" required type="password" autocomplete="new-password" aria-describedby="password-length"><small id="password-length" class="muted">8–1024 字节；中文通常每字占 3 字节。</small><div id="password-error" class="error" role="alert"></div><div class="dialog-footer"><button type="submit" class="button">更新密码</button></div></form></dialog>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+</body></html>

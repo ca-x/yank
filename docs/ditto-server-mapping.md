@@ -1,32 +1,17 @@
-# Ditto Server Mapping
+# 服务端与设备互通
 
-This project does not reuse Ditto source code. It maps the relevant server-side behavior into a Rust, HTTP-based design.
+旧未上线的单 token REST 同步设计已替换；无需维护旧数据库或旧 wire 兼容。
 
-## Ditto Behaviors Referenced
+| 通道 | 认证与数据范围 |
+| --- | --- |
+| `/rpc/login`, `/rpc/logout` | Protobuf 二进制登录和当前会话撤销；logout 仅 bearer |
+| `/rpc/health` | Protobuf ServerInfo；提供中继地址和存储能力 |
+| `/rpc/register` | 设备公钥签名登记，90 秒时效；可访客登记 |
+| `/rpc/devices` | 仅当前账号登记设备；不枚举访客 |
+| `/rpc/devices/{code}` | 精确设备码查询；其他账号不能越权枚举 |
+| `/rpc/sync/pull`, `/rpc/sync/push` | bearer、按账号数据库隔离，需服务端开启存储 |
+| Iroh relay | 已登记端点获准连接，只转发加密设备流量 |
+| mDNS | 发现 `_yank._udp.local.` 设备及 `_yank-server._tcp.local.` 实例；不等同配对 |
+| `/api/*` | Web 管理 JSON，与设备同步协议分离；session cookie |
 
-- `ClipboardViewer.cpp`: observes clipboard changes and adds new clips automatically.
-- Quick paste window behavior: searchable history list, focused selection, copy/paste from a selected clip, deletion, editing, and sticky/favorite clips.
-- `Server.cpp`: accepts incoming clip transfers, collects clip formats, and adds received clips to the local database.
-- `Client.cpp`: sends clip metadata and one or more clipboard formats to another host.
-- `AutoSendToClientThread.cpp`: sends newly saved clips to configured peers.
-- `DatabaseUtilities.cpp`: records deletes separately through `MainDeletes`.
-- `Clip_ImportExport.cpp`: represents each clip as a main row plus typed format payloads.
-
-## yank Mapping
-
-- `clips` and `clip_formats` tables preserve the Ditto split between clip metadata and format payloads.
-- The Makepad client polls the OS clipboard, saves enabled text, HTML, image, and file-list formats automatically, exposes searchable history, and can copy a chosen historical item back to the clipboard.
-- Pin/unpin maps Ditto sticky/favorite style retention into a cross-platform `pinned` flag.
-- Editable text clips update the primary text, description, format payload, hash, and sync timestamp together.
-- Client settings are GUI-driven: no user-facing behavior requires editing a config file.
-- `/api/sync/push` replaces Ditto's direct socket sender with a token-authenticated HTTP push.
-- `/api/sync/pull` lets clients fetch changes from a self-hosted server instead of configuring peer IP lists.
-- Soft deletes use `deleted_at` and `sync_events`, matching Ditto's need to propagate deletion state.
-- The client remains local-first; sync is skipped unless both server URL and token are configured.
-
-## Intentional Differences
-
-- Transport is HTTP JSON instead of Ditto's Windows socket struct protocol.
-- Token authentication is mandatory for sync/admin endpoints.
-- RTF, source process icons, tray integration, LAN discovery, groups, and import/export are tracked as explicit client parity gaps in `docs/ditto-client-capability-matrix.md`.
-- Shortcuts are configurable and work inside the client window. System-wide global hotkeys need a platform-specific layer and are not hidden behind manual config.
+设备信任由本地首次确认建立，与账号是否登录无关。Ditto 不经过上述 RPC，使用单独可选插件；详见 [Ditto 协议](ditto-protocol.md)。数据和时间顺序规则详见 [设计契约](design/redesign.md)。

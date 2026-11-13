@@ -1,457 +1,1440 @@
-use anyhow::Context;
+//! Optional storage, authenticated rendezvous and encrypted packet relay.
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header, header::AUTHORIZATION},
+    extract::{DefaultBodyLimit, Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     routing::{delete, get, post},
 };
 use clap::Parser;
-use serde::Deserialize;
+use iroh_relay::server::{
+    Access, AccessControl, ClientRequest, RelayConfig, Server as RelayServer, ServerConfig,
+};
+use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
-use tower_http::trace::TraceLayer;
-use tracing::info;
 use yank_core::{
-    APP_NAME, Clip, DEFAULT_SERVER_BIND, HealthResponse, Language, PullClipsResponse,
-    PushClipRequest, PushClipResponse, Store, StoreStats, i18n, now_ts,
+    Clip, MAX_WIRE_BYTES, Mutation, Peer, Store, Wire, decode, encode, protocol as pb,
 };
+mod auth;
+use auth::User;
 
 #[derive(Debug, Parser)]
-#[command(name = "yank-server", about = "Self-hosted yank clipboard sync server")]
 struct Args {
-    #[arg(long, env = "YANK_BIND", default_value = DEFAULT_SERVER_BIND)]
+    #[arg(long, env = "YANK_BIND", default_value = "127.0.0.1:7219")]
     bind: SocketAddr,
-
-    #[arg(long, env = "YANK_DB", default_value = "yank-server.sqlite3")]
+    #[arg(long, env = "YANK_DB", default_value = "yank-storage-v2.sqlite3")]
     db: PathBuf,
-
-    #[arg(long, env = "YANK_TOKEN")]
-    token: String,
+    #[arg(long, env = "YANK_ADMIN_USERNAME")]
+    admin_username: Option<String>,
+    #[arg(long, env = "YANK_ADMIN_PASSWORD")]
+    admin_password: Option<String>,
+    #[arg(long, env = "YANK_COOKIE_SECURE", default_value_t = false)]
+    cookie_secure: bool,
+    #[arg(long, env = "YANK_RELAY_BIND", default_value = "0.0.0.0:7220")]
+    relay_bind: SocketAddr,
+    #[arg(long, env = "YANK_RELAY_URL", default_value = "http://127.0.0.1:7220")]
+    relay_url: String,
+    #[arg(long, env = "YANK_PUBLIC_URL")]
+    public_url: Option<String>,
+    #[arg(long, env = "YANK_TLS_CERT")]
+    tls_cert: Option<PathBuf>,
+    #[arg(long, env = "YANK_TLS_KEY")]
+    tls_key: Option<PathBuf>,
+    #[arg(long, env = "YANK_QUIC_BIND", default_value = "0.0.0.0:7842")]
+    quic_bind: SocketAddr,
+    #[arg(long, env = "YANK_STORAGE_DISABLED", default_value_t = false)]
+    storage_disabled: bool,
 }
-
+type Devices = Arc<Mutex<HashMap<String, (String, Peer, Instant)>>>;
+#[derive(Debug)]
+struct DeviceAccess(Devices);
+impl AccessControl for DeviceAccess {
+    async fn on_connect(&self, request: &ClientRequest) -> Access {
+        let allowed = self
+            .0
+            .lock()
+            .map(|d| {
+                d.values().any(|(_, p, t)| {
+                    p.id == request.endpoint_id().to_string()
+                        && t.elapsed() < Duration::from_secs(90)
+                })
+            })
+            .unwrap_or(false);
+        if allowed {
+            Access::Allow
+        } else {
+            Access::Deny { reason: None }
+        }
+    }
+}
 #[derive(Clone)]
 struct AppState {
-    store: Arc<Mutex<Store>>,
-    token: Arc<str>,
+    accounts: Arc<Mutex<auth::Accounts>>,
+    data: Arc<PathBuf>,
+    devices: Devices,
+    relay_url: Arc<str>,
+    storage: bool,
+    secure: bool,
+    attempts: Arc<Mutex<HashMap<SocketAddr, (u32, Instant)>>>,
 }
-
+impl AppState {
+    fn library<T>(
+        &self,
+        user: &User,
+        run: impl FnOnce(&Store) -> yank_core::Result<T>,
+    ) -> ApiResult<T> {
+        storage(self)?;
+        let store = Store::open(self.data.join(format!("{}.sqlite3", user.id)))?;
+        Ok(run(&store)?)
+    }
+}
+#[derive(Debug, Deserialize)]
+struct ListQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default = "all")]
+    filter: String,
+    #[serde(default)]
+    offset: u32,
+}
+fn all() -> String {
+    "all".into()
+}
 #[derive(Debug, Deserialize)]
 struct PullQuery {
     #[serde(default)]
     since: i64,
-    #[serde(default = "default_limit")]
-    limit: u32,
 }
-
-fn default_limit() -> u32 {
-    100
+#[derive(Debug, Serialize)]
+struct Health {
+    name: &'static str,
+    version: &'static str,
+    relay_url: String,
+    storage: bool,
 }
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "yank_server=info,tower_http=info".into()),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-
     let args = Args::parse();
-    let store = Store::open(&args.db)
-        .with_context(|| format!("opening sqlite database {}", args.db.display()))?;
+    let accounts = auth::Accounts::open(&args.db)?;
+    accounts.bootstrap(
+        args.admin_username.as_deref(),
+        args.admin_password.as_deref(),
+    )?;
+    let data = args.db.with_extension("users");
+    std::fs::create_dir_all(&data)?;
     let state = AppState {
-        store: Arc::new(Mutex::new(store)),
-        token: Arc::from(args.token),
+        accounts: Arc::new(Mutex::new(accounts)),
+        data: Arc::new(data),
+        devices: Arc::default(),
+        relay_url: args.relay_url.into(),
+        storage: !args.storage_disabled,
+        secure: args.cookie_secure,
+        attempts: Arc::default(),
     };
-    let app = router(state);
-
-    info!(bind = %args.bind, db = %args.db.display(), "starting yank server");
+    let mdns = mdns_sd::ServiceDaemon::new().ok();
+    if let Some(mdns) = &mdns {
+        #[cfg(target_os = "linux")]
+        if let Ok(interfaces) = std::fs::read_dir("/sys/class/net") {
+            for interface in interfaces.flatten() {
+                let name = interface.file_name().to_string_lossy().into_owned();
+                if ["veth", "docker", "lzc-br-", "cni", "flannel", "virbr"]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                {
+                    let _ = mdns.disable_interface(mdns_sd::IfKind::Name(name));
+                }
+            }
+        }
+        let id = format!("yank-{}", args.bind.port());
+        let properties = [
+            ("url", args.public_url.as_deref().unwrap_or("")),
+            ("name", "Yank server"),
+        ];
+        if let Ok(info) = mdns_sd::ServiceInfo::new(
+            "_yank-server._tcp.local.",
+            &id,
+            &format!("{id}.local."),
+            "",
+            args.bind.port(),
+            &properties[..],
+        ) {
+            let _ = mdns.register(info.enable_addr_auto());
+        }
+    }
+    let quic = match (args.tls_cert, args.tls_key) {
+        (Some(cert), Some(key)) => {
+            let certs =
+                rustls_pemfile::certs(&mut std::io::BufReader::new(std::fs::File::open(cert)?))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+            let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(
+                std::fs::File::open(key)?,
+            ))?
+            .ok_or_else(|| anyhow::anyhow!("TLS key missing"))?;
+            let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()?
+            .with_no_client_auth()
+            .with_single_cert(certs, key)?;
+            {
+                let mut quic = iroh_relay::server::QuicConfig::new(args.quic_bind);
+                quic.server_config = Some(config);
+                Some(quic)
+            }
+        }
+        (None, None) => None,
+        _ => anyhow::bail!("Set both YANK_TLS_CERT and YANK_TLS_KEY"),
+    };
+    let mut relay = RelayConfig::new(args.relay_bind);
+    relay.key_cache_capacity = Some(4096);
+    relay.access = Arc::new(DeviceAccess(state.devices.clone()));
+    let mut config = ServerConfig::default();
+    config.quic = quic;
+    config.relay = Some(relay);
+    let _relay = RelayServer::spawn(config).await?;
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
-    axum::serve(listener, app).await?;
+    tracing::info!(bind=%args.bind,relay=%args.relay_bind,"Yank storage and relay ready");
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
     Ok(())
 }
-
 fn router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(admin_page))
-        .route("/assets/i18n/{locale}.json", get(i18n_asset))
+        .route(
+            "/",
+            get(|| async { Html(include_str!("../web/index.html")) }),
+        )
+        .route(
+            "/app.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/app.js"),
+                )
+            }),
+        )
+        .route(
+            "/app.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/app.css"),
+                )
+            }),
+        )
+        .route("/api/login", post(login))
+        .route("/api/logout", post(logout))
+        .route("/api/session", get(session))
+        .route("/api/password", post(change_password))
+        .route("/api/accounts/{id}/password", post(reset_password))
+        .route("/api/accounts", get(accounts).post(create_account))
+        .route("/api/accounts/{id}", delete(remove_account))
         .route("/api/health", get(health))
-        .route("/api/admin/stats", get(stats))
-        .route("/api/clips", get(list_clips))
-        .route("/api/clips", post(push_clip))
-        .route("/api/clips/{id}", delete(delete_clip))
-        .route("/api/sync/pull", get(pull_clips))
-        .route("/api/sync/push", post(push_clip))
-        .layer(TraceLayer::new_for_http())
+        .route("/api/stats", get(stats))
+        .route("/api/clips", get(list))
+        .route("/api/clips/{id}", delete(remove))
+        .route("/api/clips/{id}/pin", post(pin))
+        .route("/api/sync/pull", get(pull))
+        .route("/api/sync/push", post(push))
+        .route("/api/devices", get(devices).post(announce))
+        .route("/api/devices/{code}", get(find_device))
+        .route("/rpc/login", post(rpc_login))
+        .route("/rpc/logout", post(rpc_logout))
+        .route("/rpc/health", get(rpc_health))
+        .route("/rpc/register", post(rpc_register))
+        .route("/rpc/devices", get(rpc_devices))
+        .route("/rpc/devices/{code}", get(rpc_find))
+        .route("/rpc/sync/pull", get(rpc_pull))
+        .route("/rpc/sync/push", post(rpc_push))
+        .layer(DefaultBodyLimit::max(MAX_WIRE_BYTES))
         .with_state(state)
 }
-
-async fn admin_page() -> Html<&'static str> {
-    Html(ADMIN_HTML)
-}
-
-async fn i18n_asset(Path(locale): Path<String>) -> impl IntoResponse {
-    let language = Language::parse(&locale).unwrap_or(Language::En);
-    (
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        i18n::bundle_json(language),
-    )
-}
-
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        name: APP_NAME,
-        version: env!("CARGO_PKG_VERSION"),
-        server_time: now_ts(),
-    })
-}
-
-async fn stats(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<StoreStats>, ApiError> {
-    ensure_auth(&headers, &state)?;
-    let store = state.store.lock().map_err(|_| ApiError::internal())?;
-    Ok(Json(store.stats().map_err(ApiError::from)?))
-}
-
-async fn list_clips(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<Clip>>, ApiError> {
-    ensure_auth(&headers, &state)?;
-    let store = state.store.lock().map_err(|_| ApiError::internal())?;
-    Ok(Json(store.list_clips(200).map_err(ApiError::from)?))
-}
-
-async fn pull_clips(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<PullQuery>,
-) -> Result<Json<PullClipsResponse>, ApiError> {
-    ensure_auth(&headers, &state)?;
-    let limit = query.limit.clamp(1, 1000);
-    let store = state.store.lock().map_err(|_| ApiError::internal())?;
-    let clips = store
-        .list_clips_since(query.since, limit)
-        .map_err(ApiError::from)?;
-    Ok(Json(PullClipsResponse {
-        clips,
-        server_time: now_ts(),
-    }))
-}
-
-async fn push_clip(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<PushClipRequest>,
-) -> Result<Json<PushClipResponse>, ApiError> {
-    ensure_auth(&headers, &state)?;
-    let store = state.store.lock().map_err(|_| ApiError::internal())?;
-    let clip = store.save_clip(&request.clip).map_err(ApiError::from)?;
-    Ok(Json(PushClipResponse { clip }))
-}
-
-async fn delete_clip(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    ensure_auth(&headers, &state)?;
-    let store = state.store.lock().map_err(|_| ApiError::internal())?;
-    if store.delete_clip(&id).map_err(ApiError::from)? {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found())
-    }
-}
-
-fn ensure_auth(headers: &HeaderMap, state: &AppState) -> Result<(), ApiError> {
-    let expected = format!("Bearer {}", state.token);
-    let actual = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-
-    if actual == Some(expected.as_str()) {
-        Ok(())
-    } else {
-        Err(ApiError::unauthorized())
-    }
-}
-
-#[derive(Debug)]
-struct ApiError {
-    status: StatusCode,
-    message: &'static str,
-}
-
-impl ApiError {
-    fn unauthorized() -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            message: "server.error.unauthorized",
-        }
-    }
-
-    fn not_found() -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: "server.error.not_found",
-        }
-    }
-
-    fn internal() -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: "server.error.internal",
-        }
-    }
-}
-
-impl From<yank_core::YankError> for ApiError {
-    fn from(_: yank_core::YankError) -> Self {
-        Self::internal()
-    }
-}
-
+type ApiResult<T> = std::result::Result<T, ApiError>;
+struct ApiError(StatusCode, String);
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        let messages = i18n::bundle(Language::En);
-        (self.status, messages.text(self.message).to_owned()).into_response()
+        (self.0, Json(serde_json::json!({"error":self.1}))).into_response()
     }
 }
+impl From<yank_core::Error> for ApiError {
+    fn from(e: yank_core::Error) -> Self {
+        match e {
+            yank_core::Error::Invalid(message) => Self(StatusCode::BAD_REQUEST, message),
+            _ => Self(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Storage operation failed".into(),
+            ),
+        }
+    }
+}
+fn internal() -> ApiError {
+    ApiError(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Service unavailable".into(),
+    )
+}
+fn token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned)
+        .or_else(|| {
+            headers
+                .get("cookie")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| {
+                    s.split(';')
+                        .find_map(|c| c.trim().strip_prefix("yank.session=").map(str::to_owned))
+                })
+        })
+}
+fn auth(headers: &HeaderMap, state: &AppState) -> ApiResult<User> {
+    let user =
+        token(headers).and_then(|token| state.accounts.lock().ok()?.verify(&token).ok().flatten());
+    user.ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))
+}
+fn storage(state: &AppState) -> ApiResult<()> {
+    if state.storage {
+        Ok(())
+    } else {
+        Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Persistent storage disabled on this server".into(),
+        ))
+    }
+}
+fn rate_limit(s: &AppState, addr: SocketAddr) -> ApiResult<()> {
+    let mut attempts = s.attempts.lock().map_err(|_| internal())?;
+    attempts.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(60));
+    let key = SocketAddr::new(addr.ip(), 0);
+    if attempts.len() > 4096 && !attempts.contains_key(&key) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Try again later".into(),
+        ));
+    }
+    let entry = attempts.entry(key).or_insert((0, Instant::now()));
+    if entry.0 >= 10 {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many attempts; wait one minute".into(),
+        ));
+    }
+    entry.0 += 1;
+    Ok(())
+}
+async fn login(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
+    Json(input): Json<auth::Credentials>,
+) -> ApiResult<impl IntoResponse> {
+    rate_limit(&s, addr)?;
+    let remember = input.remember;
+    let account = s.accounts.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        account
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Account service unavailable"))?
+            .login(&input)
+    })
+    .await
+    .map_err(|_| internal())?
+    .map_err(|_| {
+        ApiError(
+            StatusCode::UNAUTHORIZED,
+            "Incorrect username or password".into(),
+        )
+    })?;
+    let cookie = format!(
+        "yank.session={}; HttpOnly; SameSite=Strict; Path=/{}{}",
+        result.token,
+        if remember { "; Max-Age=2592000" } else { "" },
+        if s.secure { "; Secure" } else { "" }
+    );
+    Ok(([("set-cookie", cookie)], Json(result)))
+}
+async fn logout(State(s): State<AppState>, h: HeaderMap) -> ApiResult<impl IntoResponse> {
+    auth(&h, &s)?;
+    if let Some(t) = token(&h) {
+        s.accounts
+            .lock()
+            .map_err(|_| internal())?
+            .logout(&t)
+            .map_err(|_| internal())?;
+    }
+    Ok((
+        [(
+            "set-cookie",
+            "yank.session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+        )],
+        StatusCode::NO_CONTENT,
+    ))
+}
+#[derive(Deserialize)]
+struct PasswordChange {
+    old_password: String,
+    new_password: String,
+}
+#[derive(Deserialize)]
+struct PasswordReset {
+    new_password: String,
+}
+fn verified_account(accounts: &auth::Accounts, token: &str) -> ApiResult<User> {
+    accounts
+        .verify(token)
+        .map_err(|_| internal())?
+        .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))
+}
+async fn change_password(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
+    h: HeaderMap,
+    Json(input): Json<PasswordChange>,
+) -> ApiResult<StatusCode> {
+    auth(&h, &s)?;
+    rate_limit(&s, addr)?;
+    let token =
+        token(&h).ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))?;
+    let accounts = s.accounts.clone();
+    let id = tokio::task::spawn_blocking(move || {
+        let mut accounts = accounts.lock().map_err(|_| internal())?;
+        // Recheck while holding the same lock as the update, so a revoked request
+        // cannot change a password after a concurrent reset or logout.
+        let user = verified_account(&accounts, &token)?;
+        accounts
+            .change_password(&user.id, &input.old_password, &input.new_password)
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "Incorrect current password or invalid new password (8–1024 bytes required)"
+                        .into(),
+                )
+            })?;
+        Ok::<_, ApiError>(user.id)
+    })
+    .await
+    .map_err(|_| internal())??;
+    s.devices
+        .lock()
+        .map_err(|_| internal())?
+        .retain(|_, (owner, _, _)| owner != &id);
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn reset_password(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<PasswordReset>,
+) -> ApiResult<StatusCode> {
+    let user = auth(&h, &s)?;
+    if !user.admin {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrator required".into(),
+        ));
+    }
+    rate_limit(&s, addr)?;
+    let token =
+        token(&h).ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))?;
+    let accounts = s.accounts.clone();
+    let id = tokio::task::spawn_blocking(move || {
+        let mut accounts = accounts.lock().map_err(|_| internal())?;
+        let user = verified_account(&accounts, &token)?;
+        if !user.admin {
+            return Err(ApiError(
+                StatusCode::FORBIDDEN,
+                "Administrator required".into(),
+            ));
+        }
+        if user.id == id {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "Use password change with your current password".into(),
+            ));
+        }
+        let updated = accounts
+            .reset_password(&id, &input.new_password)
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid new password (8–1024 bytes required)".into(),
+                )
+            })?;
+        if !updated {
+            return Err(ApiError(StatusCode::NOT_FOUND, "Account not found".into()));
+        }
+        Ok(id)
+    })
+    .await
+    .map_err(|_| internal())??;
+    s.devices
+        .lock()
+        .map_err(|_| internal())?
+        .retain(|_, (owner, _, _)| owner != &id);
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn rpc_logout(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<axum::response::Response> {
+    let token = h
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Bearer token required".into()))?;
+    let accounts = s.accounts.lock().map_err(|_| internal())?;
+    verified_account(&accounts, token)?;
+    decode::<()>(&body)?;
+    accounts.logout(token).map_err(|_| internal())?;
+    binary(&())
+}
+async fn session(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<User>> {
+    Ok(Json(auth(&h, &s)?))
+}
+async fn accounts(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Vec<User>>> {
+    let user = auth(&h, &s)?;
+    if !user.admin {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrator required".into(),
+        ));
+    }
+    Ok(Json(
+        s.accounts
+            .lock()
+            .map_err(|_| internal())?
+            .users()
+            .map_err(|_| internal())?,
+    ))
+}
+async fn create_account(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(input): Json<auth::NewUser>,
+) -> ApiResult<Json<User>> {
+    let user = auth(&h, &s)?;
+    if !user.admin {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrator required".into(),
+        ));
+    }
+    let account = s.accounts.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        account
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Unavailable"))?
+            .create(input)
+    })
+    .await
+    .map_err(|_| internal())?
+    .map_err(|_| {
+        ApiError(
+            StatusCode::BAD_REQUEST,
+            "Username already used or password shorter than 8 bytes".into(),
+        )
+    })?;
+    Ok(Json(result))
+}
+async fn remove_account(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let user = auth(&h, &s)?;
+    if !user.admin {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrator required".into(),
+        ));
+    }
+    s.accounts
+        .lock()
+        .map_err(|_| internal())?
+        .remove(&id, &user.id)
+        .map_err(|_| {
+            ApiError(
+                StatusCode::BAD_REQUEST,
+                "Cannot delete your own account".into(),
+            )
+        })?;
+    s.devices
+        .lock()
+        .map_err(|_| internal())?
+        .retain(|_, (owner, _, _)| owner != &id);
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn health(State(s): State<AppState>) -> ApiResult<Json<Health>> {
+    Ok(Json(Health {
+        name: "yank",
+        version: env!("CARGO_PKG_VERSION"),
+        relay_url: s.relay_url.to_string(),
+        storage: s.storage,
+    }))
+}
+async fn stats(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<yank_core::Stats>> {
+    let u = auth(&h, &s)?;
+    Ok(Json(s.library(&u, Store::stats)?))
+}
+async fn list(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Query(q): Query<ListQuery>,
+) -> ApiResult<Json<Vec<Clip>>> {
+    let u = auth(&h, &s)?;
+    Ok(Json(s.library(&u, |db| {
+        db.list(&q.q, &q.filter, 100, q.offset)
+    })?))
+}
+async fn pull(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Query(q): Query<PullQuery>,
+) -> ApiResult<Json<yank_core::Page>> {
+    let u = auth(&h, &s)?;
+    Ok(Json(s.library(&u, |db| db.page(q.since, 50))?))
+}
+async fn push(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(m): Json<Mutation>,
+) -> ApiResult<Json<yank_core::Ack>> {
+    let u = auth(&h, &s)?;
+    Ok(Json(s.library(&u, |db| db.accept(&m))?))
+}
+async fn remove(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let u = auth(&h, &s)?;
+    s.library(&u, |db| db.mutate(&id, "server", |c| c.deleted = true))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn pin(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Clip>> {
+    let u = auth(&h, &s)?;
+    Ok(Json(s.library(&u, |db| {
+        db.mutate(&id, "server", |c| c.pinned = !c.pinned)
+    })?))
+}
+async fn devices(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Vec<Peer>>> {
+    let u = auth(&h, &s)?;
+    let mut d = s.devices.lock().map_err(|_| internal())?;
+    d.retain(|_, (_, _, t)| t.elapsed() < Duration::from_secs(90));
+    Ok(Json(
+        d.values()
+            .filter(|(owner, _, _)| owner == &u.id)
+            .map(|(_, p, _)| p.clone())
+            .collect(),
+    ))
+}
+async fn announce(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(peer): Json<Peer>,
+) -> ApiResult<StatusCode> {
+    let u = auth(&h, &s)?;
+    use sha2::{Digest, Sha256};
+    let id: iroh_base::EndpointId = peer
+        .id
+        .parse()
+        .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "Invalid device identity".into()))?;
+    let expected = hex::encode(Sha256::digest(id.as_bytes()))[..12].to_uppercase();
+    if peer.code != expected
+        || peer.name.len() > 100
+        || serde_json::to_vec(&peer.address)
+            .map_err(|_| internal())?
+            .len()
+            > 8192
+    {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Invalid device announcement".into(),
+        ));
+    }
+    let mut d = s.devices.lock().map_err(|_| internal())?;
+    d.retain(|_, (_, _, t)| t.elapsed() < Duration::from_secs(90));
+    let key = format!("{}:{}", u.id, peer.code);
+    if d.len() >= 512 && !d.contains_key(&key) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Device capacity reached".into(),
+        ));
+    }
+    d.insert(key, (u.id, peer, Instant::now()));
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn find_device(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(code): Path<String>,
+) -> ApiResult<Json<Peer>> {
+    let u = auth(&h, &s)?;
+    let d = s.devices.lock().map_err(|_| internal())?;
+    d.get(&format!("{}:{}", u.id, code.to_uppercase()))
+        .filter(|(_, _, t)| t.elapsed() < Duration::from_secs(90))
+        .map(|(_, p, _)| Json(p.clone()))
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "Device offline or code unknown".into(),
+            )
+        })
+}
 
-const ADMIN_HTML: &str = r##"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>yank</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f7f3ec;
-      --fg: #171410;
-      --muted: #6d645b;
-      --panel: #fffaf1;
-      --line: #d7cec1;
-      --accent: #0d6b62;
-      --danger: #b92b2b;
-      --shadow: 0 16px 44px rgba(42, 30, 14, .13);
+fn binary<T: Wire>(value: &T) -> ApiResult<axum::response::Response> {
+    Ok(([("content-type", "application/x-yank")], encode(value)?).into_response())
+}
+async fn rpc_health(State(s): State<AppState>) -> ApiResult<axum::response::Response> {
+    binary(&pb::ServerInfo {
+        name: "yank".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        relay_url: s.relay_url.to_string(),
+        storage: s.storage,
+    })
+}
+async fn rpc_login(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
+    body: axum::body::Bytes,
+) -> ApiResult<axum::response::Response> {
+    if body.len() > 4096 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Credentials too large".into(),
+        ));
     }
-    [data-theme="dark"] {
-      color-scheme: dark;
-      --bg: #121515;
-      --fg: #f3efe7;
-      --muted: #aaa197;
-      --panel: #1d2221;
-      --line: #343b38;
-      --accent: #69c8b8;
-      --danger: #ff7777;
-      --shadow: 0 18px 54px rgba(0, 0, 0, .32);
+    let input: pb::Credentials = decode(&body)?;
+    rate_limit(&s, addr)?;
+    let accounts = s.accounts.clone();
+    let login = tokio::task::spawn_blocking(move || {
+        accounts
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Unavailable"))?
+            .login(&auth::Credentials {
+                username: input.username,
+                password: input.password,
+                remember: false,
+            })
+    })
+    .await
+    .map_err(|_| internal())?
+    .map_err(|_| {
+        ApiError(
+            StatusCode::UNAUTHORIZED,
+            "Incorrect username or password".into(),
+        )
+    })?;
+    binary(&pb::Login {
+        token: login.token,
+        user: Some(pb::User {
+            id: login.user.id,
+            username: login.user.username,
+            admin: login.user.admin,
+        }),
+        expires: login.expires,
+    })
+}
+async fn rpc_devices(
+    State(s): State<AppState>,
+    h: HeaderMap,
+) -> ApiResult<axum::response::Response> {
+    let user = auth(&h, &s)?;
+    let d = s.devices.lock().map_err(|_| internal())?;
+    let peers: Vec<Peer> = d
+        .values()
+        .filter(|(owner, _, t)| owner == &user.id && t.elapsed() < Duration::from_secs(90))
+        .map(|(_, p, _)| p.clone())
+        .collect();
+    binary(&peers)
+}
+async fn rpc_find(
+    State(s): State<AppState>,
+    Path(code): Path<String>,
+) -> ApiResult<axum::response::Response> {
+    let d = s.devices.lock().map_err(|_| internal())?;
+    let peer = d
+        .values()
+        .find(|(_, p, t)| {
+            p.code.eq_ignore_ascii_case(&code) && t.elapsed() < Duration::from_secs(90)
+        })
+        .map(|(_, p, _)| p)
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "Device offline or code unknown".into(),
+            )
+        })?;
+    binary(peer)
+}
+async fn rpc_register(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<StatusCode> {
+    let announcement: pb::Announcement = decode(&body)?;
+    let peer = Peer::from_proto(
+        announcement
+            .peer
+            .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Missing device".into()))?,
+    )?;
+    let id: iroh_base::EndpointId = peer
+        .id
+        .parse()
+        .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "Invalid identity".into()))?;
+    let signature: [u8; 64] = announcement
+        .signature
+        .try_into()
+        .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "Invalid signature".into()))?;
+    let mut signed = encode(&peer)?;
+    signed.extend_from_slice(&announcement.timestamp.to_le_bytes());
+    id.verify(&signed, &iroh_base::Signature::from_bytes(&signature))
+        .map_err(|_| ApiError(StatusCode::UNAUTHORIZED, "Invalid device proof".into()))?;
+    if yank_core::now_ts().abs_diff(announcement.timestamp) > 90 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Device clock differs by more than 90 seconds".into(),
+        ));
     }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background:
-        linear-gradient(90deg, rgba(13, 107, 98, .08), transparent 38%),
-        var(--bg);
-      color: var(--fg);
-      font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    use sha2::{Digest, Sha256};
+    if peer.code != hex::encode(Sha256::digest(id.as_bytes()))[..12].to_uppercase() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Invalid device code".into(),
+        ));
     }
-    main { width: min(1120px, calc(100vw - 32px)); margin: 32px auto; }
-    header {
-      display: flex;
-      align-items: end;
-      justify-content: space-between;
-      gap: 20px;
-      padding-bottom: 18px;
-      border-bottom: 1px solid var(--line);
-    }
-    h1 { margin: 0; font-size: clamp(34px, 5vw, 72px); letter-spacing: 0; line-height: .9; }
-    .sub { margin: 12px 0 0; color: var(--muted); max-width: 620px; }
-    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-    input, button {
-      height: 38px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      color: var(--fg);
-      border-radius: 7px;
-      padding: 0 12px;
-      font: inherit;
-    }
-    input { width: min(360px, 100%); }
-    button { cursor: pointer; }
-    button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-    button.danger { color: var(--danger); }
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin: 22px 0;
-    }
-    .stat, .clip {
-      background: color-mix(in srgb, var(--panel) 92%, transparent);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-    }
-    .stat { padding: 18px; min-height: 104px; }
-    .stat strong { display: block; font-size: 30px; line-height: 1; margin-bottom: 12px; }
-    .stat span { color: var(--muted); }
-    .clips { display: grid; gap: 10px; }
-    .clip { display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 14px; }
-    .clip p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .meta { color: var(--muted); font-size: 12px; margin-top: 8px; }
-    .empty { color: var(--muted); padding: 32px 0; }
-    @media (max-width: 720px) {
-      header { display: block; }
-      .toolbar { justify-content: flex-start; margin-top: 18px; }
-      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .clip { grid-template-columns: 1fr; }
-      input { width: 100%; }
-    }
-  </style>
-</head>
-<body data-theme="light">
-  <main>
-    <header>
-      <div>
-        <h1>yank</h1>
-        <p class="sub" data-i18n="admin.tagline"></p>
-      </div>
-      <div class="toolbar">
-        <input id="token" type="password" autocomplete="current-password">
-        <button id="saveToken" class="primary" data-i18n="admin.save"></button>
-        <button id="theme"></button>
-        <button id="lang"></button>
-      </div>
-    </header>
-
-    <section class="stats">
-      <div class="stat"><strong id="clipCount">-</strong><span data-i18n="admin.clips"></span></div>
-      <div class="stat"><strong id="deletedCount">-</strong><span data-i18n="admin.deleted"></span></div>
-      <div class="stat"><strong id="deviceCount">-</strong><span data-i18n="admin.devices"></span></div>
-      <div class="stat"><strong id="newest">-</strong><span data-i18n="admin.newest"></span></div>
-    </section>
-
-    <div class="toolbar" style="justify-content: space-between; margin-bottom: 12px">
-      <h2 style="margin:0" data-i18n="admin.history"></h2>
-      <button id="refresh" class="primary" data-i18n="admin.refresh"></button>
-    </div>
-    <section id="clips" class="clips"></section>
-  </main>
-  <script>
-    let lang = localStorage.getItem("yank.lang") || "en";
-    let theme = localStorage.getItem("yank.theme") || "light";
-    let i18n = { locale: lang, messages: {} };
-    const tokenInput = document.querySelector("#token");
-    tokenInput.value = localStorage.getItem("yank.token") || "";
-
-    function t(key) { return i18n.messages[key] || key; }
-    async function loadI18n() {
-      const res = await fetch(`/assets/i18n/${lang}.json`);
-      i18n = await res.json();
-    }
-    function applyChrome() {
-      document.body.dataset.theme = theme;
-      document.documentElement.lang = lang;
-      document.querySelectorAll("[data-i18n]").forEach(el => el.textContent = t(el.dataset.i18n));
-      tokenInput.placeholder = t("admin.token");
-      document.querySelector("#theme").textContent = theme === "light" ? t("admin.dark") : t("admin.light");
-      document.querySelector("#lang").textContent = t("admin.lang_toggle");
-    }
-    async function api(path, options = {}) {
-      const token = localStorage.getItem("yank.token") || "";
-      const res = await fetch(path, {
-        ...options,
-        headers: { "Authorization": `Bearer ${token}`, ...(options.headers || {}) }
-      });
-      if (!res.ok) throw new Error(await res.text());
-      if (res.status === 204) return null;
-      return res.json();
-    }
-    function fmt(ts) {
-      return ts ? new Date(ts * 1000).toLocaleString() : "-";
-    }
-    async function refresh() {
-      const [stats, clips] = await Promise.all([api("/api/admin/stats"), api("/api/clips")]);
-      clipCount.textContent = stats.clip_count;
-      deletedCount.textContent = stats.deleted_count;
-      deviceCount.textContent = stats.device_count;
-      newest.textContent = fmt(stats.newest_clip_at);
-      const wrap = document.querySelector("#clips");
-      wrap.innerHTML = "";
-      if (!clips.length) {
-        wrap.innerHTML = `<div class="empty">${t("admin.empty")}</div>`;
-        return;
-      }
-      for (const clip of clips) {
-        const item = document.createElement("article");
-        item.className = "clip";
-        const text = clip.primary_text || clip.description;
-        const formatCount = t("admin.format_count").replace("{count}", clip.formats.length);
-        item.innerHTML = `
-          <div><p></p><div class="meta">${clip.device_id} · ${fmt(clip.updated_at)} · ${formatCount}</div></div>
-          <button class="danger">${t("admin.delete")}</button>`;
-        item.querySelector("p").textContent = text;
-        item.querySelector("button").onclick = async () => { await api(`/api/clips/${clip.id}`, { method: "DELETE" }); refresh(); };
-        wrap.appendChild(item);
-      }
-    }
-    document.querySelector("#saveToken").onclick = () => {
-      localStorage.setItem("yank.token", tokenInput.value);
-      refresh().catch(err => alert(err.message));
+    let owner = if token(&h).is_some() {
+        auth(&h, &s)?.id
+    } else {
+        "guest".into()
     };
-    document.querySelector("#theme").onclick = () => {
-      theme = theme === "light" ? "dark" : "light";
-      localStorage.setItem("yank.theme", theme);
-      applyChrome();
-    };
-    document.querySelector("#lang").onclick = () => {
-      lang = lang === "en" ? "zh" : "en";
-      localStorage.setItem("yank.lang", lang);
-      loadI18n().then(() => {
-        applyChrome();
-        refresh().catch(() => {});
-      });
-    };
-    document.querySelector("#refresh").onclick = () => refresh().catch(err => alert(err.message));
-    loadI18n().then(() => {
-      applyChrome();
-      if (tokenInput.value) refresh().catch(() => {});
-    });
-  </script>
-</body>
-</html>
-"##;
+    let mut devices = s.devices.lock().map_err(|_| internal())?;
+    devices.retain(|_, (_, _, t)| t.elapsed() < Duration::from_secs(90));
+    if devices.len() >= 512 && !devices.contains_key(&peer.id) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Device capacity reached".into(),
+        ));
+    }
+    devices.insert(peer.id.clone(), (owner, peer, Instant::now()));
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn rpc_pull(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Query(q): Query<PullQuery>,
+) -> ApiResult<axum::response::Response> {
+    let u = auth(&h, &s)?;
+    binary(&s.library(&u, |db| db.page(q.since, 20))?)
+}
+async fn rpc_push(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<axum::response::Response> {
+    let u = auth(&h, &s)?;
+    let mutation: Mutation = decode(&body)?;
+    binary(&s.library(&u, |db| db.accept(&mutation))?)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn state() -> AppState {
-        AppState {
-            store: Arc::new(Mutex::new(Store::open_memory().unwrap())),
-            token: Arc::from("secret-token"),
+    use axum::{body::Body, extract::ConnectInfo, http::Request};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    fn state() -> (tempfile::TempDir, AppState) {
+        let temp = tempfile::tempdir().unwrap();
+        let accounts = auth::Accounts::open(&temp.path().join("accounts.sqlite3")).unwrap();
+        accounts
+            .bootstrap(Some("admin"), Some("test-password-42"))
+            .unwrap();
+        let state = AppState {
+            accounts: Arc::new(Mutex::new(accounts)),
+            data: Arc::new(temp.path().to_path_buf()),
+            devices: Arc::default(),
+            relay_url: "http://localhost:7220".into(),
+            storage: true,
+            secure: false,
+            attempts: Arc::default(),
+        };
+        (temp, state)
+    }
+    fn login(s: &AppState, name: &str, password: &str) -> auth::Login {
+        s.accounts
+            .lock()
+            .unwrap()
+            .login(&auth::Credentials {
+                username: name.into(),
+                password: password.into(),
+                remember: false,
+            })
+            .unwrap()
+    }
+    async fn call(
+        s: AppState,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Vec<u8>,
+    ) -> (StatusCode, Vec<u8>) {
+        request(s, method, path, token, body, "application/x-yank").await
+    }
+    async fn call_json(
+        s: AppState,
+        path: &str,
+        token: Option<&str>,
+        body: serde_json::Value,
+    ) -> (StatusCode, Vec<u8>) {
+        request(
+            s,
+            "POST",
+            path,
+            token,
+            serde_json::to_vec(&body).unwrap(),
+            "application/json",
+        )
+        .await
+    }
+    async fn request(
+        s: AppState,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Vec<u8>,
+        content_type: &str,
+    ) -> (StatusCode, Vec<u8>) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", content_type);
+        if let Some(token) = token {
+            request = request.header("authorization", format!("Bearer {token}"));
         }
+        let mut request = request.body(Body::from(body)).unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345".parse::<SocketAddr>().unwrap(),
+        ));
+        let response = router(s).oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        (status, body)
     }
-
-    #[test]
-    fn rejects_missing_token() {
-        let headers = HeaderMap::new();
-        let error = ensure_auth(&headers, &state()).unwrap_err();
-        assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    fn other(s: &AppState) -> auth::Login {
+        s.accounts
+            .lock()
+            .unwrap()
+            .create(auth::NewUser {
+                username: "other".into(),
+                password: "other-password-42".into(),
+                admin: false,
+            })
+            .unwrap();
+        login(s, "other", "other-password-42")
     }
-
+    async fn binary_login(s: AppState, username: &str, password: &str) -> (StatusCode, Vec<u8>) {
+        call(
+            s,
+            "POST",
+            "/rpc/login",
+            None,
+            encode(&pb::Credentials {
+                username: username.into(),
+                password: password.into(),
+            })
+            .unwrap(),
+        )
+        .await
+    }
+    #[tokio::test]
+    async fn binary_logout_requires_bearer_and_revokes_only_that_session() {
+        let (_temp, s) = state();
+        let first = login(&s, "admin", "test-password-42");
+        let second = login(&s, "admin", "test-password-42");
+        let cookie_request = Request::builder()
+            .method("POST")
+            .uri("/rpc/logout")
+            .header("cookie", format!("yank.session={}", first.token))
+            .body(Body::from(encode(&()).unwrap()))
+            .unwrap();
+        assert_eq!(
+            router(s.clone())
+                .oneshot(cookie_request)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                s.clone(),
+                "POST",
+                "/rpc/logout",
+                Some(&first.token),
+                encode(&pb::Credentials {
+                    username: "admin".into(),
+                    password: "test-password-42".into(),
+                })
+                .unwrap()
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let (status, body) = call(
+            s.clone(),
+            "POST",
+            "/rpc/logout",
+            Some(&first.token),
+            encode(&()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        decode::<()>(&body).unwrap();
+        assert_eq!(
+            call(
+                s.clone(),
+                "GET",
+                "/api/session",
+                Some(&first.token),
+                Vec::new()
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                s.clone(),
+                "POST",
+                "/rpc/logout",
+                Some(&first.token),
+                encode(&()).unwrap()
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(s, "GET", "/api/session", Some(&second.token), Vec::new())
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+    #[tokio::test]
+    async fn password_change_requires_old_password_and_revokes_all_own_sessions() {
+        let (_temp, s) = state();
+        let first = login(&s, "admin", "test-password-42");
+        let second = login(&s, "admin", "test-password-42");
+        let other = other(&s);
+        for input in [
+            serde_json::json!({"old_password":"wrong-password", "new_password":"changed-password"}),
+            serde_json::json!({"old_password":"test-password-42", "new_password":"short"}),
+        ] {
+            assert_eq!(
+                call_json(s.clone(), "/api/password", Some(&first.token), input)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+            assert!(
+                s.accounts
+                    .lock()
+                    .unwrap()
+                    .verify(&second.token)
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            call_json(
+                s.clone(),
+                "/api/password",
+                Some(&first.token),
+                serde_json::json!({
+                    "old_password":"test-password-42", "new_password":"changed-password",
+                    "id":other.user.id,
+                })
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        for token in [&first.token, &second.token] {
+            assert_eq!(
+                call(s.clone(), "GET", "/rpc/sync/pull", Some(token), Vec::new())
+                    .await
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let cookie_request = Request::builder()
+            .uri("/api/session")
+            .header("cookie", format!("yank.session={}", second.token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            router(s.clone())
+                .oneshot(cookie_request)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            binary_login(s.clone(), "admin", "test-password-42").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            binary_login(s.clone(), "admin", "changed-password").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            binary_login(s.clone(), "other", "other-password-42")
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(s, "GET", "/api/session", Some(&other.token), Vec::new())
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+    #[tokio::test]
+    async fn admin_reset_revokes_target_sessions_and_preserves_tenant_isolation() {
+        let (_temp, s) = state();
+        let admin = login(&s, "admin", "test-password-42");
+        let target = other(&s);
+        let sibling = login(&s, "other", "other-password-42");
+        let private = Clip::text("admin-device", "admin private");
+        s.library(&admin.user, |db| {
+            db.accept(&Mutation {
+                operation: "private".into(),
+                clip: private,
+            })
+        })
+        .unwrap_or_else(|_| panic!("store private clip"));
+        let path = format!("/api/accounts/{}/password", target.user.id);
+        assert_eq!(
+            call_json(
+                s.clone(),
+                &path,
+                Some(&admin.token),
+                serde_json::json!({"new_password":"reset-password"})
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        for token in [&target.token, &sibling.token] {
+            assert_eq!(
+                call(s.clone(), "GET", "/api/session", Some(token), Vec::new())
+                    .await
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert_eq!(
+            binary_login(s.clone(), "other", "other-password-42")
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, body) = binary_login(s.clone(), "other", "reset-password").await;
+        assert_eq!(status, StatusCode::OK);
+        let fresh: pb::Login = decode(&body).unwrap();
+        assert_eq!(fresh.user.as_ref().unwrap().id, target.user.id);
+        assert!(!fresh.user.as_ref().unwrap().admin);
+        let (status, body) = call(
+            s.clone(),
+            "GET",
+            "/rpc/sync/pull",
+            Some(&fresh.token),
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(decode::<yank_core::Page>(&body).unwrap().clips.is_empty());
+        let (status, body) = call(
+            s.clone(),
+            "GET",
+            "/rpc/sync/pull",
+            Some(&admin.token),
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(decode::<yank_core::Page>(&body).unwrap().clips.len(), 1);
+        // Bootstrap remains startup-only and cannot reset either existing account.
+        s.accounts
+            .lock()
+            .unwrap()
+            .bootstrap(Some("other"), Some("bootstrap-password"))
+            .unwrap();
+        assert_eq!(
+            binary_login(s.clone(), "other", "reset-password").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            binary_login(s, "admin", "test-password-42").await.0,
+            StatusCode::OK
+        );
+    }
+    #[tokio::test]
+    async fn reset_denies_non_admin_without_disclosing_other_accounts() {
+        let (_temp, s) = state();
+        let admin = login(&s, "admin", "test-password-42");
+        let user = other(&s);
+        let existing = format!("/api/accounts/{}/password", admin.user.id);
+        let unknown = "/api/accounts/missing-account/password";
+        let payload = serde_json::json!({"new_password":"reset-password"});
+        let denied = call_json(s.clone(), &existing, Some(&user.token), payload.clone()).await;
+        assert_eq!(denied.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            denied,
+            call_json(s.clone(), unknown, Some(&user.token), payload.clone()).await
+        );
+        assert_eq!(
+            call_json(s.clone(), &existing, None, payload.clone())
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call_json(s.clone(), &existing, Some(&admin.token), payload.clone())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            call_json(s.clone(), unknown, Some(&admin.token), payload)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            binary_login(s.clone(), "admin", "test-password-42").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(s, "GET", "/api/session", Some(&user.token), Vec::new())
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+    #[tokio::test]
+    async fn login_and_password_changes_share_the_attempt_budget() {
+        let (_temp, s) = state();
+        let admin = login(&s, "admin", "test-password-42");
+        for _ in 0..4 {
+            assert_eq!(
+                binary_login(s.clone(), "missing", "wrong-password").await.0,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                call_json(
+                    s.clone(),
+                    "/api/login",
+                    None,
+                    serde_json::json!({"username":"missing", "password":"wrong-password"})
+                )
+                .await
+                .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        for _ in 0..2 {
+            assert_eq!(call_json(s.clone(), "/api/password", Some(&admin.token), serde_json::json!({"old_password":"wrong-password", "new_password":"changed-password"})).await.0, StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(
+            binary_login(s.clone(), "admin", "test-password-42").await.0,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(call_json(s.clone(), "/api/password", Some(&admin.token), serde_json::json!({"old_password":"test-password-42", "new_password":"changed-password"})).await.0, StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            s.accounts
+                .lock()
+                .unwrap()
+                .verify(&admin.token)
+                .unwrap()
+                .is_some()
+        );
+    }
+    #[tokio::test]
+    async fn binary_login_and_user_storage_are_isolated() {
+        let (_temp, s) = state();
+        s.accounts
+            .lock()
+            .unwrap()
+            .create(auth::NewUser {
+                username: "other".into(),
+                password: "other-password-42".into(),
+                admin: false,
+            })
+            .unwrap();
+        let (status, body) = call(
+            s.clone(),
+            "POST",
+            "/rpc/login",
+            None,
+            encode(&pb::Credentials {
+                username: "admin".into(),
+                password: "test-password-42".into(),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let admin: pb::Login = decode(&body).unwrap();
+        let other = login(&s, "other", "other-password-42");
+        let mut clip = Clip::text("device", "private value");
+        clip.clock.insert("device".into(), 1);
+        let m = Mutation {
+            operation: "one".into(),
+            clip,
+        };
+        assert_eq!(
+            call(
+                s.clone(),
+                "POST",
+                "/rpc/sync/push",
+                Some(&admin.token),
+                encode(&m).unwrap()
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let (_, body) = call(
+            s.clone(),
+            "GET",
+            "/rpc/sync/pull",
+            Some(&other.token),
+            Vec::new(),
+        )
+        .await;
+        assert!(decode::<yank_core::Page>(&body).unwrap().clips.is_empty());
+        assert_eq!(
+            call(s, "GET", "/api/accounts", Some(&other.token), Vec::new())
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    #[tokio::test]
+    async fn storage_disabled_preserves_discovery_but_rejects_data() {
+        let (_temp, mut s) = state();
+        let user = login(&s, "admin", "test-password-42");
+        s.storage = false;
+        assert_eq!(
+            call(
+                s.clone(),
+                "GET",
+                "/rpc/sync/pull",
+                Some(&user.token),
+                Vec::new()
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(s, "GET", "/rpc/devices", Some(&user.token), Vec::new())
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+    #[tokio::test]
+    async fn logout_revokes_the_session() {
+        let (_temp, s) = state();
+        let user = login(&s, "admin", "test-password-42");
+        assert_eq!(
+            call(
+                s.clone(),
+                "POST",
+                "/api/logout",
+                Some(&user.token),
+                Vec::new()
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            call(s, "GET", "/api/stats", Some(&user.token), Vec::new())
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
     #[test]
-    fn accepts_bearer_token() {
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, "Bearer secret-token".parse().unwrap());
-        assert!(ensure_auth(&headers, &state()).is_ok());
+    fn bootstrap_never_overwrites_an_existing_password() {
+        let (_temp, s) = state();
+        s.accounts
+            .lock()
+            .unwrap()
+            .bootstrap(Some("replacement"), Some("new-password-42"))
+            .unwrap();
+        assert_eq!(s.accounts.lock().unwrap().users().unwrap().len(), 1);
+        assert_eq!(
+            login(&s, "admin", "test-password-42").user.username,
+            "admin"
+        );
+    }
+    #[tokio::test]
+    async fn unauthenticated_and_wrong_message_requests_are_rejected() {
+        let (_temp, s) = state();
+        assert_eq!(
+            call(s.clone(), "GET", "/rpc/sync/pull", None, Vec::new())
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let user = login(&s, "admin", "test-password-42");
+        assert_eq!(
+            call(
+                s,
+                "POST",
+                "/rpc/sync/push",
+                Some(&user.token),
+                encode(&()).unwrap()
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
     }
 }

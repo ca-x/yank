@@ -1,265 +1,38 @@
-use chrono::Utc;
+//! Local-first clipboard records and transactional replication.
+use prost::Message;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    path::Path,
-    sync::atomic::{AtomicI64, Ordering},
-};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 use thiserror::Error;
 use uuid::Uuid;
 
 pub const APP_NAME: &str = "yank";
-pub const DEFAULT_SERVER_BIND: &str = "127.0.0.1:7219";
-
-pub mod i18n;
-
+pub const MAX_WIRE_BYTES: usize = 16 * 1024 * 1024;
+pub type Result<T> = std::result::Result<T, Error>;
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error(transparent)]
+    Sql(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Invalid(String),
+}
+pub fn now_ts() -> i64 {
+    chrono::Utc::now().timestamp()
+}
 pub fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
-
-#[derive(Debug, Error)]
-pub enum YankError {
-    #[error("sqlite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-    #[error("invalid language: {0}")]
-    InvalidLanguage(String),
-    #[error("invalid theme: {0}")]
-    InvalidTheme(String),
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
-}
-
-pub type Result<T> = std::result::Result<T, YankError>;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Language {
-    #[default]
     En,
     Zh,
 }
-
-impl Language {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::En => "en",
-            Self::Zh => "zh",
-        }
-    }
-
-    pub fn parse(value: &str) -> Result<Self> {
-        match value {
-            "en" | "en-US" | "english" => Ok(Self::En),
-            "zh" | "zh-CN" | "cn" | "chinese" => Ok(Self::Zh),
-            other => Err(YankError::InvalidLanguage(other.to_owned())),
-        }
-    }
-
-    pub fn toggle(self) -> Self {
-        match self {
-            Self::En => Self::Zh,
-            Self::Zh => Self::En,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Theme {
-    #[default]
-    Light,
-    Dark,
-}
-
-impl Theme {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Light => "light",
-            Self::Dark => "dark",
-        }
-    }
-
-    pub fn parse(value: &str) -> Result<Self> {
-        match value {
-            "light" => Ok(Self::Light),
-            "dark" => Ok(Self::Dark),
-            other => Err(YankError::InvalidTheme(other.to_owned())),
-        }
-    }
-
-    pub fn toggle(self) -> Self {
-        match self {
-            Self::Light => Self::Dark,
-            Self::Dark => Self::Light,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Settings {
-    pub language: Language,
-    pub theme: Theme,
-    pub device_id: String,
-    pub server_url: Option<String>,
-    pub token: Option<String>,
-    pub sync_enabled: bool,
-    pub capture_enabled: bool,
-    pub capture_text_enabled: bool,
-    pub capture_html_enabled: bool,
-    pub capture_image_enabled: bool,
-    pub capture_files_enabled: bool,
-    pub capture_interval_ms: u64,
-    pub max_history: u32,
-    pub duplicate_moves_to_top: bool,
-    pub start_on_login: bool,
-    pub show_tray_icon: bool,
-    pub show_in_taskbar: bool,
-    pub quick_paste_position: String,
-    pub quick_paste_find_as_you_type: bool,
-    pub quick_paste_regex_search: bool,
-    pub quick_paste_wildcard_search: bool,
-    pub quick_paste_case_sensitive_search: bool,
-    pub quick_paste_search_scope: String,
-    pub quick_paste_show_hotkey_text: bool,
-    pub quick_paste_show_leading_whitespace: bool,
-    pub quick_paste_show_thumbnails: bool,
-    pub quick_paste_draw_rtf: bool,
-    pub quick_paste_ensure_visible: bool,
-    pub quick_paste_show_groups_in_main: bool,
-    pub quick_paste_prompt_delete: bool,
-    pub quick_paste_always_show_scrollbar: bool,
-    pub quick_paste_show_pasted_indicator: bool,
-    pub quick_paste_elevated_paste: bool,
-    pub quick_paste_paste_in_active_window: bool,
-    pub quick_paste_paste_delay_ms: u32,
-    pub quick_paste_update_order_on_copy: bool,
-    pub quick_paste_multi_paste_reverse: bool,
-    pub multi_paste_separator: String,
-    pub quick_paste_description_word_wrap: bool,
-    pub quick_paste_lines_per_row: u32,
-    pub quick_paste_font_size: u32,
-    pub quick_paste_transparency_percent: u32,
-    pub first_ten_hotkeys: Vec<String>,
-    pub first_ten_plain_hotkeys: Vec<String>,
-    pub first_ten_send_paste: bool,
-    pub first_ten_move_to_top: bool,
-    pub first_ten_use_active_group: bool,
-    pub text_only_paste_delay_ms: u32,
-    pub expire_after_days: u32,
-    pub max_database_mb: u32,
-    pub backup_path: String,
-    pub export_path: String,
-    pub import_path: String,
-    pub privacy_app_exclude: String,
-    pub privacy_content_exclude: String,
-    pub copy_buffer_copy_hotkeys: Vec<String>,
-    pub copy_buffer_paste_hotkeys: Vec<String>,
-    pub copy_buffer_cut_hotkeys: Vec<String>,
-    pub copy_buffer_play_sound: Vec<bool>,
-    pub total_paste_count: u64,
-    pub trip_paste_count: u64,
-    pub hotkey_show_history: String,
-    pub hotkey_show_history_2: String,
-    pub hotkey_show_history_3: String,
-    pub hotkey_search: String,
-    pub hotkey_text_only_paste: String,
-    pub hotkey_copy_selected: String,
-    pub hotkey_delete_selected: String,
-    pub hotkey_toggle_pin: String,
-    pub hotkey_edit_selected: String,
-    pub hotkey_capture_now: String,
-    pub hotkey_copy_and_capture: String,
-    pub hotkey_sync_now: String,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            language: Language::default(),
-            theme: Theme::default(),
-            device_id: Uuid::new_v4().to_string(),
-            server_url: None,
-            token: None,
-            sync_enabled: false,
-            capture_enabled: true,
-            capture_text_enabled: true,
-            capture_html_enabled: true,
-            capture_image_enabled: true,
-            capture_files_enabled: true,
-            capture_interval_ms: 1000,
-            max_history: 500,
-            duplicate_moves_to_top: true,
-            start_on_login: false,
-            show_tray_icon: true,
-            show_in_taskbar: true,
-            quick_paste_position: "cursor".to_owned(),
-            quick_paste_find_as_you_type: true,
-            quick_paste_regex_search: false,
-            quick_paste_wildcard_search: false,
-            quick_paste_case_sensitive_search: false,
-            quick_paste_search_scope: "all".to_owned(),
-            quick_paste_show_hotkey_text: true,
-            quick_paste_show_leading_whitespace: false,
-            quick_paste_show_thumbnails: true,
-            quick_paste_draw_rtf: true,
-            quick_paste_ensure_visible: true,
-            quick_paste_show_groups_in_main: true,
-            quick_paste_prompt_delete: true,
-            quick_paste_always_show_scrollbar: false,
-            quick_paste_show_pasted_indicator: true,
-            quick_paste_elevated_paste: false,
-            quick_paste_paste_in_active_window: true,
-            quick_paste_paste_delay_ms: 120,
-            quick_paste_update_order_on_copy: true,
-            quick_paste_multi_paste_reverse: false,
-            multi_paste_separator: "\n".to_owned(),
-            quick_paste_description_word_wrap: true,
-            quick_paste_lines_per_row: 1,
-            quick_paste_font_size: 10,
-            quick_paste_transparency_percent: 0,
-            first_ten_hotkeys: vec![String::new(); 10],
-            first_ten_plain_hotkeys: vec![String::new(); 10],
-            first_ten_send_paste: true,
-            first_ten_move_to_top: false,
-            first_ten_use_active_group: false,
-            text_only_paste_delay_ms: 0,
-            expire_after_days: 0,
-            max_database_mb: 500,
-            backup_path: String::new(),
-            export_path: String::new(),
-            import_path: String::new(),
-            privacy_app_exclude: String::new(),
-            privacy_content_exclude: String::new(),
-            copy_buffer_copy_hotkeys: default_copy_buffer_hotkeys("Ctrl+Shift+C"),
-            copy_buffer_paste_hotkeys: default_copy_buffer_hotkeys("Ctrl+Shift+V"),
-            copy_buffer_cut_hotkeys: default_copy_buffer_hotkeys("Ctrl+Shift+X"),
-            copy_buffer_play_sound: vec![false; 5],
-            total_paste_count: 0,
-            trip_paste_count: 0,
-            hotkey_show_history: "Ctrl+Backtick".to_owned(),
-            hotkey_show_history_2: String::new(),
-            hotkey_show_history_3: String::new(),
-            hotkey_search: "Ctrl+F".to_owned(),
-            hotkey_text_only_paste: String::new(),
-            hotkey_copy_selected: "Enter".to_owned(),
-            hotkey_delete_selected: "Delete".to_owned(),
-            hotkey_toggle_pin: "Ctrl+P".to_owned(),
-            hotkey_edit_selected: "Ctrl+E".to_owned(),
-            hotkey_capture_now: "Ctrl+Shift+C".to_owned(),
-            hotkey_copy_and_capture: String::new(),
-            hotkey_sync_now: "Ctrl+Shift+S".to_owned(),
-        }
-    }
-}
-
-fn default_copy_buffer_hotkeys(_prefix: &str) -> Vec<String> {
-    vec![String::new(); 5]
-}
-
+pub mod i18n;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClipFormat {
     pub format: String,
@@ -394,2266 +167,828 @@ impl ClipFormat {
     }
 }
 
+/// A version vector provides causal ordering without wall-clock assumptions.
+pub type Clock = BTreeMap<String, u64>;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     pub id: String,
     pub device_id: String,
     pub description: String,
-    pub primary_text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quick_paste_text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hotkey: Option<String>,
+    pub text: String,
+    pub kind: String,
+    pub collection: String,
     pub formats: Vec<ClipFormat>,
     pub created_at: i64,
     pub updated_at: i64,
-    pub deleted_at: Option<i64>,
-    pub content_hash: String,
+    pub deleted: bool,
     pub pinned: bool,
+    pub clock: Clock,
     #[serde(default)]
-    pub dont_auto_delete: bool,
+    pub source_app: String,
     #[serde(default)]
-    pub sticky_position: i32,
-    pub source_app: Option<String>,
-    pub group_id: Option<i64>,
+    pub version_id: String,
+    #[serde(default)]
+    pub write_order: u64,
+    #[serde(default)]
+    pub write_actor: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) blob_refs: Vec<String>,
 }
-
 impl Clip {
-    pub fn from_text(device_id: impl Into<String>, text: impl Into<String>) -> Self {
-        let text = text.into();
-        Self::from_formats(
-            device_id,
-            summarize_text(&text),
-            Some(text.clone()),
-            vec![ClipFormat::text(&text)],
-        )
+    pub fn text(device: &str, text: &str) -> Self {
+        Self::from_formats(device, text, vec![ClipFormat::text(text)])
     }
-
-    pub fn from_formats(
-        device_id: impl Into<String>,
-        description: impl Into<String>,
-        primary_text: Option<String>,
-        formats: Vec<ClipFormat>,
-    ) -> Self {
-        let now = now_ts();
-        let content_hash = content_hash(&formats);
-
+    pub fn from_formats(device: &str, text: &str, formats: Vec<ClipFormat>) -> Self {
+        let kind = if formats.iter().any(|f| {
+            f.image_rgba_dimensions().is_some()
+                || f.mime.as_deref().is_some_and(|m| m.starts_with("image/"))
+        }) {
+            "image"
+        } else if formats.iter().any(ClipFormat::is_file_list) {
+            "files"
+        } else if text.starts_with("https://") || text.starts_with("http://") {
+            "link"
+        } else if is_color(text) {
+            "color"
+        } else if text.lines().count() > 1
+            && [
+                "fn ",
+                "function ",
+                "const ",
+                "let ",
+                "import ",
+                "def ",
+                "SELECT ",
+                "public ",
+            ]
+            .iter()
+            .any(|s| text.contains(s))
+        {
+            "code"
+        } else {
+            "text"
+        };
         Self {
-            id: Uuid::new_v4().to_string(),
-            device_id: device_id.into(),
-            description: description.into(),
-            primary_text,
-            quick_paste_text: None,
-            hotkey: None,
+            id: new_id(),
+            device_id: device.into(),
+            description: text
+                .lines()
+                .next()
+                .unwrap_or(kind)
+                .chars()
+                .take(100)
+                .collect(),
+            text: text.into(),
+            kind: kind.into(),
+            collection: String::new(),
             formats,
-            created_at: now,
-            updated_at: now,
-            deleted_at: None,
-            content_hash,
+            created_at: now_ts(),
+            updated_at: now_ts(),
+            deleted: false,
             pinned: false,
-            dont_auto_delete: false,
-            sticky_position: 0,
-            source_app: None,
-            group_id: None,
+            clock: Clock::new(),
+            source_app: String::new(),
+            version_id: new_id(),
+            write_order: 0,
+            write_actor: device.into(),
+            blob_refs: Vec::new(),
         }
     }
-
-    pub fn touch_for_remote(mut self) -> Self {
-        if self.id.is_empty() {
-            self.id = Uuid::new_v4().to_string();
-        }
-        if self.created_at <= 0 {
-            self.created_at = now_ts();
-        }
-        if self.updated_at <= 0 {
-            self.updated_at = self.created_at;
-        }
-        if self.content_hash.is_empty() {
-            self.content_hash = content_hash(&self.formats);
-        }
-        self
+    pub fn content_hash(&self) -> String {
+        hex::encode(Sha256::digest(
+            serde_json::to_vec(&self.formats).unwrap_or_default(),
+        ))
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Group {
-    pub id: i64,
-    pub name: String,
-    pub hotkey: String,
-    pub sort_order: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PushClipRequest {
-    pub clip: Clip,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PushClipResponse {
-    pub clip: Clip,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PullClipsResponse {
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Page {
     pub clips: Vec<Clip>,
-    pub server_time: i64,
+    pub cursor: i64,
+    pub epoch: String,
+    pub more: bool,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Mutation {
+    pub operation: String,
+    pub clip: Clip,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ack {
+    pub operation: String,
+    pub clip: Clip,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Stats {
+    pub clips: u64,
+    pub pinned: u64,
+    pub deleted: u64,
+    pub pending: u64,
+    pub conflicts: u64,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PeerAddress {
+    pub relay_urls: Vec<String>,
+    pub direct_addresses: Vec<String>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Peer {
+    pub id: String,
+    pub name: String,
+    pub code: String,
+    pub address: PeerAddress,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Preferences {
+    pub auto_update: bool,
+    pub launch_at_login: bool,
+    pub retention_days: u32,
+    pub backup_daily: bool,
+    pub excluded_apps: String,
+    pub panel_position: String,
+    pub panel_size: u32,
+    pub silent_start: bool,
+    pub hotkey_show: String,
+    pub hotkey_next: String,
+    pub hotkey_pause: String,
+    pub hotkey_float: String,
+    pub capture_protection: bool,
+    pub apply_remote: bool,
+    pub device_name: String,
+    pub ditto_enabled: bool,
+    pub ditto_listen: String,
+    pub ditto_password: String,
+    pub ditto_remote: String,
+    pub capture: bool,
+    pub upload: bool,
+    pub server_url: String,
+    pub username: String,
+    pub account_id: String,
+    pub relay_url: String,
+    pub token: String,
+    pub mode: String,
+    pub theme: String,
+    pub language: String,
+    pub exclude_pattern: String,
+}
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            auto_update: false,
+            launch_at_login: false,
+            retention_days: 0,
+            backup_daily: true,
+            excluded_apps: String::new(),
+            panel_position: "center".into(),
+            panel_size: 3,
+            silent_start: false,
+            hotkey_show: "mod+shift+v".into(),
+            hotkey_next: "mod+alt+n".into(),
+            hotkey_pause: "mod+alt+p".into(),
+            hotkey_float: "mod+shift+f".into(),
+            capture_protection: true,
+            apply_remote: true,
+            device_name: "My device".into(),
+            ditto_enabled: false,
+            ditto_listen: "127.0.0.1:23443".into(),
+            ditto_password: String::new(),
+            ditto_remote: String::new(),
+            capture: true,
+            upload: false,
+            server_url: String::new(),
+            username: String::new(),
+            account_id: String::new(),
+            relay_url: String::new(),
+            token: String::new(),
+            mode: "relay".into(),
+            theme: "system".into(),
+            language: "zh".into(),
+            exclude_pattern: String::new(),
+        }
+    }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub name: &'static str,
-    pub version: &'static str,
-    pub server_time: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct StoreStats {
-    pub clip_count: i64,
-    pub deleted_count: i64,
-    pub device_count: i64,
-    pub newest_clip_at: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ClipRankMove {
-    Top,
-    Up,
-    Down,
-    Last,
-}
-
+/// One connection per worker; never hold a transaction across network I/O.
 pub struct Store {
     conn: Connection,
 }
-
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        Self::init(Connection::open(path)?)
+    }
+    pub fn memory() -> Result<Self> {
+        Self::init(Connection::open_in_memory()?)
+    }
+    fn init(conn: Connection) -> Result<Self> {
+        conn.busy_timeout(Duration::from_secs(3))?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+          CREATE TABLE IF NOT EXISTS blobs(hash TEXT PRIMARY KEY,data BLOB NOT NULL);
+          CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS clips(id TEXT PRIMARY KEY,body TEXT NOT NULL,deleted INTEGER NOT NULL,pinned INTEGER NOT NULL,kind TEXT NOT NULL,collection TEXT NOT NULL,search TEXT NOT NULL,updated INTEGER NOT NULL,hash TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS changes(seq INTEGER PRIMARY KEY AUTOINCREMENT,clip_id TEXT NOT NULL,body TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS outbox(clip_id TEXT PRIMARY KEY,operation TEXT UNIQUE NOT NULL,body TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,ack TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS conflicts(id TEXT PRIMARY KEY,clip_id TEXT NOT NULL,body TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS peers(id TEXT PRIMARY KEY,body TEXT NOT NULL);
+          CREATE INDEX IF NOT EXISTS clips_search ON clips(deleted,pinned DESC,updated DESC,id);
+          CREATE INDEX IF NOT EXISTS clips_hash ON clips(hash);")?;
+        conn.execute(
+            "INSERT OR IGNORE INTO metadata VALUES('epoch',?1)",
+            [new_id()],
+        )?;
         let store = Self { conn };
-        store.init()?;
+        if store.value("default_views_initialized")?.is_none() {
+            let tx = write_transaction(&store.conn)?;
+            for (id, name, filter, icon) in [
+                ("images", "图片", "image", "image"),
+                ("links", "链接", "link", "link"),
+                ("code", "代码", "code", "code"),
+                ("files", "文件", "files", "file"),
+                ("colors", "颜色", "color", "palette"),
+            ] {
+                store.save_view(SavedView {
+                    id: format!("default-{id}"),
+                    name: name.into(),
+                    query: String::new(),
+                    filter: filter.into(),
+                    days: 0,
+                    icon: icon.into(),
+                })?;
+            }
+            store.set_value("default_views_initialized", "1")?;
+            tx.commit()?;
+        }
         Ok(store)
     }
-
-    pub fn open_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
-        let store = Self { conn };
-        store.init()?;
-        Ok(store)
+    pub fn get(&self, id: &str) -> Result<Option<Clip>> {
+        let raw: Option<String> = self
+            .conn
+            .query_row("SELECT body FROM clips WHERE id=?1", [id], |r| r.get(0))
+            .optional()?;
+        raw.map(|s| self.load(&s)).transpose()
     }
-
-    pub fn init(&self) -> Result<()> {
-        self.conn.execute_batch(
-            r#"
-            PRAGMA foreign_keys = ON;
-            PRAGMA journal_mode = WAL;
-
-            CREATE TABLE IF NOT EXISTS clips (
-                id TEXT PRIMARY KEY NOT NULL,
-                device_id TEXT NOT NULL,
-                description TEXT NOT NULL,
-                primary_text TEXT,
-                quick_paste_text TEXT,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                deleted_at INTEGER,
-                content_hash TEXT NOT NULL,
-                pinned INTEGER NOT NULL DEFAULT 0,
-                dont_auto_delete INTEGER NOT NULL DEFAULT 0,
-                sticky_position INTEGER NOT NULL DEFAULT 0,
-                hotkey TEXT,
-                source_app TEXT,
-                group_id INTEGER
-            );
-
-            CREATE TABLE IF NOT EXISTS clip_formats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-                format TEXT NOT NULL,
-                mime TEXT,
-                data BLOB NOT NULL,
-                UNIQUE(clip_id, format)
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY NOT NULL,
-                value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS clip_groups (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                hotkey TEXT NOT NULL DEFAULT '',
-                sort_order INTEGER NOT NULL DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS copy_buffers (
-                slot INTEGER PRIMARY KEY NOT NULL,
-                clip_id TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sync_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                clip_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS clips_updated_at_idx ON clips(updated_at DESC);
-            CREATE INDEX IF NOT EXISTS clips_hash_idx ON clips(content_hash);
-            CREATE INDEX IF NOT EXISTS clips_device_idx ON clips(device_id);
-            CREATE INDEX IF NOT EXISTS clips_group_idx ON clips(group_id);
-            CREATE INDEX IF NOT EXISTS clip_groups_sort_idx ON clip_groups(sort_order ASC, name ASC);
-            CREATE INDEX IF NOT EXISTS copy_buffers_clip_idx ON copy_buffers(clip_id);
-            "#,
+    pub fn list(&self, query: &str, filter: &str, limit: u32, offset: u32) -> Result<Vec<Clip>> {
+        self.list_with_age(query, filter, 0, limit, offset)
+    }
+    pub fn list_with_age(
+        &self,
+        query: &str,
+        filter: &str,
+        days: u32,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Clip>> {
+        let cutoff = if days == 0 {
+            i64::MIN
+        } else {
+            now_ts() - i64::from(days) * 86400
+        };
+        let mut stmt = self.conn.prepare("SELECT body FROM clips WHERE deleted=0 AND updated>=?5 AND instr(lower(search),lower(?1))>0 AND (?2='all' OR (?2='pinned' AND pinned=1) OR kind=?2 OR collection=?2) ORDER BY pinned DESC,updated DESC,id DESC LIMIT ?3 OFFSET ?4")?;
+        let rows = stmt.query_map(
+            params![query, filter, limit.min(500), offset, cutoff],
+            |r| r.get::<_, String>(0),
         )?;
-        self.ensure_column(
-            "clips",
-            "group_id",
-            "ALTER TABLE clips ADD COLUMN group_id INTEGER",
-        )?;
-        self.ensure_column(
-            "clips",
-            "quick_paste_text",
-            "ALTER TABLE clips ADD COLUMN quick_paste_text TEXT",
-        )?;
-        self.ensure_column(
-            "clips",
-            "dont_auto_delete",
-            "ALTER TABLE clips ADD COLUMN dont_auto_delete INTEGER NOT NULL DEFAULT 0",
-        )?;
-        self.ensure_column(
-            "clips",
-            "hotkey",
-            "ALTER TABLE clips ADD COLUMN hotkey TEXT",
-        )?;
-        self.ensure_column(
-            "clips",
-            "sticky_position",
-            "ALTER TABLE clips ADD COLUMN sticky_position INTEGER NOT NULL DEFAULT 0",
+        rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+    }
+    fn pack(&self, clip: &Clip) -> Result<String> {
+        let mut stored = clip.clone();
+        stored.blob_refs.clear();
+        for format in &mut stored.formats {
+            let hash = hex::encode(Sha256::digest(&format.data));
+            self.conn.execute(
+                "INSERT OR IGNORE INTO blobs VALUES(?1,?2)",
+                params![hash, format.data],
+            )?;
+            stored.blob_refs.push(hash);
+            format.data.clear();
+        }
+        Ok(serde_json::to_string(&stored)?)
+    }
+    fn expand(&self, mut clip: Clip) -> Result<Clip> {
+        if !clip.blob_refs.is_empty() {
+            if clip.blob_refs.len() != clip.formats.len() {
+                return Err(Error::Invalid("Invalid format references".into()));
+            }
+            for (format, hash) in clip.formats.iter_mut().zip(&clip.blob_refs) {
+                format.data =
+                    self.conn
+                        .query_row("SELECT data FROM blobs WHERE hash=?1", [hash], |r| r.get(0))?;
+            }
+            clip.blob_refs.clear();
+        }
+        Ok(clip)
+    }
+    fn load(&self, raw: &str) -> Result<Clip> {
+        self.expand(serde_json::from_str(raw)?)
+    }
+    fn write(&self, clip: &Clip) -> Result<()> {
+        let body = self.pack(clip)?;
+        self.conn.execute("INSERT INTO clips VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET body=excluded.body,deleted=excluded.deleted,pinned=excluded.pinned,kind=excluded.kind,collection=excluded.collection,search=excluded.search,updated=excluded.updated,hash=excluded.hash", params![clip.id,body,clip.deleted,clip.pinned,clip.kind,clip.collection,format!("{} {} {}",clip.description,clip.text,clip.collection),clip.updated_at,clip.content_hash()])?;
+        self.conn.execute(
+            "INSERT INTO changes(clip_id,body) VALUES(?1,?2)",
+            params![clip.id, body],
         )?;
         Ok(())
     }
-
-    pub fn save_clip(&self, clip: &Clip) -> Result<Clip> {
-        let clip = clip.clone().touch_for_remote();
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            r#"
-            INSERT INTO clips (
-                id, device_id, description, primary_text, quick_paste_text, hotkey,
-                created_at, updated_at, deleted_at, content_hash, pinned, dont_auto_delete,
-                sticky_position, source_app, group_id
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-            ON CONFLICT(id) DO UPDATE SET
-                device_id = excluded.device_id,
-                description = excluded.description,
-                primary_text = excluded.primary_text,
-                quick_paste_text = excluded.quick_paste_text,
-                hotkey = excluded.hotkey,
-                created_at = excluded.created_at,
-                updated_at = excluded.updated_at,
-                deleted_at = excluded.deleted_at,
-                content_hash = excluded.content_hash,
-                pinned = excluded.pinned,
-                dont_auto_delete = excluded.dont_auto_delete,
-                sticky_position = excluded.sticky_position,
-                source_app = excluded.source_app,
-                group_id = excluded.group_id
-            "#,
-            params![
-                clip.id,
-                clip.device_id,
-                clip.description,
-                clip.primary_text,
-                clip.quick_paste_text,
-                clip.hotkey,
-                clip.created_at,
-                clip.updated_at,
-                clip.deleted_at,
-                clip.content_hash,
-                clip.pinned as i64,
-                clip.dont_auto_delete as i64,
-                clip.sticky_position,
-                clip.source_app,
-                clip.group_id,
-            ],
-        )?;
-        tx.execute(
-            "DELETE FROM clip_formats WHERE clip_id = ?1",
-            params![clip.id],
-        )?;
-        for format in &clip.formats {
-            tx.execute(
-                r#"
-                INSERT INTO clip_formats (clip_id, format, mime, data)
-                VALUES (?1, ?2, ?3, ?4)
-                "#,
-                params![clip.id, format.format, format.mime, format.data],
-            )?;
-        }
-        tx.execute(
-            "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-            params![clip.id, "upsert", now_ts()],
-        )?;
+    pub fn save_local(&self, clip: Clip, device: &str) -> Result<Clip> {
+        let tx = write_transaction(&self.conn)?;
+        let clip = self.save_local_record(clip, device)?;
         tx.commit()?;
         Ok(clip)
     }
-
-    pub fn save_text_clip(&self, device_id: &str, text: &str) -> Result<Clip> {
-        self.save_clip_deduplicated(&Clip::from_text(device_id, text), true)
-    }
-
-    pub fn save_clip_deduplicated(&self, clip: &Clip, move_to_top: bool) -> Result<Clip> {
-        let clip = clip.clone().touch_for_remote();
-        if let Some(mut existing) = self.find_active_by_hash(&clip.content_hash)? {
-            if move_to_top {
-                let updated_at = now_ts();
-                self.conn.execute(
-                    "UPDATE clips SET updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
-                    params![updated_at, existing.id],
-                )?;
-                self.conn.execute(
-                    "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-                    params![existing.id, "upsert", updated_at],
-                )?;
-                existing.updated_at = updated_at;
-            }
-            if clip.quick_paste_text.is_some() && existing.quick_paste_text != clip.quick_paste_text
-            {
-                existing.quick_paste_text = clip.quick_paste_text;
-                existing.updated_at = now_ts();
-                self.save_clip(&existing)?;
-            }
-            if clip.hotkey.is_some() && existing.hotkey != clip.hotkey {
-                existing.hotkey = clip.hotkey;
-                existing.updated_at = now_ts();
-                self.save_clip(&existing)?;
-            }
-            return Ok(existing);
+    fn save_local_record(&self, mut clip: Clip, device: &str) -> Result<Clip> {
+        let previous = self.get(&clip.id)?;
+        if let Some(previous) = &previous {
+            let observed = previous.clock.get(device).copied().unwrap_or(0);
+            let counter = clip.clock.entry(device.into()).or_default();
+            *counter = (*counter).max(observed);
         }
-        self.save_clip(&clip)
+        let counter = clip.clock.entry(device.into()).or_default();
+        *counter = counter
+            .checked_add(1)
+            .ok_or_else(|| Error::Invalid("Version counter exhausted".into()))?;
+        clip.version_id = new_id();
+        clip.write_order = self
+            .value("lamport")?
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
+            .max(clip.write_order)
+            .checked_add(1)
+            .ok_or_else(|| Error::Invalid("Write order exhausted".into()))?;
+        clip.write_actor = device.into();
+        clip.device_id = device.into();
+        clip.updated_at = now_ts();
+        validate(&clip)?;
+        let clip = self.merge(&clip)?;
+        self.conn.execute("INSERT INTO outbox VALUES(?1,?2,?3) ON CONFLICT(clip_id) DO UPDATE SET operation=excluded.operation,body=excluded.body",params![clip.id,new_id(),self.pack(&clip)?])?;
+        Ok(clip)
     }
-
-    pub fn list_clips(&self, limit: u32) -> Result<Vec<Clip>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
-                   deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
-            FROM clips
-            WHERE deleted_at IS NULL
-            ORDER BY CASE WHEN sticky_position > 0 THEN 0 WHEN sticky_position < 0 THEN 2 ELSE 1 END ASC,
-                     pinned DESC, updated_at DESC, created_at DESC, id DESC
-            LIMIT ?1
-            "#,
-        )?;
-        let rows = stmt.query_map(params![limit], |row| self.clip_from_row(row))?;
-        let mut clips = Vec::new();
-        for row in rows {
-            clips.push(self.with_formats(row?)?);
-        }
-        Ok(clips)
-    }
-
-    pub fn search_clips(&self, query: &str, limit: u32) -> Result<Vec<Clip>> {
-        let query = query.trim();
-        if query.is_empty() {
-            return self.list_clips(limit);
-        }
-
-        let pattern = format!("%{}%", escape_like(query));
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
-                   deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
-            FROM clips
-            WHERE deleted_at IS NULL
-              AND (
-                  description LIKE ?1 ESCAPE '\'
-                  OR primary_text LIKE ?1 ESCAPE '\'
-                  OR quick_paste_text LIKE ?1 ESCAPE '\'
-                  OR hotkey LIKE ?1 ESCAPE '\'
-              )
-            ORDER BY CASE WHEN sticky_position > 0 THEN 0 WHEN sticky_position < 0 THEN 2 ELSE 1 END ASC,
-                     pinned DESC, updated_at DESC, created_at DESC, id DESC
-            LIMIT ?2
-            "#,
-        )?;
-        let rows = stmt.query_map(params![pattern, limit], |row| self.clip_from_row(row))?;
-        let mut clips = Vec::new();
-        for row in rows {
-            clips.push(self.with_formats(row?)?);
-        }
-        Ok(clips)
-    }
-
-    pub fn list_clips_since(&self, since: i64, limit: u32) -> Result<Vec<Clip>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
-                   deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
-            FROM clips
-            WHERE updated_at > ?1
-            ORDER BY updated_at ASC, created_at ASC, id ASC
-            LIMIT ?2
-            "#,
-        )?;
-        let rows = stmt.query_map(params![since, limit], |row| self.clip_from_row(row))?;
-        let mut clips = Vec::new();
-        for row in rows {
-            clips.push(self.with_formats(row?)?);
-        }
-        Ok(clips)
-    }
-
-    pub fn get_clip(&self, id: &str) -> Result<Option<Clip>> {
-        let clip = self
+    pub fn capture(&self, clip: Clip, device: &str) -> Result<Clip> {
+        let existing: Option<String> = self
             .conn
             .query_row(
-                r#"
-                SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
-                       deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
-                FROM clips
-                WHERE id = ?1
-                "#,
-                params![id],
-                |row| self.clip_from_row(row),
+                "SELECT body FROM clips WHERE hash=?1 AND deleted=0 LIMIT 1",
+                [clip.content_hash()],
+                |r| r.get(0),
             )
             .optional()?;
-        clip.map(|clip| self.with_formats(clip)).transpose()
-    }
-
-    pub fn delete_clip(&self, id: &str) -> Result<bool> {
-        let deleted_at = now_ts();
-        let changed = self.conn.execute(
-            "UPDATE clips SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
-            params![deleted_at, id],
-        )?;
-        if changed > 0 {
-            self.conn.execute(
-                "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-                params![id, "delete", deleted_at],
-            )?;
+        if let Some(raw) = existing {
+            return self.load(&raw);
         }
-        Ok(changed > 0)
+        self.save_local(clip, device)
     }
-
-    pub fn set_clip_pinned(&self, id: &str, pinned: bool) -> Result<Option<Clip>> {
-        let Some(mut clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        if clip.deleted_at.is_some() {
-            return Ok(None);
-        }
-        clip.pinned = pinned;
-        clip.updated_at = now_ts();
-        self.save_clip(&clip).map(Some)
-    }
-
-    pub fn toggle_clip_pinned(&self, id: &str) -> Result<Option<Clip>> {
-        let Some(clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        self.set_clip_pinned(id, !clip.pinned)
-    }
-
-    pub fn set_clip_dont_auto_delete(
-        &self,
-        id: &str,
-        dont_auto_delete: bool,
-    ) -> Result<Option<Clip>> {
-        let Some(mut clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        if clip.deleted_at.is_some() {
-            return Ok(None);
-        }
-        clip.dont_auto_delete = dont_auto_delete;
-        clip.updated_at = now_ts();
-        self.save_clip(&clip).map(Some)
-    }
-
-    pub fn toggle_clip_dont_auto_delete(&self, id: &str) -> Result<Option<Clip>> {
-        let Some(clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        self.set_clip_dont_auto_delete(id, !clip.dont_auto_delete)
-    }
-
-    pub fn set_clip_sticky_position(&self, id: &str, sticky_position: i32) -> Result<Option<Clip>> {
-        let Some(mut clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        if clip.deleted_at.is_some() {
-            return Ok(None);
-        }
-        clip.sticky_position = sticky_position.clamp(-1, 1);
-        clip.updated_at = now_ts();
-        self.save_clip(&clip).map(Some)
-    }
-
-    pub fn move_clip_to_top(&self, id: &str) -> Result<bool> {
-        self.move_clip_to_rank(id, ClipRankMove::Top)
-    }
-
-    pub fn move_clip_up(&self, id: &str) -> Result<bool> {
-        self.move_clip_to_rank(id, ClipRankMove::Up)
-    }
-
-    pub fn move_clip_down(&self, id: &str) -> Result<bool> {
-        self.move_clip_to_rank(id, ClipRankMove::Down)
-    }
-
-    pub fn move_clip_to_last(&self, id: &str) -> Result<bool> {
-        self.move_clip_to_rank(id, ClipRankMove::Last)
-    }
-
-    fn move_clip_to_rank(&self, id: &str, rank_move: ClipRankMove) -> Result<bool> {
-        let Some(clip) = self.get_clip(id)? else {
-            return Ok(false);
-        };
-        if clip.deleted_at.is_some() {
-            return Ok(false);
-        }
-
-        let rows = self.active_order_for_pin_state(clip.pinned)?;
-        let Some(position) = rows.iter().position(|(clip_id, _)| clip_id == id) else {
-            return Ok(false);
-        };
-
-        let target = match rank_move {
-            ClipRankMove::Top => 0,
-            ClipRankMove::Up => position.saturating_sub(1),
-            ClipRankMove::Down => (position + 1).min(rows.len().saturating_sub(1)),
-            ClipRankMove::Last => rows.len().saturating_sub(1),
-        };
-        if target == position {
-            return Ok(true);
-        }
-
-        self.rewrite_clip_order(rows, position, target)
-    }
-
-    fn active_order_for_pin_state(&self, pinned: bool) -> Result<Vec<(String, i64)>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, updated_at
-            FROM clips
-            WHERE deleted_at IS NULL AND pinned = ?1
-            ORDER BY updated_at DESC, created_at DESC, id DESC
-            "#,
-        )?;
-        let rows = stmt.query_map(params![pinned as i64], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        let mut clips = Vec::new();
-        for row in rows {
-            clips.push(row?);
-        }
-        Ok(clips)
-    }
-
-    fn rewrite_clip_order(
-        &self,
-        mut rows: Vec<(String, i64)>,
-        from: usize,
-        to: usize,
-    ) -> Result<bool> {
-        let moved = rows.remove(from);
-        rows.insert(to, moved);
-        let base = now_ts().saturating_add(rows.len() as i64 + 1);
-        let tx = self.conn.unchecked_transaction()?;
-        for (index, (clip_id, _)) in rows.iter().enumerate() {
-            let updated_at = base.saturating_sub(index as i64);
-            tx.execute(
-                "UPDATE clips SET updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
-                params![updated_at, clip_id],
-            )?;
-            tx.execute(
-                "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-                params![clip_id, "upsert", now_ts()],
-            )?;
-        }
+    pub fn mutate(&self, id: &str, device: &str, apply: impl FnOnce(&mut Clip)) -> Result<Clip> {
+        let tx = write_transaction(&self.conn)?;
+        let mut clip = self
+            .get(id)?
+            .ok_or_else(|| Error::Invalid("Clip no longer exists".into()))?;
+        apply(&mut clip);
+        let clip = self.save_local_record(clip, device)?;
         tx.commit()?;
-        Ok(true)
+        Ok(clip)
     }
-
-    pub fn list_groups(&self) -> Result<Vec<Group>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, name, hotkey, sort_order
-            FROM clip_groups
-            ORDER BY sort_order ASC, name ASC, id ASC
-            "#,
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Group {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                hotkey: row.get(2)?,
-                sort_order: row.get(3)?,
-            })
-        })?;
-        let mut groups = Vec::new();
-        for row in rows {
-            groups.push(row?);
+    /// Merge a remote record. Concurrent content is retained for explicit recovery.
+    fn merge(&self, remote: &Clip) -> Result<Clip> {
+        validate(remote)?;
+        let observed = self
+            .value("lamport")?
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        if remote.write_order > observed {
+            self.set_value("lamport", &remote.write_order.to_string())?;
         }
-        Ok(groups)
-    }
-
-    pub fn create_group(&self, name: &str) -> Result<Option<Group>> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Ok(None);
-        }
-        let sort_order = self.next_group_sort_order()?;
-        self.conn.execute(
-            r#"
-            INSERT INTO clip_groups (name, hotkey, sort_order)
-            VALUES (?1, '', ?2)
-            ON CONFLICT(name) DO UPDATE SET name = excluded.name
-            "#,
-            params![name, sort_order],
-        )?;
-        self.find_group_by_name(name)
-    }
-
-    pub fn rename_group(&self, id: i64, name: &str) -> Result<Option<Group>> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Ok(None);
-        }
-        let changed = self.conn.execute(
-            "UPDATE clip_groups SET name = ?1 WHERE id = ?2",
-            params![name, id],
-        )?;
-        if changed == 0 {
-            return Ok(None);
-        }
-        self.get_group(id)
-    }
-
-    pub fn set_group_hotkey(&self, id: i64, hotkey: &str) -> Result<Option<Group>> {
-        let changed = self.conn.execute(
-            "UPDATE clip_groups SET hotkey = ?1 WHERE id = ?2",
-            params![hotkey.trim(), id],
-        )?;
-        if changed == 0 {
-            return Ok(None);
-        }
-        self.get_group(id)
-    }
-
-    pub fn move_group(&self, id: i64, delta: i64) -> Result<bool> {
-        if delta == 0 {
-            return Ok(true);
-        }
-
-        let mut groups = self.list_groups()?;
-        let Some(index) = groups.iter().position(|group| group.id == id) else {
-            return Ok(false);
+        let Some(local) = self.get(&remote.id)? else {
+            self.write(remote)?;
+            return Ok(remote.clone());
         };
-        let target = if delta < 0 {
-            index.saturating_sub(delta.unsigned_abs() as usize)
+        if local == *remote {
+            return Ok(local);
+        }
+        let remote_newer = dominates(&remote.clock, &local.clock);
+        let local_newer = dominates(&local.clock, &remote.clock);
+        if local_newer && !remote_newer {
+            return Ok(local);
+        }
+        if remote_newer && !local_newer {
+            self.write(remote)?;
+            return Ok(remote.clone());
+        }
+        // Stable choice makes every replica converge; both payloads remain recoverable.
+        let l = resolution_key(&local)?;
+        let r = resolution_key(remote)?;
+        let (mut winner, loser) = if l >= r {
+            (local, remote.clone())
         } else {
-            index
-                .saturating_add(delta as usize)
-                .min(groups.len().saturating_sub(1))
+            (remote.clone(), local)
         };
-        if target == index {
-            return Ok(true);
-        }
-
-        let group = groups.remove(index);
-        groups.insert(target, group);
-        let tx = self.conn.unchecked_transaction()?;
-        for (index, group) in groups.iter().enumerate() {
-            tx.execute(
-                "UPDATE clip_groups SET sort_order = ?1 WHERE id = ?2",
-                params![index as i64, group.id],
-            )?;
-        }
-        tx.commit()?;
-        Ok(true)
-    }
-
-    pub fn delete_group(&self, id: i64) -> Result<bool> {
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE clips SET group_id = NULL WHERE group_id = ?1",
-            params![id],
-        )?;
-        let changed = tx.execute("DELETE FROM clip_groups WHERE id = ?1", params![id])?;
-        tx.commit()?;
-        Ok(changed > 0)
-    }
-
-    pub fn assign_clip_to_group(&self, clip_id: &str, group_id: Option<i64>) -> Result<bool> {
-        let changed = self.conn.execute(
-            "UPDATE clips SET group_id = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
-            params![group_id, now_ts(), clip_id],
-        )?;
-        if changed > 0 {
-            self.conn.execute(
-                "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-                params![clip_id, "upsert", now_ts()],
-            )?;
-        }
-        Ok(changed > 0)
-    }
-
-    pub fn clear_all_clips(&self) -> Result<usize> {
-        let deleted_at = now_ts();
-        let ids = self.active_clip_ids_for_delete("deleted_at IS NULL")?;
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE clips SET deleted_at = ?1, updated_at = ?1 WHERE deleted_at IS NULL",
-            params![deleted_at],
-        )?;
-        for id in &ids {
-            tx.execute(
-                "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-                params![id, "delete", deleted_at],
-            )?;
-        }
-        tx.commit()?;
-        Ok(ids.len())
-    }
-
-    pub fn delete_non_pinned_clips(&self) -> Result<usize> {
-        let deleted_at = now_ts();
-        let ids = self.active_clip_ids_for_delete(
-            "deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0",
-        )?;
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE clips SET deleted_at = ?1, updated_at = ?1 WHERE deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0",
-            params![deleted_at],
-        )?;
-        for id in &ids {
-            tx.execute(
-                "INSERT INTO sync_events (clip_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-                params![id, "delete", deleted_at],
-            )?;
-        }
-        tx.commit()?;
-        Ok(ids.len())
-    }
-
-    pub fn set_copy_buffer_clip(&self, slot: usize, clip_id: &str) -> Result<bool> {
-        let active = self
-            .conn
-            .query_row(
-                "SELECT 1 FROM clips WHERE id = ?1 AND deleted_at IS NULL",
-                params![clip_id],
-                |_| Ok(()),
-            )
-            .optional()?;
-        if active.is_none() {
-            return Ok(false);
-        }
-
+        let raw = self.pack(&loser)?;
+        let key = hex::encode(Sha256::digest(raw.as_bytes()));
         self.conn.execute(
-            r#"
-            INSERT INTO copy_buffers (slot, clip_id)
-            VALUES (?1, ?2)
-            ON CONFLICT(slot) DO UPDATE SET clip_id = excluded.clip_id
-            "#,
-            params![slot as i64, clip_id],
+            "INSERT OR IGNORE INTO conflicts VALUES(?1,?2,?3)",
+            params![key, loser.id, raw],
         )?;
-        Ok(true)
+        merge_clock(&mut winner.clock, &loser.clock);
+        self.write(&winner)?;
+        Ok(winner)
     }
-
-    pub fn copy_buffer_clip(&self, slot: usize) -> Result<Option<Clip>> {
-        let clip = self
-            .conn
-            .query_row(
-                r#"
-                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.hotkey, c.created_at, c.updated_at,
-                       c.deleted_at, c.content_hash, c.pinned, c.dont_auto_delete, c.sticky_position, c.source_app, c.group_id
-                FROM copy_buffers b
-                INNER JOIN clips c ON c.id = b.clip_id
-                WHERE b.slot = ?1 AND c.deleted_at IS NULL
-                "#,
-                params![slot as i64],
-                |row| self.clip_from_row(row),
-            )
-            .optional()?;
-        clip.map(|clip| self.with_formats(clip)).transpose()
-    }
-
-    pub fn copy_buffer_clip_including_deleted(&self, slot: usize) -> Result<Option<Clip>> {
-        let clip = self
-            .conn
-            .query_row(
-                r#"
-                SELECT c.id, c.device_id, c.description, c.primary_text, c.quick_paste_text, c.hotkey, c.created_at, c.updated_at,
-                       c.deleted_at, c.content_hash, c.pinned, c.dont_auto_delete, c.sticky_position, c.source_app, c.group_id
-                FROM copy_buffers b
-                INNER JOIN clips c ON c.id = b.clip_id
-                WHERE b.slot = ?1
-                "#,
-                params![slot as i64],
-                |row| self.clip_from_row(row),
-            )
-            .optional()?;
-        clip.map(|clip| self.with_formats(clip)).transpose()
-    }
-
-    pub fn export_active_clips_json(&self, path: impl AsRef<Path>) -> Result<usize> {
-        let clips = self.list_clips(u32::MAX)?;
-        let data = serde_json::to_vec_pretty(&clips)?;
-        fs::write(path, data)?;
-        Ok(clips.len())
-    }
-
-    pub fn export_active_clips(&self, path: impl AsRef<Path>) -> Result<usize> {
-        let path = path.as_ref();
-        let clips = self.list_clips(u32::MAX)?;
-        match path.extension().and_then(|value| value.to_str()) {
-            Some(ext) if ext.eq_ignore_ascii_case("txt") => {
-                let text = clips
-                    .iter()
-                    .map(|clip| {
-                        clip.primary_text
-                            .as_deref()
-                            .unwrap_or(clip.description.as_str())
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                fs::write(path, text)?;
-            }
-            Some(ext) if ext.eq_ignore_ascii_case("csv") => {
-                let mut csv = "id,created_at,updated_at,pinned,dont_auto_delete,sticky_position,hotkey,source_app,group_id,description,text\n".to_owned();
-                for clip in &clips {
-                    csv.push_str(&format!(
-                        "{},{},{},{},{},{},{},{},{},{},{}\n",
-                        csv_escape(&clip.id),
-                        clip.created_at,
-                        clip.updated_at,
-                        clip.pinned as i64,
-                        clip.dont_auto_delete as i64,
-                        clip.sticky_position,
-                        csv_escape(clip.hotkey.as_deref().unwrap_or_default()),
-                        csv_escape(clip.source_app.as_deref().unwrap_or_default()),
-                        clip.group_id.map(|id| id.to_string()).unwrap_or_default(),
-                        csv_escape(&clip.description),
-                        csv_escape(clip.primary_text.as_deref().unwrap_or_default()),
-                    ));
-                }
-                fs::write(path, csv)?;
-            }
-            _ => {
-                let data = serde_json::to_vec_pretty(&clips)?;
-                fs::write(path, data)?;
-            }
-        }
-        Ok(clips.len())
-    }
-
-    pub fn import_clips_json(&self, path: impl AsRef<Path>) -> Result<usize> {
-        let data = fs::read(path)?;
-        let clips = serde_json::from_slice::<Vec<Clip>>(&data)?;
-        let mut imported = 0;
+    pub fn receive(&self, clips: &[Clip]) -> Result<()> {
+        let tx = write_transaction(&self.conn)?;
         for clip in clips {
-            self.save_clip(&clip)?;
-            imported += 1;
+            self.merge(clip)?;
         }
-        Ok(imported)
-    }
-
-    pub fn delete_clips_older_than(&self, cutoff_updated_at: i64) -> Result<usize> {
-        let deleted_at = now_ts();
-        let changed = self.conn.execute(
-            r#"
-            UPDATE clips
-            SET deleted_at = ?1, updated_at = ?1
-            WHERE deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0 AND updated_at < ?2
-            "#,
-            params![deleted_at, cutoff_updated_at],
-        )?;
-        Ok(changed)
-    }
-
-    pub fn purge_oldest_non_pinned_clips(&self, limit: u32) -> Result<usize> {
-        if limit == 0 {
-            return Ok(0);
-        }
-        let changed = self.conn.execute(
-            r#"
-            DELETE FROM clips
-            WHERE id IN (
-                SELECT id
-                FROM clips
-                WHERE pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0
-                ORDER BY updated_at ASC, created_at ASC, id ASC
-                LIMIT ?1
-            )
-            "#,
-            params![limit],
-        )?;
-        Ok(changed)
-    }
-
-    pub fn vacuum(&self) -> Result<()> {
-        self.conn.execute_batch("VACUUM")?;
+        tx.commit()?;
         Ok(())
     }
-
-    pub fn integrity_check(&self) -> Result<bool> {
-        let result: String = self
+    pub fn accept(&self, mutation: &Mutation) -> Result<Ack> {
+        let tx = write_transaction(&self.conn)?;
+        let fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(mutation)?));
+        let previous: Option<(String, String)> = self
             .conn
-            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        Ok(result == "ok")
-    }
-
-    fn get_group(&self, id: i64) -> Result<Option<Group>> {
-        self.conn
             .query_row(
-                "SELECT id, name, hotkey, sort_order FROM clip_groups WHERE id = ?1",
-                params![id],
-                |row| {
-                    Ok(Group {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        hotkey: row.get(2)?,
-                        sort_order: row.get(3)?,
-                    })
-                },
+                "SELECT fingerprint,ack FROM operations WHERE id=?1",
+                [&mutation.operation],
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .optional()
-            .map_err(Into::into)
+            .optional()?;
+        if let Some((expected, ack)) = previous {
+            if expected != fingerprint {
+                return Err(Error::Invalid(
+                    "Operation ID reused with different data".into(),
+                ));
+            }
+            let mut ack: Ack = serde_json::from_str(&ack)?;
+            ack.clip = self.expand(ack.clip)?;
+            return Ok(ack);
+        }
+        let ack = Ack {
+            operation: mutation.operation.clone(),
+            clip: self.merge(&mutation.clip)?,
+        };
+        self.conn.execute(
+            "INSERT INTO operations VALUES(?1,?2,?3)",
+            params![
+                mutation.operation,
+                fingerprint,
+                serde_json::to_string(&Ack {
+                    operation: ack.operation.clone(),
+                    clip: serde_json::from_str(&self.pack(&ack.clip)?)?
+                })?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(ack)
     }
-
-    fn active_clip_ids_for_delete(&self, predicate: &str) -> Result<Vec<String>> {
+    pub fn pending(&self) -> Result<Vec<Mutation>> {
         let mut stmt = self
             .conn
-            .prepare(&format!("SELECT id FROM clips WHERE {predicate}"))?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut ids = Vec::new();
-        for row in rows {
-            ids.push(row?);
-        }
-        Ok(ids)
-    }
-
-    fn find_group_by_name(&self, name: &str) -> Result<Option<Group>> {
-        self.conn
-            .query_row(
-                "SELECT id, name, hotkey, sort_order FROM clip_groups WHERE name = ?1",
-                params![name],
-                |row| {
-                    Ok(Group {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        hotkey: row.get(2)?,
-                        sort_order: row.get(3)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    fn next_group_sort_order(&self) -> Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT MAX(sort_order) FROM clip_groups", [], |row| {
-                row.get(0)
+            .prepare("SELECT operation,body FROM outbox ORDER BY rowid LIMIT 50")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.map(|row| {
+            let (operation, body) = row?;
+            Ok(Mutation {
+                operation,
+                clip: self.load(&body)?,
             })
-            .optional()?
-            .flatten()
-            .unwrap_or(0)
-            + 10)
-    }
-
-    pub fn update_clip_text(&self, id: &str, text: &str) -> Result<Option<Clip>> {
-        let Some(mut clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        if clip.deleted_at.is_some() {
-            return Ok(None);
-        }
-
-        clip.primary_text = Some(text.to_owned());
-        clip.description = summarize_text(text);
-        clip.formats = vec![ClipFormat::text(text)];
-        clip.content_hash = content_hash(&clip.formats);
-        clip.updated_at = now_ts();
-        self.save_clip(&clip).map(Some)
-    }
-
-    pub fn update_clip_quick_paste_text(
-        &self,
-        id: &str,
-        quick_paste_text: Option<&str>,
-    ) -> Result<Option<Clip>> {
-        let Some(mut clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        if clip.deleted_at.is_some() {
-            return Ok(None);
-        }
-
-        clip.quick_paste_text = quick_paste_text
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned);
-        clip.updated_at = now_ts();
-        self.save_clip(&clip).map(Some)
-    }
-
-    pub fn update_clip_hotkey(&self, id: &str, hotkey: Option<&str>) -> Result<Option<Clip>> {
-        let Some(mut clip) = self.get_clip(id)? else {
-            return Ok(None);
-        };
-        if clip.deleted_at.is_some() {
-            return Ok(None);
-        }
-
-        clip.hotkey = hotkey
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned);
-        clip.updated_at = now_ts();
-        self.save_clip(&clip).map(Some)
-    }
-
-    pub fn find_active_by_hotkey(&self, hotkey: &str) -> Result<Option<Clip>> {
-        let hotkey = hotkey.trim();
-        if hotkey.is_empty() {
-            return Ok(None);
-        }
-
-        let clip = self
-            .conn
-            .query_row(
-                r#"
-                SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
-                       deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
-                FROM clips
-                WHERE deleted_at IS NULL AND lower(hotkey) = lower(?1)
-                ORDER BY updated_at DESC, created_at DESC, id DESC
-                LIMIT 1
-                "#,
-                params![hotkey],
-                |row| self.clip_from_row(row),
-            )
-            .optional()?;
-        clip.map(|clip| self.with_formats(clip)).transpose()
-    }
-
-    pub fn find_active_by_content_hash(&self, hash: &str) -> Result<Option<Clip>> {
-        self.find_active_by_hash(hash)
-    }
-
-    pub fn enforce_max_history(&self, max_history: u32) -> Result<usize> {
-        if max_history == 0 {
-            return Ok(0);
-        }
-
-        let ids = {
-            let mut stmt = self.conn.prepare(
-                r#"
-                SELECT id
-                FROM clips
-                WHERE deleted_at IS NULL AND pinned = 0 AND dont_auto_delete = 0 AND sticky_position = 0
-                ORDER BY updated_at DESC, created_at DESC, id DESC
-                LIMIT -1 OFFSET ?1
-                "#,
-            )?;
-            let rows = stmt.query_map(params![max_history], |row| row.get::<_, String>(0))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
-            }
-            ids
-        };
-
-        for id in &ids {
-            self.delete_clip(id)?;
-        }
-
-        Ok(ids.len())
-    }
-
-    pub fn stats(&self) -> Result<StoreStats> {
-        let clip_count = self.conn.query_row(
-            "SELECT COUNT(*) FROM clips WHERE deleted_at IS NULL",
-            [],
-            |row| row.get(0),
-        )?;
-        let deleted_count = self.conn.query_row(
-            "SELECT COUNT(*) FROM clips WHERE deleted_at IS NOT NULL",
-            [],
-            |row| row.get(0),
-        )?;
-        let device_count =
-            self.conn
-                .query_row("SELECT COUNT(DISTINCT device_id) FROM clips", [], |row| {
-                    row.get(0)
-                })?;
-        let newest_clip_at = self
-            .conn
-            .query_row(
-                "SELECT MAX(updated_at) FROM clips WHERE deleted_at IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?
-            .flatten();
-
-        Ok(StoreStats {
-            clip_count,
-            deleted_count,
-            device_count,
-            newest_clip_at,
         })
+        .collect()
     }
-
-    pub fn settings(&self) -> Result<Settings> {
-        let mut settings = Settings::default();
-        if let Some(language) = self.get_setting("language")? {
-            settings.language = Language::parse(&language)?;
-        }
-        if let Some(theme) = self.get_setting("theme")? {
-            settings.theme = Theme::parse(&theme)?;
-        }
-        if let Some(device_id) = self.get_setting("device_id")? {
-            settings.device_id = device_id;
-        } else {
-            self.set_setting("device_id", &settings.device_id)?;
-        }
-        settings.server_url = self.get_setting("server_url")?;
-        settings.token = self.get_setting("token")?;
-        settings.sync_enabled = self
-            .get_setting("sync_enabled")?
-            .as_deref()
-            .map(|value| value == "true")
-            .unwrap_or(false);
-        settings.capture_enabled =
-            self.get_bool_setting("capture_enabled", settings.capture_enabled)?;
-        settings.capture_text_enabled =
-            self.get_bool_setting("capture_text_enabled", settings.capture_text_enabled)?;
-        settings.capture_html_enabled =
-            self.get_bool_setting("capture_html_enabled", settings.capture_html_enabled)?;
-        settings.capture_image_enabled =
-            self.get_bool_setting("capture_image_enabled", settings.capture_image_enabled)?;
-        settings.capture_files_enabled =
-            self.get_bool_setting("capture_files_enabled", settings.capture_files_enabled)?;
-        settings.capture_interval_ms =
-            self.get_u64_setting("capture_interval_ms", settings.capture_interval_ms)?;
-        settings.max_history = self.get_u32_setting("max_history", settings.max_history)?;
-        settings.duplicate_moves_to_top =
-            self.get_bool_setting("duplicate_moves_to_top", settings.duplicate_moves_to_top)?;
-        settings.start_on_login =
-            self.get_bool_setting("start_on_login", settings.start_on_login)?;
-        settings.show_tray_icon =
-            self.get_bool_setting("show_tray_icon", settings.show_tray_icon)?;
-        settings.show_in_taskbar =
-            self.get_bool_setting("show_in_taskbar", settings.show_in_taskbar)?;
-        settings.quick_paste_position =
-            self.get_string_setting("quick_paste_position", settings.quick_paste_position)?;
-        settings.quick_paste_find_as_you_type = self.get_bool_setting(
-            "quick_paste_find_as_you_type",
-            settings.quick_paste_find_as_you_type,
-        )?;
-        settings.quick_paste_regex_search = self.get_bool_setting(
-            "quick_paste_regex_search",
-            settings.quick_paste_regex_search,
-        )?;
-        settings.quick_paste_wildcard_search = self.get_bool_setting(
-            "quick_paste_wildcard_search",
-            settings.quick_paste_wildcard_search,
-        )?;
-        settings.quick_paste_case_sensitive_search = self.get_bool_setting(
-            "quick_paste_case_sensitive_search",
-            settings.quick_paste_case_sensitive_search,
-        )?;
-        settings.quick_paste_search_scope = self.get_string_setting(
-            "quick_paste_search_scope",
-            settings.quick_paste_search_scope,
-        )?;
-        settings.quick_paste_show_hotkey_text = self.get_bool_setting(
-            "quick_paste_show_hotkey_text",
-            settings.quick_paste_show_hotkey_text,
-        )?;
-        settings.quick_paste_show_leading_whitespace = self.get_bool_setting(
-            "quick_paste_show_leading_whitespace",
-            settings.quick_paste_show_leading_whitespace,
-        )?;
-        settings.quick_paste_show_thumbnails = self.get_bool_setting(
-            "quick_paste_show_thumbnails",
-            settings.quick_paste_show_thumbnails,
-        )?;
-        settings.quick_paste_draw_rtf =
-            self.get_bool_setting("quick_paste_draw_rtf", settings.quick_paste_draw_rtf)?;
-        settings.quick_paste_ensure_visible = self.get_bool_setting(
-            "quick_paste_ensure_visible",
-            settings.quick_paste_ensure_visible,
-        )?;
-        settings.quick_paste_show_groups_in_main = self.get_bool_setting(
-            "quick_paste_show_groups_in_main",
-            settings.quick_paste_show_groups_in_main,
-        )?;
-        settings.quick_paste_prompt_delete = self.get_bool_setting(
-            "quick_paste_prompt_delete",
-            settings.quick_paste_prompt_delete,
-        )?;
-        settings.quick_paste_always_show_scrollbar = self.get_bool_setting(
-            "quick_paste_always_show_scrollbar",
-            settings.quick_paste_always_show_scrollbar,
-        )?;
-        settings.quick_paste_show_pasted_indicator = self.get_bool_setting(
-            "quick_paste_show_pasted_indicator",
-            settings.quick_paste_show_pasted_indicator,
-        )?;
-        settings.quick_paste_elevated_paste = self.get_bool_setting(
-            "quick_paste_elevated_paste",
-            settings.quick_paste_elevated_paste,
-        )?;
-        settings.quick_paste_paste_in_active_window = self.get_bool_setting(
-            "quick_paste_paste_in_active_window",
-            settings.quick_paste_paste_in_active_window,
-        )?;
-        settings.quick_paste_paste_delay_ms = self.get_u32_setting(
-            "quick_paste_paste_delay_ms",
-            settings.quick_paste_paste_delay_ms,
-        )?;
-        settings.quick_paste_update_order_on_copy = self.get_bool_setting(
-            "quick_paste_update_order_on_copy",
-            settings.quick_paste_update_order_on_copy,
-        )?;
-        settings.quick_paste_multi_paste_reverse = self.get_bool_setting(
-            "quick_paste_multi_paste_reverse",
-            settings.quick_paste_multi_paste_reverse,
-        )?;
-        settings.multi_paste_separator =
-            self.get_string_setting("multi_paste_separator", settings.multi_paste_separator)?;
-        settings.quick_paste_description_word_wrap = self.get_bool_setting(
-            "quick_paste_description_word_wrap",
-            settings.quick_paste_description_word_wrap,
-        )?;
-        settings.quick_paste_lines_per_row = self.get_u32_setting(
-            "quick_paste_lines_per_row",
-            settings.quick_paste_lines_per_row,
-        )?;
-        settings.quick_paste_font_size =
-            self.get_u32_setting("quick_paste_font_size", settings.quick_paste_font_size)?;
-        settings.quick_paste_transparency_percent = self.get_u32_setting(
-            "quick_paste_transparency_percent",
-            settings.quick_paste_transparency_percent,
-        )?;
-        settings.first_ten_hotkeys =
-            self.get_json_setting("first_ten_hotkeys", settings.first_ten_hotkeys)?;
-        settings.first_ten_plain_hotkeys =
-            self.get_json_setting("first_ten_plain_hotkeys", settings.first_ten_plain_hotkeys)?;
-        settings.first_ten_send_paste =
-            self.get_bool_setting("first_ten_send_paste", settings.first_ten_send_paste)?;
-        settings.first_ten_move_to_top =
-            self.get_bool_setting("first_ten_move_to_top", settings.first_ten_move_to_top)?;
-        settings.first_ten_use_active_group = self.get_bool_setting(
-            "first_ten_use_active_group",
-            settings.first_ten_use_active_group,
-        )?;
-        settings.text_only_paste_delay_ms = self.get_u32_setting(
-            "text_only_paste_delay_ms",
-            settings.text_only_paste_delay_ms,
-        )?;
-        settings.expire_after_days =
-            self.get_u32_setting("expire_after_days", settings.expire_after_days)?;
-        settings.max_database_mb =
-            self.get_u32_setting("max_database_mb", settings.max_database_mb)?;
-        settings.backup_path = self.get_string_setting("backup_path", settings.backup_path)?;
-        settings.export_path = self.get_string_setting("export_path", settings.export_path)?;
-        settings.import_path = self.get_string_setting("import_path", settings.import_path)?;
-        settings.privacy_app_exclude =
-            self.get_string_setting("privacy_app_exclude", settings.privacy_app_exclude)?;
-        settings.privacy_content_exclude =
-            self.get_string_setting("privacy_content_exclude", settings.privacy_content_exclude)?;
-        settings.copy_buffer_copy_hotkeys = self.get_json_setting(
-            "copy_buffer_copy_hotkeys",
-            settings.copy_buffer_copy_hotkeys,
-        )?;
-        settings.copy_buffer_paste_hotkeys = self.get_json_setting(
-            "copy_buffer_paste_hotkeys",
-            settings.copy_buffer_paste_hotkeys,
-        )?;
-        settings.copy_buffer_cut_hotkeys =
-            self.get_json_setting("copy_buffer_cut_hotkeys", settings.copy_buffer_cut_hotkeys)?;
-        settings.copy_buffer_play_sound =
-            self.get_json_setting("copy_buffer_play_sound", settings.copy_buffer_play_sound)?;
-        settings.total_paste_count =
-            self.get_u64_setting("total_paste_count", settings.total_paste_count)?;
-        settings.trip_paste_count =
-            self.get_u64_setting("trip_paste_count", settings.trip_paste_count)?;
-        settings.hotkey_show_history =
-            self.get_string_setting("hotkey_show_history", settings.hotkey_show_history)?;
-        settings.hotkey_show_history_2 =
-            self.get_string_setting("hotkey_show_history_2", settings.hotkey_show_history_2)?;
-        settings.hotkey_show_history_3 =
-            self.get_string_setting("hotkey_show_history_3", settings.hotkey_show_history_3)?;
-        settings.hotkey_search =
-            self.get_string_setting("hotkey_search", settings.hotkey_search)?;
-        settings.hotkey_text_only_paste =
-            self.get_string_setting("hotkey_text_only_paste", settings.hotkey_text_only_paste)?;
-        settings.hotkey_copy_selected =
-            self.get_string_setting("hotkey_copy_selected", settings.hotkey_copy_selected)?;
-        settings.hotkey_delete_selected =
-            self.get_string_setting("hotkey_delete_selected", settings.hotkey_delete_selected)?;
-        settings.hotkey_toggle_pin =
-            self.get_string_setting("hotkey_toggle_pin", settings.hotkey_toggle_pin)?;
-        settings.hotkey_edit_selected =
-            self.get_string_setting("hotkey_edit_selected", settings.hotkey_edit_selected)?;
-        settings.hotkey_capture_now =
-            self.get_string_setting("hotkey_capture_now", settings.hotkey_capture_now)?;
-        settings.hotkey_copy_and_capture =
-            self.get_string_setting("hotkey_copy_and_capture", settings.hotkey_copy_and_capture)?;
-        settings.hotkey_sync_now =
-            self.get_string_setting("hotkey_sync_now", settings.hotkey_sync_now)?;
-        Ok(settings)
-    }
-
-    pub fn save_settings(&self, settings: &Settings) -> Result<()> {
-        self.set_setting("language", settings.language.as_str())?;
-        self.set_setting("theme", settings.theme.as_str())?;
-        self.set_setting("device_id", &settings.device_id)?;
-        self.set_optional_setting("server_url", settings.server_url.as_deref())?;
-        self.set_optional_setting("token", settings.token.as_deref())?;
-        self.set_setting(
-            "sync_enabled",
-            if settings.sync_enabled {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "capture_enabled",
-            if settings.capture_enabled {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "capture_text_enabled",
-            if settings.capture_text_enabled {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "capture_html_enabled",
-            if settings.capture_html_enabled {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "capture_image_enabled",
-            if settings.capture_image_enabled {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "capture_files_enabled",
-            if settings.capture_files_enabled {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "capture_interval_ms",
-            &settings.capture_interval_ms.to_string(),
-        )?;
-        self.set_setting("max_history", &settings.max_history.to_string())?;
-        self.set_setting(
-            "duplicate_moves_to_top",
-            if settings.duplicate_moves_to_top {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "start_on_login",
-            if settings.start_on_login {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "show_tray_icon",
-            if settings.show_tray_icon {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "show_in_taskbar",
-            if settings.show_in_taskbar {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting("quick_paste_position", &settings.quick_paste_position)?;
-        self.set_setting(
-            "quick_paste_find_as_you_type",
-            if settings.quick_paste_find_as_you_type {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_regex_search",
-            if settings.quick_paste_regex_search {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_wildcard_search",
-            if settings.quick_paste_wildcard_search {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_case_sensitive_search",
-            if settings.quick_paste_case_sensitive_search {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_search_scope",
-            &settings.quick_paste_search_scope,
-        )?;
-        self.set_setting(
-            "quick_paste_show_hotkey_text",
-            if settings.quick_paste_show_hotkey_text {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_show_leading_whitespace",
-            if settings.quick_paste_show_leading_whitespace {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_show_thumbnails",
-            if settings.quick_paste_show_thumbnails {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_draw_rtf",
-            if settings.quick_paste_draw_rtf {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_ensure_visible",
-            if settings.quick_paste_ensure_visible {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_show_groups_in_main",
-            if settings.quick_paste_show_groups_in_main {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_prompt_delete",
-            if settings.quick_paste_prompt_delete {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_always_show_scrollbar",
-            if settings.quick_paste_always_show_scrollbar {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_show_pasted_indicator",
-            if settings.quick_paste_show_pasted_indicator {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_elevated_paste",
-            if settings.quick_paste_elevated_paste {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_paste_in_active_window",
-            if settings.quick_paste_paste_in_active_window {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_paste_delay_ms",
-            &settings.quick_paste_paste_delay_ms.to_string(),
-        )?;
-        self.set_setting(
-            "quick_paste_update_order_on_copy",
-            if settings.quick_paste_update_order_on_copy {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_multi_paste_reverse",
-            if settings.quick_paste_multi_paste_reverse {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting("multi_paste_separator", &settings.multi_paste_separator)?;
-        self.set_setting(
-            "quick_paste_description_word_wrap",
-            if settings.quick_paste_description_word_wrap {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "quick_paste_lines_per_row",
-            &settings.quick_paste_lines_per_row.to_string(),
-        )?;
-        self.set_setting(
-            "quick_paste_font_size",
-            &settings.quick_paste_font_size.to_string(),
-        )?;
-        self.set_setting(
-            "quick_paste_transparency_percent",
-            &settings.quick_paste_transparency_percent.to_string(),
-        )?;
-        self.set_json_setting("first_ten_hotkeys", &settings.first_ten_hotkeys)?;
-        self.set_json_setting("first_ten_plain_hotkeys", &settings.first_ten_plain_hotkeys)?;
-        self.set_setting(
-            "first_ten_send_paste",
-            if settings.first_ten_send_paste {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "first_ten_move_to_top",
-            if settings.first_ten_move_to_top {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "first_ten_use_active_group",
-            if settings.first_ten_use_active_group {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
-        self.set_setting(
-            "text_only_paste_delay_ms",
-            &settings.text_only_paste_delay_ms.to_string(),
-        )?;
-        self.set_setting("expire_after_days", &settings.expire_after_days.to_string())?;
-        self.set_setting("max_database_mb", &settings.max_database_mb.to_string())?;
-        self.set_setting("backup_path", &settings.backup_path)?;
-        self.set_setting("export_path", &settings.export_path)?;
-        self.set_setting("import_path", &settings.import_path)?;
-        self.set_setting("privacy_app_exclude", &settings.privacy_app_exclude)?;
-        self.set_setting("privacy_content_exclude", &settings.privacy_content_exclude)?;
-        self.set_json_setting(
-            "copy_buffer_copy_hotkeys",
-            &settings.copy_buffer_copy_hotkeys,
-        )?;
-        self.set_json_setting(
-            "copy_buffer_paste_hotkeys",
-            &settings.copy_buffer_paste_hotkeys,
-        )?;
-        self.set_json_setting("copy_buffer_cut_hotkeys", &settings.copy_buffer_cut_hotkeys)?;
-        self.set_json_setting("copy_buffer_play_sound", &settings.copy_buffer_play_sound)?;
-        self.set_setting("total_paste_count", &settings.total_paste_count.to_string())?;
-        self.set_setting("trip_paste_count", &settings.trip_paste_count.to_string())?;
-        self.set_setting("hotkey_show_history", &settings.hotkey_show_history)?;
-        self.set_setting("hotkey_show_history_2", &settings.hotkey_show_history_2)?;
-        self.set_setting("hotkey_show_history_3", &settings.hotkey_show_history_3)?;
-        self.set_setting("hotkey_search", &settings.hotkey_search)?;
-        self.set_setting("hotkey_text_only_paste", &settings.hotkey_text_only_paste)?;
-        self.set_setting("hotkey_copy_selected", &settings.hotkey_copy_selected)?;
-        self.set_setting("hotkey_delete_selected", &settings.hotkey_delete_selected)?;
-        self.set_setting("hotkey_toggle_pin", &settings.hotkey_toggle_pin)?;
-        self.set_setting("hotkey_edit_selected", &settings.hotkey_edit_selected)?;
-        self.set_setting("hotkey_capture_now", &settings.hotkey_capture_now)?;
-        self.set_setting("hotkey_copy_and_capture", &settings.hotkey_copy_and_capture)?;
-        self.set_setting("hotkey_sync_now", &settings.hotkey_sync_now)?;
+    pub fn acknowledge(&self, ack: &Ack) -> Result<()> {
+        let tx = write_transaction(&self.conn)?;
+        self.merge(&ack.clip)?;
+        self.conn
+            .execute("DELETE FROM outbox WHERE operation=?1", [&ack.operation])?;
+        tx.commit()?;
         Ok(())
     }
-
-    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+    pub fn page(&self, since: i64, limit: u32) -> Result<Page> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq,body FROM changes WHERE seq>?1 ORDER BY seq LIMIT ?2")?;
+        let rows = stmt.query_map(params![since, limit.clamp(1, 100)], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut page = Page {
+            cursor: since,
+            epoch: self.value("epoch")?.unwrap_or_default(),
+            ..Page::default()
+        };
+        let mut bytes = 1024;
+        for row in rows {
+            let (seq, raw) = row?;
+            let clip: Clip = self.load(&raw)?;
+            let size = clip.to_proto().encoded_len() + 32;
+            if bytes + size > MAX_WIRE_BYTES - 1024 {
+                break;
+            }
+            bytes += size;
+            page.cursor = seq;
+            page.clips.push(clip);
+        }
+        page.more = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM changes WHERE seq>?1)",
+            [page.cursor],
+            |r| r.get(0),
+        )?;
+        Ok(page)
+    }
+    pub fn apply_page(&self, key: &str, page: &Page) -> Result<()> {
+        let tx = write_transaction(&self.conn)?;
+        for clip in &page.clips {
+            self.merge(clip)?;
+        }
+        self.set_value(key, &format!("{}:{}", page.epoch, page.cursor))?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn cursor(&self, key: &str, epoch: &str) -> Result<i64> {
+        Ok(self
+            .value(key)?
+            .and_then(|v| {
+                v.strip_prefix(&format!("{epoch}:"))
+                    .and_then(|v| v.parse().ok())
+            })
+            .unwrap_or(0))
+    }
+    pub fn value(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                params![key],
-                |row| row.get(0),
-            )
+            .query_row("SELECT value FROM metadata WHERE key=?1", [key], |r| {
+                r.get(0)
+            })
             .optional()?)
     }
-
-    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+    pub fn set_value(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute("INSERT INTO metadata VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value])?;
+        Ok(())
+    }
+    pub fn preferences(&self) -> Result<Preferences> {
+        self.value("preferences")?
+            .map(|s| serde_json::from_str(&s).map_err(Error::from))
+            .unwrap_or_else(|| Ok(Preferences::default()))
+    }
+    pub fn save_preferences(&self, prefs: &Preferences) -> Result<()> {
+        self.set_value("preferences", &serde_json::to_string(prefs)?)
+    }
+    pub fn peers(&self) -> Result<Vec<Peer>> {
+        let mut stmt = self.conn.prepare("SELECT body FROM peers ORDER BY id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+    }
+    pub fn trust(&self, peer: &Peer) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
+            "INSERT INTO peers VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+            params![peer.id, serde_json::to_string(peer)?],
         )?;
         Ok(())
     }
-
-    pub fn set_optional_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
-        if let Some(value) = value {
-            self.set_setting(key, value)
-        } else {
-            self.conn
-                .execute("DELETE FROM settings WHERE key = ?1", params![key])?;
-            Ok(())
-        }
+    pub fn untrust(&self, id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM peers WHERE id=?1", [id])?;
+        Ok(())
     }
-
-    fn get_string_setting(&self, key: &str, default: String) -> Result<String> {
-        Ok(self.get_setting(key)?.unwrap_or(default))
-    }
-
-    fn get_bool_setting(&self, key: &str, default: bool) -> Result<bool> {
-        Ok(self
-            .get_setting(key)?
-            .as_deref()
-            .map(|value| value == "true")
-            .unwrap_or(default))
-    }
-
-    fn get_u32_setting(&self, key: &str, default: u32) -> Result<u32> {
-        Ok(self
-            .get_setting(key)?
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(default))
-    }
-
-    fn get_u64_setting(&self, key: &str, default: u64) -> Result<u64> {
-        Ok(self
-            .get_setting(key)?
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(default))
-    }
-
-    fn get_json_setting<T>(&self, key: &str, default: T) -> Result<T>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        let Some(value) = self.get_setting(key)? else {
-            return Ok(default);
-        };
-        Ok(serde_json::from_str(&value).unwrap_or(default))
-    }
-
-    fn set_json_setting<T>(&self, key: &str, value: &T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        self.set_setting(key, &serde_json::to_string(value)?)
-    }
-
-    fn find_active_by_hash(&self, hash: &str) -> Result<Option<Clip>> {
-        let clip = self
-            .conn
-            .query_row(
-                r#"
-                SELECT id, device_id, description, primary_text, quick_paste_text, hotkey, created_at, updated_at,
-                       deleted_at, content_hash, pinned, dont_auto_delete, sticky_position, source_app, group_id
-                FROM clips
-                WHERE content_hash = ?1 AND deleted_at IS NULL
-                ORDER BY updated_at DESC, created_at DESC, id DESC
-                LIMIT 1
-                "#,
-                params![hash],
-                |row| self.clip_from_row(row),
-            )
-            .optional()?;
-        clip.map(|clip| self.with_formats(clip)).transpose()
-    }
-
-    fn with_formats(&self, mut clip: Clip) -> Result<Clip> {
-        let mut stmt = self.conn.prepare(
-            "SELECT format, mime, data FROM clip_formats WHERE clip_id = ?1 ORDER BY id ASC",
-        )?;
-        let rows = stmt.query_map(params![clip.id], |row| {
-            Ok(ClipFormat {
-                format: row.get(0)?,
-                mime: row.get(1)?,
-                data: row.get(2)?,
-            })
-        })?;
-        let mut formats = Vec::new();
-        for row in rows {
-            formats.push(row?);
-        }
-        clip.formats = formats;
-        Ok(clip)
-    }
-
-    fn clip_from_row(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Clip> {
-        Ok(Clip {
-            id: row.get(0)?,
-            device_id: row.get(1)?,
-            description: row.get(2)?,
-            primary_text: row.get(3)?,
-            quick_paste_text: row.get(4)?,
-            hotkey: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-            deleted_at: row.get(8)?,
-            content_hash: row.get(9)?,
-            pinned: row.get::<_, i64>(10)? != 0,
-            dont_auto_delete: row.get::<_, i64>(11)? != 0,
-            sticky_position: row.get(12)?,
-            source_app: row.get(13)?,
-            group_id: row.get(14)?,
-            formats: Vec::new(),
+    pub fn stats(&self) -> Result<Stats> {
+        Ok(Stats {
+            clips: self
+                .conn
+                .query_row("SELECT count(*) FROM clips WHERE deleted=0", [], |r| {
+                    r.get(0)
+                })?,
+            pinned: self.conn.query_row(
+                "SELECT count(*) FROM clips WHERE pinned=1 AND deleted=0",
+                [],
+                |r| r.get(0),
+            )?,
+            deleted: self.conn.query_row(
+                "SELECT count(*) FROM clips WHERE deleted=1",
+                [],
+                |r| r.get(0),
+            )?,
+            pending: self
+                .conn
+                .query_row("SELECT count(*) FROM outbox", [], |r| r.get(0))?,
+            conflicts: self
+                .conn
+                .query_row("SELECT count(*) FROM conflicts", [], |r| r.get(0))?,
         })
     }
-
-    fn ensure_column(&self, table: &str, column: &str, ddl: &str) -> Result<()> {
-        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-        for row in rows {
-            if row? == column {
-                return Ok(());
-            }
+    pub fn conflicts(&self) -> Result<Vec<(String, Clip)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id,body FROM conflicts ORDER BY rowid DESC LIMIT 100")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.map(|r| {
+            let (id, body) = r?;
+            Ok((id, self.load(&body)?))
+        })
+        .collect()
+    }
+    pub fn restore_conflict(&self, conflict: &str, device: &str) -> Result<()> {
+        let tx = write_transaction(&self.conn)?;
+        let raw: String =
+            self.conn
+                .query_row("SELECT body FROM conflicts WHERE id=?1", [conflict], |r| {
+                    r.get(0)
+                })?;
+        let mut clip = self.load(&raw)?;
+        if let Some(current) = self.get(&clip.id)? {
+            merge_clock(&mut clip.clock, &current.clock);
         }
-        self.conn.execute_batch(ddl)?;
+        clip.deleted = false;
+        self.save_local_record(clip, device)?;
+        self.conn
+            .execute("DELETE FROM conflicts WHERE id=?1", [conflict])?;
+        tx.commit()?;
         Ok(())
     }
+    pub fn export(&self) -> Result<String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT body FROM clips WHERE deleted=0 ORDER BY id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let clips: Result<Vec<Clip>> = rows.map(|r| self.load(&r?)).collect();
+        Ok(serde_json::to_string_pretty(&Backup {
+            version: 1,
+            clips: clips?,
+            views: self.views()?,
+        })?)
+    }
+    pub fn import(&self, json: &str, device: &str) -> Result<usize> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            Backup(Backup),
+            Clips(Vec<Clip>),
+        }
+        let (clips, views) = match serde_json::from_str::<Input>(json)? {
+            Input::Backup(backup) => {
+                if backup.version != 1 {
+                    return Err(Error::Invalid("Unsupported backup version".into()));
+                }
+                (backup.clips, backup.views)
+            }
+            Input::Clips(clips) => (clips, Vec::new()),
+        };
+        for clip in &clips {
+            validate(clip)?;
+            if !clip.blob_refs.is_empty() {
+                return Err(Error::Invalid("Backup contains unresolved blobs".into()));
+            }
+        }
+        let count = clips.len();
+        let tx = write_transaction(&self.conn)?;
+        for mut clip in clips {
+            clip.id = new_id();
+            clip.clock.clear();
+            self.save_local_record(clip, device)?;
+        }
+        for view in views {
+            self.save_view(view)?;
+        }
+        tx.commit()?;
+        Ok(count)
+    }
+}
+fn dominates(a: &Clock, b: &Clock) -> bool {
+    b.iter()
+        .all(|(key, value)| a.get(key).copied().unwrap_or(0) >= *value)
+}
+fn merge_clock(a: &mut Clock, b: &Clock) {
+    for (key, value) in b {
+        let entry = a.entry(key.clone()).or_default();
+        *entry = (*entry).max(*value);
+    }
+}
+fn validate(clip: &Clip) -> Result<()> {
+    if clip.id.is_empty()
+        || clip.id.len() > 128
+        || clip.clock.len() > 256
+        || clip.to_proto().encoded_len() > MAX_WIRE_BYTES / 2
+    {
+        return Err(Error::Invalid(
+            "Invalid or oversized clipboard record".into(),
+        ));
+    }
+    Ok(())
 }
 
-pub fn now_ts() -> i64 {
-    static LAST_TS: AtomicI64 = AtomicI64::new(0);
+pub mod wire;
+pub use wire::{Wire, decode, encode};
+pub use yank_proto::v1 as protocol;
 
-    let now = Utc::now().timestamp();
-    loop {
-        let previous = LAST_TS.load(Ordering::Relaxed);
-        let next = now.max(previous.saturating_add(1));
-        if LAST_TS
-            .compare_exchange(previous, next, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedView {
+    pub id: String,
+    pub name: String,
+    pub query: String,
+    pub filter: String,
+    pub days: u32,
+    pub icon: String,
+}
+impl Store {
+    pub fn views(&self) -> Result<Vec<SavedView>> {
+        self.value("saved_views")?
+            .map(|s| serde_json::from_str(&s).map_err(Error::from))
+            .unwrap_or_else(|| Ok(Vec::new()))
+    }
+    pub fn save_view(&self, view: SavedView) -> Result<()> {
+        if view.id.is_empty()
+            || view.id.len() > 128
+            || view.name.trim().is_empty()
+            || view.name.len() > 200
+            || view.query.len() > 4096
         {
-            return next;
+            return Err(Error::Invalid("Invalid smart list".into()));
         }
-    }
-}
-
-pub fn summarize_text(text: &str) -> String {
-    let summary = text
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(160)
-        .collect::<String>();
-    if summary.is_empty() {
-        "(empty text)".to_owned()
-    } else {
-        summary
-    }
-}
-
-pub fn content_hash(formats: &[ClipFormat]) -> String {
-    let mut hasher = Sha256::new();
-    for format in formats {
-        hasher.update(format.format.as_bytes());
-        hasher.update([0]);
-        if let Some(mime) = &format.mime {
-            hasher.update(mime.as_bytes());
+        let mut views = self.views()?;
+        views.retain(|v| v.id != view.id);
+        views.push(view);
+        if views.len() > 100 {
+            return Err(Error::Invalid("At most 100 smart lists".into()));
         }
-        hasher.update([0]);
-        hasher.update(&format.data);
-        hasher.update([0xff]);
+        self.set_value("saved_views", &serde_json::to_string(&views)?)
     }
-    hex::encode(hasher.finalize())
+    pub fn remove_view(&self, id: &str) -> Result<()> {
+        let mut views = self.views()?;
+        views.retain(|v| v.id != id);
+        self.set_value("saved_views", &serde_json::to_string(&views)?)
+    }
+    pub fn collections(&self) -> Result<Vec<String>> {
+        let mut stmt=self.conn.prepare("SELECT DISTINCT collection FROM clips WHERE deleted=0 AND collection!='' ORDER BY collection")?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+    pub fn expire(&self, days: u32, device: &str) -> Result<usize> {
+        if days == 0 {
+            return Ok(0);
+        }
+        let cutoff = now_ts() - i64::from(days) * 86400;
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM clips WHERE deleted=0 AND pinned=0 AND updated<?1 LIMIT 200",
+        )?;
+        let ids: Vec<String> = stmt
+            .query_map([cutoff], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        for id in &ids {
+            self.mutate(id, device, |c| c.deleted = true)?;
+        }
+        Ok(ids.len())
+    }
+}
+fn is_color(text: &str) -> bool {
+    let s = text.trim();
+    s.strip_prefix('#').is_some_and(|v| {
+        [3, 4, 6, 8].contains(&v.len()) && v.chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+/// Sensitive OS clipboard formats are always excluded before persistence or sync.
+pub fn confidential_formats(formats: &[String]) -> bool {
+    formats.iter().any(|format| {
+        [
+            "org.nspasteboard.ConcealedType",
+            "org.nspasteboard.TransientType",
+            "org.nspasteboard.AutoGeneratedType",
+            "ExcludeClipboardContentFromMonitorProcessing",
+            "Password",
+            "application/x-keepassxc-password",
+        ]
+        .iter()
+        .any(|s| format.eq_ignore_ascii_case(s))
+    })
 }
 
-fn escape_like(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
-fn csv_escape(value: &str) -> String {
-    let escaped = value.replace('"', "\"\"");
-    if escaped.contains([',', '"', '\r', '\n']) {
-        format!("\"{escaped}\"")
-    } else {
-        escaped
+impl Preferences {
+    pub fn detach_account(&mut self) {
+        self.token.clear();
+        self.account_id.clear();
+        self.username.clear();
+        self.upload = false;
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn resolution_key(clip: &Clip) -> Result<(u64, String, String, String)> {
+    let mut canonical = clip.clone();
+    canonical.clock.clear();
+    canonical.blob_refs.clear();
+    Ok((
+        canonical.write_order,
+        canonical.write_actor.clone(),
+        canonical.version_id.clone(),
+        hex::encode(Sha256::digest(encode(&canonical)?)),
+    ))
+}
 
-    #[test]
-    fn stores_text_clip_with_format_payload() {
-        let store = Store::open_memory().unwrap();
-        let clip = store.save_text_clip("device-a", "hello from yank").unwrap();
+#[derive(Serialize, Deserialize)]
+struct Backup {
+    version: u32,
+    clips: Vec<Clip>,
+    #[serde(default)]
+    views: Vec<SavedView>,
+}
 
-        let clips = store.list_clips(20).unwrap();
-        assert_eq!(clips.len(), 1);
-        assert_eq!(clips[0].id, clip.id);
-        assert_eq!(clips[0].primary_text.as_deref(), Some("hello from yank"));
-        assert_eq!(clips[0].formats[0].format, "text/plain;charset=utf-8");
-    }
-
-    #[test]
-    fn stores_multi_format_clip_payloads() {
-        let store = Store::open_memory().unwrap();
-        let paths = vec!["/tmp/a.txt".to_owned(), "/tmp/b.png".to_owned()];
-        let clip = Clip::from_formats(
-            "device-a",
-            "2 files, image and html",
-            Some(paths.join("\n")),
-            vec![
-                ClipFormat::file_list(&paths),
-                ClipFormat::image_rgba(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]),
-                ClipFormat::html("<b>hello</b>"),
-            ],
-        );
-
-        let saved = store.save_clip_deduplicated(&clip, true).unwrap();
-        let loaded = store.get_clip(&saved.id).unwrap().unwrap();
-
-        assert!(loaded.formats[0].is_file_list());
-        assert_eq!(loaded.formats[0].file_list_paths().unwrap(), paths);
-        assert_eq!(loaded.formats[1].image_rgba_dimensions(), Some((2, 1)));
-        assert!(loaded.formats[2].is_html());
-        assert_eq!(loaded.formats[2].html_value(), Some("<b>hello</b>"));
-    }
-
-    #[test]
-    fn recognizes_rtf_and_color_formats() {
-        let rtf = ClipFormat::rtf(r"{\rtf1 hello}");
-        let color = ClipFormat::color("#336699");
-
-        assert!(rtf.is_rtf());
-        assert_eq!(rtf.rtf_value(), Some(r"{\rtf1 hello}"));
-        assert!(color.is_color());
-        assert_eq!(color.color_value(), Some("#336699"));
-    }
-
-    #[test]
-    fn deduplicates_active_text_by_hash() {
-        let store = Store::open_memory().unwrap();
-        let first = store.save_text_clip("device-a", "same text").unwrap();
-        let second = store.save_text_clip("device-a", "same text").unwrap();
-
-        assert_eq!(first.id, second.id);
-        assert_eq!(store.list_clips(20).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn stores_quick_paste_aliases() {
-        let store = Store::open_memory().unwrap();
-        let clip = store.save_text_clip("device-a", "primary text").unwrap();
-
-        let updated = store
-            .update_clip_quick_paste_text(&clip.id, Some("alias"))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(updated.quick_paste_text.as_deref(), Some("alias"));
-        assert_eq!(
-            store.search_clips("alias", 20).unwrap()[0]
-                .quick_paste_text
-                .as_deref(),
-            Some("alias")
-        );
-    }
-
-    #[test]
-    fn stores_clip_hotkeys_and_finds_them_case_insensitively() {
-        let store = Store::open_memory().unwrap();
-        let clip = store.save_text_clip("device-a", "hotkey text").unwrap();
-        let updated = store
-            .update_clip_hotkey(&clip.id, Some("Ctrl+Alt+K"))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(updated.hotkey.as_deref(), Some("Ctrl+Alt+K"));
-        assert_eq!(
-            store
-                .find_active_by_hotkey("ctrl+alt+k")
-                .unwrap()
-                .unwrap()
-                .id,
-            clip.id
-        );
-    }
-
-    #[test]
-    fn moves_clip_order_like_quick_paste_actions() {
-        let store = Store::open_memory().unwrap();
-        let first = store.save_text_clip("device-a", "first").unwrap();
-        let second = store.save_text_clip("device-a", "second").unwrap();
-        let third = store.save_text_clip("device-a", "third").unwrap();
-
-        assert!(store.move_clip_to_top(&first.id).unwrap());
-        assert_eq!(store.list_clips(20).unwrap()[0].id, first.id);
-
-        assert!(store.move_clip_to_last(&first.id).unwrap());
-        let clips = store.list_clips(20).unwrap();
-        assert_eq!(clips.last().unwrap().id, first.id);
-
-        assert!(store.move_clip_to_top(&third.id).unwrap());
-        assert!(store.move_clip_down(&third.id).unwrap());
-        let clips = store.list_clips(20).unwrap();
-        assert_eq!(clips[1].id, third.id);
-
-        assert!(store.move_clip_up(&third.id).unwrap());
-        assert_eq!(store.list_clips(20).unwrap()[0].id, third.id);
-        assert!(store.get_clip(&second.id).unwrap().is_some());
-    }
-
-    #[test]
-    fn groups_clips_and_keeps_group_metadata() {
-        let store = Store::open_memory().unwrap();
-        let clip = store.save_text_clip("device-a", "grouped").unwrap();
-        let group = store.create_group("Code snippets").unwrap().unwrap();
-
-        assert!(
-            store
-                .assign_clip_to_group(&clip.id, Some(group.id))
-                .unwrap()
-        );
-        assert_eq!(
-            store.get_clip(&clip.id).unwrap().unwrap().group_id,
-            Some(group.id)
-        );
-
-        let renamed = store.rename_group(group.id, "Signatures").unwrap().unwrap();
-        assert_eq!(renamed.name, "Signatures");
-        let updated = store
-            .set_group_hotkey(group.id, "Ctrl+Alt+1")
-            .unwrap()
-            .unwrap();
-        assert_eq!(updated.hotkey, "Ctrl+Alt+1");
-        assert!(store.delete_group(group.id).unwrap());
-        assert_eq!(store.get_clip(&clip.id).unwrap().unwrap().group_id, None);
-    }
-
-    #[test]
-    fn group_sort_order_can_be_reordered() {
-        let store = Store::open_memory().unwrap();
-        let first = store.create_group("first").unwrap().unwrap();
-        let second = store.create_group("second").unwrap().unwrap();
-        let third = store.create_group("third").unwrap().unwrap();
-
-        assert!(store.move_group(third.id, -2).unwrap());
-        let groups = store.list_groups().unwrap();
-        assert_eq!(groups[0].id, third.id);
-        assert_eq!(groups[1].id, first.id);
-        assert_eq!(groups[2].id, second.id);
-
-        assert!(store.move_group(third.id, 1).unwrap());
-        let groups = store.list_groups().unwrap();
-        assert_eq!(groups[0].id, first.id);
-        assert_eq!(groups[1].id, third.id);
-    }
-
-    #[test]
-    fn copy_buffers_track_active_clips() {
-        let store = Store::open_memory().unwrap();
-        let first = store.save_text_clip("device-a", "buffer one").unwrap();
-        let second = store.save_text_clip("device-a", "buffer two").unwrap();
-
-        assert!(store.set_copy_buffer_clip(0, &first.id).unwrap());
-        assert_eq!(store.copy_buffer_clip(0).unwrap().unwrap().id, first.id);
-
-        assert!(store.set_copy_buffer_clip(0, &second.id).unwrap());
-        assert_eq!(store.copy_buffer_clip(0).unwrap().unwrap().id, second.id);
-
-        assert!(store.delete_clip(&second.id).unwrap());
-        assert!(store.copy_buffer_clip(0).unwrap().is_none());
-        assert!(!store.set_copy_buffer_clip(1, "missing").unwrap());
-    }
-
-    #[test]
-    fn exports_and_imports_active_clips_json() {
-        let source = Store::open_memory().unwrap();
-        source.save_text_clip("device-a", "export me").unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("clips.json");
-
-        assert_eq!(source.export_active_clips_json(&path).unwrap(), 1);
-
-        let target = Store::open_memory().unwrap();
-        assert_eq!(target.import_clips_json(&path).unwrap(), 1);
-        assert_eq!(target.search_clips("export", 10).unwrap().len(), 1);
-
-        let csv_path = dir.path().join("clips.csv");
-        assert_eq!(source.export_active_clips(&csv_path).unwrap(), 1);
-        assert!(fs::read_to_string(csv_path).unwrap().contains("export me"));
-    }
-
-    #[test]
-    fn searches_updates_pins_and_prunes_history() {
-        let store = Store::open_memory().unwrap();
-        let keep = store.save_text_clip("device-a", "keep pinned").unwrap();
-        let edit = store.save_text_clip("device-a", "edit this").unwrap();
-        let old = store.save_text_clip("device-a", "old clip").unwrap();
-
-        let pinned = store.set_clip_pinned(&keep.id, true).unwrap().unwrap();
-        assert!(pinned.pinned);
-        assert_eq!(store.search_clips("edit", 10).unwrap()[0].id, edit.id);
-
-        let edited = store
-            .update_clip_text(&edit.id, "edited text body")
-            .unwrap()
-            .unwrap();
-        assert_eq!(edited.primary_text.as_deref(), Some("edited text body"));
-        assert_eq!(edited.formats[0], ClipFormat::text("edited text body"));
-
-        assert_eq!(store.enforce_max_history(1).unwrap(), 1);
-        assert!(
-            store
-                .get_clip(&old.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_some()
-        );
-        assert!(
-            store
-                .get_clip(&keep.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_none()
-        );
-
-        assert_eq!(store.purge_oldest_non_pinned_clips(10).unwrap(), 2);
-        assert!(store.get_clip(&edit.id).unwrap().is_none());
-        assert!(store.get_clip(&old.id).unwrap().is_none());
-        assert!(store.get_clip(&keep.id).unwrap().is_some());
-    }
-
-    #[test]
-    fn never_auto_delete_clips_survive_automatic_cleanup() {
-        let store = Store::open_memory().unwrap();
-        let keep = store.save_text_clip("device-a", "keep protected").unwrap();
-        let old = store.save_text_clip("device-a", "old unprotected").unwrap();
-        let newest = store
-            .save_text_clip("device-a", "newest unprotected")
-            .unwrap();
-
-        let protected = store
-            .set_clip_dont_auto_delete(&keep.id, true)
-            .unwrap()
-            .unwrap();
-        assert!(protected.dont_auto_delete);
-
-        assert_eq!(store.enforce_max_history(1).unwrap(), 1);
-        assert!(
-            store
-                .get_clip(&keep.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_none()
-        );
-        assert!(
-            store
-                .get_clip(&newest.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_none()
-        );
-        assert!(
-            store
-                .get_clip(&old.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_some()
-        );
-
-        assert_eq!(store.delete_non_pinned_clips().unwrap(), 1);
-        assert!(
-            store
-                .get_clip(&keep.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_none()
-        );
-        assert!(
-            store
-                .get_clip(&newest.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_some()
-        );
-
-        assert_eq!(store.purge_oldest_non_pinned_clips(10).unwrap(), 2);
-        assert!(store.get_clip(&keep.id).unwrap().is_some());
-        assert!(store.get_clip(&newest.id).unwrap().is_none());
-        assert!(store.get_clip(&old.id).unwrap().is_none());
-    }
-
-    #[test]
-    fn sticky_clips_sort_and_survive_cleanup() {
-        let store = Store::open_memory().unwrap();
-        let top = store.save_text_clip("device-a", "top sticky").unwrap();
-        let normal = store.save_text_clip("device-a", "normal").unwrap();
-        let last = store.save_text_clip("device-a", "last sticky").unwrap();
-
-        assert_eq!(
-            store
-                .set_clip_sticky_position(&top.id, 1)
-                .unwrap()
-                .unwrap()
-                .sticky_position,
-            1
-        );
-        assert_eq!(
-            store
-                .set_clip_sticky_position(&last.id, -1)
-                .unwrap()
-                .unwrap()
-                .sticky_position,
-            -1
-        );
-
-        let clips = store.list_clips(20).unwrap();
-        assert_eq!(clips.first().unwrap().id, top.id);
-        assert_eq!(clips.last().unwrap().id, last.id);
-
-        assert_eq!(store.delete_non_pinned_clips().unwrap(), 1);
-        assert!(
-            store
-                .get_clip(&normal.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_some()
-        );
-        assert!(
-            store
-                .get_clip(&top.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_none()
-        );
-        assert!(
-            store
-                .get_clip(&last.id)
-                .unwrap()
-                .unwrap()
-                .deleted_at
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn soft_delete_keeps_sync_visible() {
-        let store = Store::open_memory().unwrap();
-        let clip = store.save_text_clip("device-a", "delete me").unwrap();
-
-        assert!(store.delete_clip(&clip.id).unwrap());
-        assert!(store.list_clips(20).unwrap().is_empty());
-        assert!(
-            store.list_clips_since(0, 20).unwrap()[0]
-                .deleted_at
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn persists_settings() {
-        let store = Store::open_memory().unwrap();
-        let mut settings = store.settings().unwrap();
-        settings.language = Language::Zh;
-        settings.theme = Theme::Dark;
-        settings.server_url = Some("http://localhost:7219".to_owned());
-        settings.token = Some("secret".to_owned());
-        settings.sync_enabled = true;
-        settings.total_paste_count = 7;
-        settings.trip_paste_count = 3;
-        settings.hotkey_show_history_2 = "Super+V".to_owned();
-        settings.hotkey_show_history_3 = "Ctrl+Alt+V".to_owned();
-        settings.hotkey_text_only_paste = "Ctrl+Alt+T".to_owned();
-        settings.hotkey_copy_and_capture = "Ctrl+Alt+C".to_owned();
-        settings.quick_paste_search_scope = "text".to_owned();
-        settings.quick_paste_font_size = 13;
-        settings.first_ten_hotkeys = vec!["Ctrl+Alt+1".to_owned(); 10];
-        settings.first_ten_plain_hotkeys = vec!["Ctrl+Shift+Alt+1".to_owned(); 10];
-        settings.first_ten_send_paste = false;
-        settings.first_ten_move_to_top = true;
-        settings.first_ten_use_active_group = true;
-        settings.multi_paste_separator = "\n---\n".to_owned();
-
-        store.save_settings(&settings).unwrap();
-        assert_eq!(store.settings().unwrap(), settings);
-    }
+fn write_transaction(conn: &Connection) -> Result<rusqlite::Transaction<'_>> {
+    Ok(rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?)
 }

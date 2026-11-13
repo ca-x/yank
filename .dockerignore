@@ -5,3 +5,10 @@ target
 *.sqlite3
 *.db
 .omx
+
+**/.nsh
+**/target
+dist
+.nsh-toolchain
+*.sqlite3-shm
+*.sqlite3-wal

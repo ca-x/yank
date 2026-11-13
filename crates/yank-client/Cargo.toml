@@ -3,27 +3,44 @@ name = "yank-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-build = "build.rs"
 
 [dependencies]
 anyhow.workspace = true
-arboard.workspace = true
-chrono.workspace = true
 directories.workspace = true
-global-hotkey.workspace = true
-makepad-widgets.workspace = true
-regex.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 yank-core = { path = "../yank-core" }
+yank-ditto = { path = "../yank-ditto" }
+rutis = "=0.21.0"
+tokio.workspace = true
+sha2.workspace = true
+hex.workspace = true
+regex.workspace = true
+nsh-core.workspace = true
+nsh-base.workspace = true
+base64 = "0.22"
+rand = "0.9"
+iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring", "portmapper"] }
+mdns-sd = "0.17"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+auto-launch = "0.6.0"
+self_update = { version = "1.3.3", default-features = false, features = ["reqwest", "rustls", "github", "archive-tar", "compression-tar-gz", "archive-zip", "compression-zip-deflate", "checksums"] }
+clipboard-rs = { version = "0.3.5", features = ["wayland"] }
+active-win-pos-rs = "0.11"
+enigo = "0.6.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ksni.workspace = true
-
+nsh-platform-linux = { workspace = true, default-features = false }
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys.workspace = true
+nsh-platform-windows = { workspace = true, default-features = false }
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-platform-macos = { workspace = true, default-features = false }
 
-[[bin]]
-name = "yank-client"
-path = "src/main.rs"
-test = false
+[dev-dependencies]
+axum.workspace = true
+nsh-engine = { workspace = true, default-features = false }
+nsh-testing = { workspace = true, default-features = false }
+tempfile.workspace = true
+iroh-relay = { version = "=1.4.1", features = ["server"] }

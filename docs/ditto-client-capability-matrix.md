@@ -1,129 +1,40 @@
-# Ditto Client Capability Matrix
+# Yank 0.2 能力与验证边界
 
-This matrix is the parity baseline for `yank-client` after the Makepad 2.0 client pass. It is intentionally concrete: "Done" means the repository has a user-facing path plus compile/test coverage where practical, "Partial" means the path exists but is not a full Ditto clone, and "Gap" means it must not be presented as implemented.
+参考 Clips 功能页及 2026-11-10 的 0.4.9 更新日志：
+https://clips.5km.tech/#features · https://clips.5km.tech/changelog 。这是逐项范围清单，不代表复制 Clips 实现或完成所有平台认证。微信输入法互通按用户决定排除，本版使用 Yank 自有同步。
 
-## Scope
+| 能力 | 本版实现 | 验证/限制 |
+| --- | --- | --- |
+| 无账号离线历史 | SQLite、本地搜索、收藏、编辑、复制、删除 | 核心与 headless 行为测试；不需服务器 |
+| 内容类型 | 文字、HTML、RTF、PNG、文件路径、链接/代码/颜色识别 | 原始格式保留；自定义系统格式不保证全部写回 |
+| 收藏板 | 记录收藏板归类与筛选 | 非文字条目改收藏板不替换 payload |
+| 智能列表 | 名称、关键词、类型、时间范围；默认图片/链接/代码/文件/颜色 | 自定义保存、删除；本版没有 320 图标选择器 |
+| 内容预览 | Markdown、代码、PNG 图片 | HTML 不执行；Markdown 图片不自动联网；没有远端链接网站预览 |
+| 悬浮卡片 | 桌面置顶、多卡片、复制/关闭、最多八张、托盘全关 | 不包含跨应用拖出内容；平台窗口行为需各 OS 验收 |
+| 顺序复制/粘贴栈 | 选中加入队列、自动收集本机捕获、逐条复制/桌面粘贴 | Wayland/Android 不模拟未授权输入；失败时可手动粘贴 |
+| 快捷键/托盘 | 桌面系统托盘、可配置全局快捷键 | 注册失败提示；系统保留键/权限取决于 OS |
+| 面板位置与大小 | 中央/上/下/左/右、托盘附近、五档大小、静默启动 | 托盘点击使用系统提供的 bounds；缺少 bounds 时居中回退；尚无跟随鼠标 |
+| Yank 自有设备同步 | Protobuf、加密 QUIC、局域网发现、设备码、首次确认 | 实际直连/纯中继测试；默认中继，可选直连/自动 NAT |
+| 手机互通 | 同一 NSH Rust 应用与相同 Protobuf 协议 | Android 前台手动采集/复制；模拟器不代替 ARM 真机或后台生命周期验收 |
+| 独立账号关联 | 仅设备互通、邀请登录、拒绝关联 | 邀请不传令牌；同服务器解除关联也关闭上传 |
+| 可选服务器存储 | 默认关闭；登录后独立明确启用 | 包括历史与后续修改；账号/URL/epoch 独立发送游标 |
+| 管理页 | 响应式历史/详情/收藏/删除、设备、账号、改密/重置、主题 | 独立 UI/UX agent 浏览器复审报告位于 docs/reviews |
+| 多账号认证 | 首次管理员环境变量、Argon2、过期/可撤销会话、租户隔离 | 改密撤销全部会话；bootstrap 不重置密码 |
+| 隐私标记 | 机密格式不采集；正则和应用排除；未知来源按排除策略收紧 | 系统来源只作活动窗口提示；没有保证所有密码管理器统一标记 |
+| 屏幕共享隐藏窗口 | 未完成 | 不显示一个无效的保护开关，不宣称可保护截图/录屏 |
+| 保留/备份/恢复 | 永久或按天保留、每天备份、保留七天、导入导出、缺库恢复提示 | 导出不含令牌/账号密码；墓碑和变更日志暂不压缩 |
+| 自动更新 | 桌面可选每日 GitHub 检查、SHA256 校验替换，下次启动生效 | 默认关闭；开发构建不替换自身；deb 系统目录需包管理器或写权限 |
+| 开机启动 | 桌面 opt-in auto-launch，后台参数 | 测试不更改当前用户的系统自启动 |
+| 语言与外观 | 当前原生中文、浅色/深色/系统外观 | 未实现 Clips 的完整 15 语言界面；旧 i18n 数据不表示页面已接线 |
+| Ditto 适配 | rutis 插件、传统 Ditto 加密推送、发送选中记录 | 无远端历史拉取；真实 Windows Ditto 和 DIB 互通待验证 |
+| 发布 | Linux deb/二进制、Windows/macOS 二进制、Android APK | Android 当前测试签名；桌面未签名/macOS 未公证 |
 
-- Client UI and interaction: `crates/yank-client/src/main.rs`
-- Shared storage/settings/i18n: `crates/yank-core/src/lib.rs`, `crates/yank-core/i18n/*.json`
-- Release automation: `.github/workflows/*.yml`, `Dockerfile`
+## 同步语义差异
 
-## Clipboard History
+Clips 限制为启用同步之后的内容且不传文件。本版配对许可包含历史，双方确认文本明确告知可收发记录；初次历史导入不覆盖系统剪贴板，之后由用户的“更新本机剪贴板”选项控制。文件只同步路径元数据，远端路径不作为本机文件粘贴；不宣称文件实体传输。
 
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Configurable history size | Done | `Settings::max_history`, GUI field, SQLite pruning | `0` is the unlimited sentinel; no separate "infinite" picker. |
-| Text/HTML/image/file capture | Done | `read_clipboard_snapshot`, `ClipFormat::{text,html,image_rgba,file_list}` | Native image container fidelity is normalized to RGBA. |
-| RTF-like content | Partial | RTF text detector stores `ClipFormat::rtf` | True Windows native RTF format enumeration is not implemented. |
-| Color values | Done | `detect_color_value`, `ClipFormat::color`, type filter labels | No visual color swatch yet. |
-| Auto dedupe | Done | `content_hash`, `save_clip_deduplicated`, duplicate policy GUI | Ditto's exact consecutive-only mode is simplified. |
-| Copy timestamps | Done | `created_at`, `updated_at`, localized row/detail formatting | None for current UI. |
-| Source application | Partial | `current_source_application`, `source_app` in rows/details/privacy rules | Source icon extraction is not implemented. |
-| Persistent SQLite | Done | `Store::open(paths::database_path())` | None. |
+中继是端点加密；启用服务端存储后服务端可处理内容，管理页才能展示。不要将服务端存储误写为服务端不可解密。
 
-## Quick Paste Panel
+## 尚未完成的 Clips 对齐项
 
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Ditto-like main panel | Done | Separate main/settings pages, search field, numbered rows, context menu panel | It is a Makepad main window, not a native transient popup window. |
-| Global show hotkey | Done | `global-hotkey`, `GlobalHotkeyAction::ShowHistory` | OS conflict feedback depends on registration errors. |
-| Arrow/Enter/Esc/number navigation | Done | `handle_ditto_style_key`, row focus, `number_key_index` | Exact Ditto focus cycling is still simplified. |
-| First ten item shortcuts | Done | In-window Ctrl+1-0/Ctrl+Shift+1-0 and configurable global original/plain-text position hotkeys | Global position hotkeys default blank like Ditto. |
-| First ten hotkey options | Done | `first_ten_hotkeys`, `first_ten_plain_hotkeys`, send paste, move-to-top, active-group toggles in GUI | Ditto's Win-key checkbox is represented by text shortcuts such as `Win+1` or `Super+1`. |
-| List display options | Done | line count, leading whitespace, pasted marker, scroll bar, RTF draw toggle, list font size | No native font-family picker; Makepad font family remains app default. |
-| Image preview | Partial | Image rows/details show dimensions and can restore images | Hover thumbnail rendering is not implemented. |
-| Position memory | Partial | Cursor/caret/previous setting exists in GUI | Makepad window placement is not fully platform-positioned yet. |
-| Close on blur | Partial | Main-page transient panels close on window lost focus | The whole app window is not hidden on blur to avoid losing settings/editing state. |
-
-## Search
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Real-time search | Done | `TextInput::changed`, find-as-you-type, `/q`, `/f`, `/s`, `/d` prefixes | None for current path. |
-| Regex/wildcard/simple search | Done | `SearchMode`, GUI toggles, regex error status | No pinyin initials index. |
-| Type filters | Done | all/pinned/text/image/files filters | Date range controls are text-prefix based, not date pickers. |
-| Source/date filtering | Partial | source/date search scopes | No dedicated dropdown/date range UI. |
-| FTS/fuzzy ranking | Gap | Current search scans loaded clips with string/regex matching | Add FTS5 or an indexed fuzzy search layer for very large histories. |
-
-## Groups / Pinned
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Pin/top and sticky ordering | Done | `pinned`, sticky position commands, menu actions | None for current behavior. |
-| Named groups | Done | `clip_groups`, group panel create/rename/delete/sort/assign | Drag-and-drop between groups is not implemented. |
-| Group hotkeys | Done | group `hotkey`, GUI field, global registry | OS-level registration can fail if another app owns the hotkey. |
-| Quick templates | Done | `{date}`, `{time}`, `{clipboard}` template expansion on paste | No dedicated template editor beyond normal clip text editing. |
-
-## Paste Options
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Original-format paste | Done | `restore_clip_to_clipboard`, image/file/html/text restore | Limited by `arboard` to supported clipboard formats. |
-| Plain-text paste | Done | Shift+Enter, menu action, configurable Text Only Paste hotkey, first-ten plain-text position hotkeys | Text Only Paste uses current clipboard text exposed by the OS. |
-| Transform paste | Done | upper/lower/case/trim/no LF/add LF/camel/slug/path/ascii/time/GUID actions | Ditto add-in scripting is not cloned. |
-| Merge paste | Done | multi-select plus separator/reverse settings | Mixed non-text merge is limited to image horizontal/vertical. |
-| Delayed paste | Done | GUI delay settings and platform paste injectors | Linux requires one of `xdotool`, `wtype`, `ydotool`, or `dotool`. |
-
-## Sync / Network
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Multi-device sync | Partial | `SyncClient`, server push/pull APIs, GUI server/token | Server-mediated sync, not Ditto peer LAN sync. |
-| LAN discovery | Gap | No mDNS/UDP discovery | Add discovery protocol. |
-| Encryption/auth | Partial | Bearer token and HTTPS-capable URL | No payload-level AES shared-key encryption. |
-| Selective sync | Gap | No per-type/pinned-only sync settings | Add sync filter settings and server/client enforcement. |
-| Sync log | Partial | status text and stats exist | No full sync event log table in GUI. |
-
-## Privacy / Security
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| App blacklist | Done | GUI ignored apps field, source-app matching | Source-app detection varies by OS/window manager. |
-| Content rules | Done | GUI regex/text rules, `rules_match_text` | No rule tester UI. |
-| Pause/incognito | Done | capture toggle, tray pause/resume | No timed pause mode. |
-| Clear history | Done | GUI/tray/menu clear and delete non-pinned | Secure erase/overwrite is not implemented. |
-| Master password | Gap | No lock/encrypted-history flow | Needs storage encryption and unlock UI. |
-
-## System Integration
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Tray menu | Done on Linux | `ksni` tray commands for open/settings/capture/sync/pause/exit | Windows/macOS native tray path is not implemented. |
-| Global hotkeys | Done | show/capture/copy-and-capture/sync/text-only/original-and-plain first-ten/copy-buffer/group/clip hotkeys, including Win/Super parsing | Some plain shortcuts intentionally remain in-window only to avoid stealing OS/app keys. |
-| Startup/taskbar toggles | Partial | GUI settings persist | Real OS startup registration/installer integration is incomplete. |
-| Context menu/shell extension | Gap | No OS shell extension | Platform-specific work needed. |
-| Multi-monitor popup | Partial | Window can be restored and panel is visible | True current-monitor popup positioning is incomplete. |
-
-## Data Management
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Export/import | Done | JSON export/import, selected text export, file-content import | CSV export is not implemented. |
-| Backup/compact/verify | Done | GUI utilities and storage maintenance | No daily scheduler yet. |
-| Auto clean by age/count/size | Done | max history, expire days, max DB MB maintenance | Maintenance runs on save/action, not a background daily timer. |
-
-## Settings Center
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| General/types/keyboard/copy buffers/quick paste/sync/stats/utilities/advanced/about tabs | Done | settings page tab buttons and card visibility | None for current tab split. |
-| Language/theme | Done | i18n JSON bundles and runtime theme reapply | Follow-system theme is not implemented. |
-| Hotkey conflict validation | Done | parser/canonical conflict checks across main, alternate activate, first-ten original/plain, copy-buffer, group, and per-clip hotkeys | External OS conflicts are detected only when registration fails. |
-| All customer settings in GUI | Partial | Current settings exposed in Makepad GUI | Low-level server bind port remains server-side config. |
-
-## Release / Automation
-
-| Requirement | Status | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| Client/server binaries | Done | tag-only binary workflow uploads release assets | Installer/MSI/DMG packaging is not implemented. |
-| Docker image | Done | tag-only Docker workflow builds/pushes GHCR and optional Docker Hub | Requires Docker Hub secrets for Docker Hub push. |
-| CI split | Done | CI, binaries, Docker workflows are separate and tag-gated for release artifacts | None for current automation. |
-
-## Current Backlog
-
-1. Replace the main-window quick paste surface with a true transient popup positioned near cursor/caret/previous monitor.
-2. Add hover image thumbnails and optional source application icons.
-3. Add FTS5/fuzzy search with optional pinyin initials.
-4. Add LAN discovery and payload encryption if Ditto peer sync parity is required.
-5. Add master password/encrypted history and secure erase semantics.
-6. Add Windows/macOS tray/startup/installers and optional shell extension.
+跨应用拖出内容、跟随鼠标、屏幕捕获保护、应用图标与图标选择器、完整 15 语言和所有专门卡片细节尚未完成。这些缺口必须保留在版本说明中，不能仅凭界面重构或构建通过宣称“Clips 全功能已完成”。

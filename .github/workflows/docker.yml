@@ -9,15 +9,29 @@ permissions:
   packages: write
 
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
   build:
+    needs: verify
     name: Build and push yank image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
+
+      - name: Verify release tag matches Cargo and NSH versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYCODE'
+          import json, os, tomllib
+          version = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
+          assert os.environ["RELEASE_TAG"] == "v" + version, "Tag/Cargo version mismatch"
+          assert json.load(open("crates/yank-client/nsh.json"))["version"] == version, "NSH/Cargo version mismatch"
+          PYCODE
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4.0.0

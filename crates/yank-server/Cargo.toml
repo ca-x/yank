@@ -14,3 +14,22 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 yank-core = { path = "../yank-core" }
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+iroh-relay = { version = "=1.4.1", features = ["server"] }
+iroh-base = { version = "=1.4.1", features = ["key", "relay"] }
+
+argon2 = "0.5"
+rusqlite.workspace = true
+rand = "0.8"
+
+mdns-sd = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+tempfile.workspace = true
