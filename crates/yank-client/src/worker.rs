@@ -51,7 +51,7 @@ pub enum Command {
     Export(PathBuf),
     Import(PathBuf),
     Copy(Clip, bool),
-    Paste(Clip),
+    Paste(String),
     SaveView(yank_core::SavedView),
     RemoveView(String),
     SendDitto(Clip),
@@ -489,7 +489,10 @@ fn run(
                     Command::RemoveView(id) => {
                         store.remove_view(&id)?;
                     }
-                    Command::Paste(clip) => {
+                    Command::Paste(id) => {
+                        // List rows omit large payloads. Read the saved record here so a
+                        // fast Enter never races selection hydration or pastes a stale edit.
+                        let clip = saved_paste_clip(&store, &id)?;
                         anyhow::ensure!(
                             !clip.formats.iter().any(ClipFormat::is_file_list)
                                 || store.can_copy_local_files(&clip)?,
@@ -700,6 +703,14 @@ fn maintain(store: &Store, state: &Shared, device: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn saved_paste_clip(store: &Store, id: &str) -> anyhow::Result<Clip> {
+    let clip = store
+        .get(id)?
+        .ok_or_else(|| anyhow::anyhow!("记录已不存在，请重新选择"))?;
+    anyhow::ensure!(!clip.deleted, "记录已删除，无法粘贴");
+    Ok(clip)
+}
+
 #[cfg(not(target_os = "android"))]
 fn paste() -> anyhow::Result<()> {
     use enigo::{Direction, Enigo, Key, Keyboard};
@@ -751,6 +762,36 @@ mod tests {
     use axum::{Router, body::Bytes, extract::State, routing::post};
     use tokio::sync::Notify;
     use yank_core::{decode, encode, protocol as pb};
+    #[test]
+    fn paste_loads_current_complete_payload_and_rejects_tombstones() {
+        let store = Store::memory().unwrap();
+        let captured = store
+            .capture(Clip::text("test", "initial"), "test")
+            .unwrap();
+        let updated = store
+            .mutate(&captured.id, "test", |clip| {
+                clip.text = "saved edit".into();
+                clip.formats = vec![
+                    ClipFormat::text("saved edit"),
+                    ClipFormat {
+                        format: "test/binary".into(),
+                        mime: None,
+                        data: vec![42; 16_384],
+                    },
+                ];
+            })
+            .unwrap();
+        assert_eq!(saved_paste_clip(&store, &captured.id).unwrap(), updated);
+        store
+            .mutate(&captured.id, "test", |clip| clip.deleted = true)
+            .unwrap();
+        assert!(
+            saved_paste_clip(&store, &captured.id).is_err(),
+            "a queue ID must not resurrect deleted content"
+        );
+        assert!(saved_paste_clip(&store, "missing").is_err());
+    }
+
     struct LoginGate {
         entered: Notify,
         release: Notify,

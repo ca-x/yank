@@ -120,6 +120,18 @@ pub struct Field {
     action: Option<ButtonElement>,
 }
 impl Field {
+    pub fn element_ref(mut self, handle: &ElementRef) -> Self {
+        self.control = self.control.element_ref(handle);
+        self
+    }
+    pub fn auto_focus(mut self, value: bool) -> Self {
+        self.control = self.control.auto_focus(value);
+        self
+    }
+    pub fn on_submit(mut self, submit: impl Fn(&str) + 'static) -> Self {
+        self.control = self.control.on_submit(submit);
+        self
+    }
     pub fn action(mut self, action: ButtonElement) -> Self {
         self.action = Some(action);
         self

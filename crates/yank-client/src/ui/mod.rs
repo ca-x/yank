@@ -54,6 +54,8 @@ struct Ui {
     snapshot: Signal<Option<Snapshot>>,
     page: Signal<String>,
     query: Signal<String>,
+    search_field: ElementRef,
+    history_list: ElementRef,
     filter: Signal<String>,
     selected: Signal<String>,
     prefs: Signal<Preferences>,
@@ -90,6 +92,8 @@ impl Ui {
             snapshot: signal(None),
             page: signal("history".into()),
             query: signal(String::new()),
+            search_field: element_ref(),
+            history_list: element_ref(),
             filter: signal("all".into()),
             selected: signal(String::new()),
             prefs: signal(Preferences::default()),
@@ -363,17 +367,6 @@ pub fn app() -> impl IntoElement {
     desktop::install(ui.clone());
     let back = ui.clone();
     on_back_press(move || back.back());
-    let back = ui.clone();
-    on_key_with(
-        "escape",
-        KeyOptions {
-            when: nsh_core::keymap::When::NotEditing,
-            ..Default::default()
-        },
-        move |_| {
-            back.back();
-        },
-    );
     let state = ui.clone();
     cleanup(move || state.worker.shared.stop.store(true, Ordering::Relaxed));
     let state = ui.clone();
@@ -550,12 +543,23 @@ pub fn app() -> impl IntoElement {
         }
     });
     let state = ui.clone();
-    on_key("ctrl+f", move |_| {
+    on_key("mod+f", move |_| {
         state.page.set("history".into());
-        state.notice.set("在搜索框中输入内容".into());
+        state.search_field.focus();
     });
     let state = ui.clone();
-    on_key("escape", move |_| state.page.set("history".into()));
+    on_key_with(
+        "escape",
+        KeyOptions {
+            when: nsh_core::keymap::When::Always,
+            ..Default::default()
+        },
+        move |_| {
+            if !state.back() && is_desktop() {
+                nsh_core::element::desktop::main_window().hide();
+            }
+        },
+    );
     let state = ui.clone();
     on_key("ctrl+enter", move |_| {
         if let Some(clip) = state.selected() {
@@ -566,24 +570,6 @@ pub fn app() -> impl IntoElement {
             }
         }
     });
-    let state = ui.clone();
-    on_key_with(
-        "arrowdown",
-        KeyOptions {
-            when: nsh_core::keymap::When::NotEditing,
-            ..Default::default()
-        },
-        move |_| navigate(&state, 1),
-    );
-    let state = ui.clone();
-    on_key_with(
-        "arrowup",
-        KeyOptions {
-            when: nsh_core::keymap::When::NotEditing,
-            ..Default::default()
-        },
-        move |_| navigate(&state, -1),
-    );
     let desktop = computed(|| window().width.0 >= 850.0 && is_desktop());
     let top = ui.clone();
     let side = ui.clone();
@@ -670,7 +656,11 @@ fn navigate(ui: &Ui, delta: isize) {
         .map(|i| i as isize)
         .unwrap_or(-1);
     let index = (at + delta).clamp(0, clips.len() as isize - 1) as usize;
-    ui.choose(clips[index].clone());
+    let id = clips[index].id.clone();
+    ui.selected.set(id.clone());
+    ui.history_list
+        .scroll_to_index(index as u32, percentage(0.5), px(0.0), false);
+    ui.send(Command::Select(id));
 }
 fn sidebar(ui: Ui) -> impl IntoElement {
     let u = ui.clone();
@@ -679,12 +669,8 @@ fn sidebar(ui: Ui) -> impl IntoElement {
     let q = ui.clone();
     let settings = ui.clone();
     let mut nav = view()
-        .w(px(214.0))
         .p_5()
         .gap_2()
-        .bg(move || theme().secondary)
-        .border_r_1()
-        .border_color(move || theme().border)
         .child(
             text("yank")
                 .text_3xl()
@@ -775,17 +761,30 @@ fn sidebar(ui: Ui) -> impl IntoElement {
             },
         ));
     let stats = ui.clone();
-    nav.child(view().flex_1())
-        .child(hint(move || {
-            stats.snapshot.with(|s| {
-                s.as_ref()
-                    .map(|s| format!("{} 条记录 · {} 条收藏", s.stats.clips, s.stats.pinned))
-                    .unwrap_or_else(|| "正在打开本地资料库…".into())
-            })
-        }))
-        .child(action("设置与账号", false, move || {
-            settings.page.set("settings".into())
-        }))
+    view()
+        .w(px(214.0))
+        .min_h_0()
+        .bg(move || theme().secondary)
+        .border_r_1()
+        .border_color(move || theme().border)
+        .child(scroll().flex_1().min_h_0().child(nav))
+        .child(
+            view()
+                .p_4()
+                .gap_2()
+                .child(hint(move || {
+                    stats.snapshot.with(|s| {
+                        s.as_ref()
+                            .map(|s| {
+                                format!("{} 条记录 · {} 条收藏", s.stats.clips, s.stats.pinned)
+                            })
+                            .unwrap_or_else(|| "正在打开本地资料库…".into())
+                    })
+                }))
+                .child(action("设置与账号", false, move || {
+                    settings.page.set("settings".into())
+                })),
+        )
 }
 fn mobile_nav(ui: Ui) -> impl IntoElement {
     let mut row = view().flex_row().flex_wrap().gap_2().px_3().py_2();
@@ -901,6 +900,67 @@ fn capture_now(ui: Ui) {
     });
 }
 fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
+    if is_desktop() {
+        let search_focused = signal(false);
+        ui.search_field
+            .on_focus_in(move || search_focused.set(true));
+        ui.search_field
+            .on_focus_out(move || search_focused.set(false));
+        let state = ui.clone();
+        effect(move || {
+            // Only the search input opts into navigation while editing. The
+            // inline details editor keeps its arrow and number shortcuts.
+            let when = if search_focused.get() {
+                nsh_core::keymap::When::Always
+            } else {
+                nsh_core::keymap::When::NotEditing
+            };
+            for (key, delta) in [("arrowdown", 1), ("arrowup", -1)] {
+                let state = state.clone();
+                on_key_with(
+                    key,
+                    KeyOptions {
+                        when,
+                        repeat: true,
+                        ..Default::default()
+                    },
+                    move |_| navigate(&state, delta),
+                );
+            }
+            for (index, digit) in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+                .iter()
+                .enumerate()
+            {
+                let state = state.clone();
+                on_key_with(
+                    &format!("mod+{digit}"),
+                    KeyOptions {
+                        when,
+                        ..Default::default()
+                    },
+                    move |_| desktop::paste_selected(state.clone(), Some(index)),
+                );
+            }
+        });
+        let list_focused = signal(false);
+        ui.history_list.on_focus_in(move || list_focused.set(true));
+        ui.history_list
+            .on_focus_out(move || list_focused.set(false));
+        let state = ui.clone();
+        effect(move || {
+            if list_focused.get() {
+                let state = state.clone();
+                on_key_with(
+                    "enter",
+                    KeyOptions {
+                        when: nsh_core::keymap::When::NotEditing,
+                        ..Default::default()
+                    },
+                    move |_| desktop::paste_selected(state.clone(), None),
+                );
+            }
+        });
+    }
     let query = ui.clone();
     let change = ui.clone();
     let rows = ui.clone();
@@ -914,15 +974,24 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
         .min_h_0()
         .p_4()
         .gap_3()
-        .child(field(
-            "搜索文字、标题或收藏板",
-            move || query.query.get(),
-            move |value| {
-                change.query.set(value.into());
-                change.limit.set(100);
-                change.send(Command::Search(value.into(), change.filter.get(), 100));
-            },
-        ))
+        .child(
+            field(
+                "搜索文字、标题或收藏板",
+                move || query.query.get(),
+                move |value| {
+                    change.query.set(value.into());
+                    change.limit.set(100);
+                    change.selected.set(String::new());
+                    change.send(Command::Search(value.into(), change.filter.get(), 100));
+                },
+            )
+            .element_ref(&ui.search_field)
+            .auto_focus(is_desktop())
+            .on_submit({
+                let ui = ui.clone();
+                move |_| desktop::paste_selected(ui.clone(), None)
+            }),
+        )
         .child(action("保存筛选为智能列表", false, {
             let ui = ui.clone();
             move || ui.page.set("smart".into())
@@ -930,7 +999,17 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
         .child(hint(move || {
             info.snapshot.with(|s| {
                 s.as_ref()
-                    .map(|s| format!("{} 条结果 · 按 ↑ ↓ 选择 · Ctrl+Enter 复制", s.clips.len()))
+                    .map(|s| {
+                        if is_desktop() {
+                            format!(
+                                "{} 条结果 · ↑ ↓ 选择 · Enter 粘贴 · {}+1…0 快贴前十条 · Esc 收起",
+                                s.clips.len(),
+                                if apple_keys() { "⌘" } else { "Ctrl" }
+                            )
+                        } else {
+                            format!("{} 条结果", s.clips.len())
+                        }
+                    })
                     .unwrap_or_else(|| "正在读取本地历史…".into())
             })
         }))
@@ -961,14 +1040,38 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                                         .unwrap_or_default()
                                 })
                             })
+                            .element_ref(&ui.history_list)
                             .estimated_item_size(px(92.0))
                             .flex_1()
                             .empty(
                                 surface()
-                                    .child(title("复制过的内容，会留在这里"))
-                                    .child(hint(
-                                        "先复制一段文字，或点“记录剪贴板”。不登录也能使用。",
-                                    )),
+                                    .child(
+                                        text({
+                                            let ui = ui.clone();
+                                            move || {
+                                                if ui.query.get().is_empty()
+                                                    && ui.filter.get() == "all"
+                                                {
+                                                    "复制过的内容，会留在这里"
+                                                } else {
+                                                    "没有匹配的记录"
+                                                }
+                                            }
+                                        })
+                                        .text_lg()
+                                        .font_weight(FontWeight::SEMIBOLD),
+                                    )
+                                    .child(hint({
+                                        let ui = ui.clone();
+                                        move || {
+                                            if ui.query.get().is_empty() && ui.filter.get() == "all"
+                                            {
+                                                "先复制一段文字，或点“记录剪贴板”。不登录也能使用。"
+                                            } else {
+                                                "试试其他关键词，或切回全部记录。"
+                                            }
+                                        }
+                                    })),
                             ),
                         )
                         .child(
@@ -1002,7 +1105,19 @@ fn clip_row(ui: Ui, at: Position) -> impl IntoElement {
     });
     let choose = ui.clone();
     let selected = ui.clone();
+    let focused = ui.clone();
+    let row_ref = element_ref();
+    row_ref.on_focus_in(move || {
+        if let Some(clip) = current.get()
+            && focused.selected.get() != clip.id
+        {
+            focused.pending_float.set(None);
+            focused.selected.set(clip.id.clone());
+            focused.send(Command::Select(clip.id));
+        }
+    });
     nsh_base::button()
+        .element_ref(&row_ref)
         .on_press(move || {
             if let Some(clip) = current.get() {
                 choose.choose(clip);
@@ -1029,21 +1144,35 @@ fn clip_row(ui: Ui, at: Position) -> impl IntoElement {
         .focus(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .accessibility_label(move || current.get().map(|c| SharedString::from(c.description)))
         .child(
-            text(move || {
-                current
-                    .get()
-                    .map(|c| {
-                        format!(
-                            "{}{}",
-                            if c.pinned { "已收藏 · " } else { "" },
-                            c.description
-                        )
+            view()
+                .flex_row()
+                .gap_2()
+                .items_center()
+                .child(when(
+                    move || is_desktop() && at.index() < 10,
+                    move || {
+                        text(format!("{}", (at.index() + 1) % 10))
+                            .text_xs()
+                            .text_color(move || theme().muted_foreground)
+                    },
+                ))
+                .child(
+                    text(move || {
+                        current
+                            .get()
+                            .map(|c| {
+                                format!(
+                                    "{}{}",
+                                    if c.pinned { "已收藏 · " } else { "" },
+                                    c.description
+                                )
+                            })
+                            .unwrap_or_default()
                     })
-                    .unwrap_or_default()
-            })
-            .text_sm()
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(move || theme().foreground),
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(move || theme().foreground),
+                ),
         )
         .child(
             text(move || {
@@ -1112,7 +1241,13 @@ fn details(ui: Ui) -> impl IntoElement {
             .child(action("Markdown / 代码预览",false,move||preview.page.set("preview".into())))
             .child(action("悬浮为置顶卡片",false,move||{if let Some(c)=float.selected(){desktop::floating(float.clone(),c);}}))
             .child(hint({ let ui = ui.clone(); move || if ui.dirty() { "未保存 · 切换记录或返回后草稿仍保留" } else { "已保存" } }))
-            .child(action("复制已保存内容", true, move || copy.copy()))
+            .child(when(is_desktop, { let ui = ui.clone(); move || {
+                action("粘贴到原应用", true, { let ui = ui.clone(); move || {
+                    if let Some(clip) = ui.selected() { desktop::paste_record(ui.clone(), clip.id); }
+                } })
+                    .disabled({ let ui = ui.clone(); move || ui.selected().is_none_or(|clip| clip.deleted) })
+            }}))
+            .child(action("复制已保存内容", false, move || copy.copy()))
             .child(action("复制草稿文字", false, { let ui = ui.clone(); move || {
                 if let Some(mut clip) = ui.selected().filter(text_editable)
                     && let Some(draft) = ui.draft() {
@@ -1966,6 +2101,206 @@ mod tests {
             .child(action("pair", false, move || {
                 pair.send(Command::PairCode("DEVICE".into(), false, 0))
             }))
+    }
+
+    #[component]
+    fn QuickPasteControls() -> impl IntoElement {
+        let harness = nsh_core::element::engine_context::<RevisionHarness>().unwrap();
+        let ui = Ui::new(Rc::new(harness.worker.lock().unwrap().take().unwrap()));
+        let clips = (1..=12)
+            .map(|index| {
+                let mut clip = Clip::text("test", &format!("Record {index}"));
+                clip.id = format!("record-{index}");
+                clip
+            })
+            .collect::<Vec<_>>();
+        ui.snapshot.set(Some(Snapshot {
+            network_status: String::new(),
+            identity: None,
+            discovered: Vec::new(),
+            servers: Vec::new(),
+            clips,
+            stats: Default::default(),
+            prefs: Preferences::default(),
+            peers: Vec::new(),
+            conflicts: Vec::new(),
+            query: String::new(),
+            filter: "all".into(),
+            error: String::new(),
+            has_more: false,
+            views: Vec::new(),
+            boards: Vec::new(),
+            selected: None,
+        }));
+        let page = ui.clone();
+        let content = ui.clone();
+        view()
+            .flex_1()
+            .min_h_0()
+            .child(text(move || format!("Page: {}", page.page.get())))
+            .child(dynamic(move || {
+                if content.page.get() == "detail" {
+                    details(content.clone()).into_element()
+                } else {
+                    history(content.clone(), computed(|| false)).into_element()
+                }
+            }))
+            .child(field("测试详情编辑器", || "draft".to_owned(), |_| {}).multiline(true))
+            .child(action("列表外详情", false, move || {
+                ui.snapshot.update(|snapshot| {
+                    let snapshot = snapshot.as_mut().unwrap();
+                    snapshot.selected = snapshot.clips.first().cloned();
+                    snapshot.clips.clear();
+                });
+                ui.selected.set("record-1".into());
+                ui.page.set("detail".into());
+            }))
+    }
+
+    fn quick_paste_app(
+        os: nsh_core::platform::Os,
+    ) -> (
+        nsh_testing::Headless,
+        std::sync::mpsc::Receiver<Command>,
+        tempfile::TempDir,
+    ) {
+        use std::sync::{Mutex, mpsc};
+        let directory = tempfile::tempdir().unwrap();
+        let running = Worker::start(directory.path().into(), false).unwrap();
+        let shared = running.shared.clone();
+        shared.stop.store(true, Ordering::Relaxed);
+        drop(running);
+        let (commands, received) = mpsc::channel();
+        let (_snapshots, snapshots) = mpsc::channel();
+        let harness = RevisionHarness {
+            worker: Mutex::new(Some(Worker {
+                commands,
+                snapshots,
+                shared,
+            })),
+        };
+        let mut config =
+            nsh_engine::EngineConfig::new(nsh_engine::Root::of::<QuickPasteControls>());
+        config.context = config.context.with(harness);
+        config.environment.os = os;
+        config.environment.idiom = nsh_core::platform::Idiom::Desktop;
+        let mut app = nsh_testing::Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        // Headless does not apply native AutoFocus. Explicitly put focus in
+        // search so these tests exercise editing-aware key dispatch.
+        app.type_text("搜索文字、标题或收藏板", "").unwrap();
+        for command in received.try_iter() {
+            assert!(matches!(command, Command::Search(..)));
+        }
+        (app, received, directory)
+    }
+
+    #[test]
+    fn search_arrows_stay_in_history_and_enter_pastes_without_detail_hydration()
+    -> Result<(), String> {
+        let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::Linux);
+        app.press_key("arrowdown")?;
+        assert!(matches!(commands.try_recv().unwrap(), Command::Select(id) if id == "record-1"));
+        app.press_key("arrowdown")?;
+        assert!(matches!(commands.try_recv().unwrap(), Command::Select(id) if id == "record-2"));
+        assert!(
+            app.shows("Page: history"),
+            "keyboard selection must not open detail on narrow windows"
+        );
+        app.press_key("enter")?;
+        assert!(matches!(commands.try_recv().unwrap(), Command::Paste(id) if id == "record-2"));
+        assert!(
+            commands.try_recv().is_err(),
+            "one Enter must send one paste"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_ten_shortcuts_use_the_platform_modifier_even_in_search() -> Result<(), String> {
+        for os in [
+            nsh_core::platform::Os::Linux,
+            nsh_core::platform::Os::MacOs,
+            nsh_core::platform::Os::Windows,
+        ] {
+            let (mut app, commands, _directory) = quick_paste_app(os);
+            app.press_key("mod+0")?;
+            assert!(
+                matches!(commands.try_recv().unwrap(), Command::Paste(id) if id == "record-10")
+            );
+            assert!(commands.try_recv().is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn saved_detail_can_paste_after_it_leaves_the_current_result_set() -> Result<(), String> {
+        let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::Linux);
+        app.press("列表外详情")?;
+        app.wait_for("内容详情")?;
+        app.press("粘贴到原应用")?;
+        assert!(matches!(commands.try_recv().unwrap(), Command::Paste(id) if id == "record-1"));
+        assert!(commands.try_recv().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn enter_on_a_toolbar_button_activates_it_instead_of_pasting() -> Result<(), String> {
+        let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::MacOs);
+        app.press_key("tab")?;
+        app.press_key("enter")?;
+        assert!(
+            commands.try_recv().is_err(),
+            "Enter on a toolbar button must not paste"
+        );
+        assert!(
+            app.shows("Page: smart"),
+            "Enter must activate the focused save-filter button"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enter_on_a_history_row_pastes_the_focused_record() -> Result<(), String> {
+        let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::MacOs);
+        app.press_key("tab")?; // Save-filter toolbar button.
+        app.press_key("tab")?; // First history row.
+        assert!(matches!(commands.try_recv().unwrap(), Command::Select(id) if id == "record-1"));
+        app.press_key("tab")?; // Second history row.
+        assert!(matches!(commands.try_recv().unwrap(), Command::Select(id) if id == "record-2"));
+        app.press_key("enter")?;
+        assert!(matches!(commands.try_recv().unwrap(), Command::Paste(id) if id == "record-2"));
+        assert!(commands.try_recv().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn detail_editor_keeps_its_arrow_keys_enter_and_number_shortcuts() -> Result<(), String> {
+        let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::Linux);
+        app.type_text("测试详情编辑器", "draft")?;
+        app.press_key("arrowdown")?;
+        app.press_key("mod+1")?;
+        app.press_key("enter")?;
+        assert!(
+            commands.try_recv().is_err(),
+            "editing a draft must not select or paste history"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enter_during_pending_search_cannot_paste_previous_results() -> Result<(), String> {
+        let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::Linux);
+        app.type_text("搜索文字、标题或收藏板", "new query")?;
+        while let Ok(command) = commands.try_recv() {
+            assert!(matches!(command, Command::Search(..)));
+        }
+        app.press_key("enter")?;
+        assert!(
+            commands.try_recv().is_err(),
+            "pending search must not paste a stale row"
+        );
+        Ok(())
     }
 
     #[test]

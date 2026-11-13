@@ -237,6 +237,15 @@ fn router(state: AppState) -> Router {
                 )
             }),
         )
+        .route(
+            "/logo.png",
+            get(|| async {
+                (
+                    [("content-type", "image/png")],
+                    &include_bytes!("../../yank-client/assets/yank-icon-256.png")[..],
+                )
+            }),
+        )
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/session", get(session))

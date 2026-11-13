@@ -4,6 +4,7 @@ use super::{
     controls::{action, hint, surface},
 };
 use crate::worker::Command;
+use base64::Engine;
 use nsh_base::theme;
 use nsh_core::{
     desktop::{WindowAttributes, WindowFrame, WindowKind, WindowLevel},
@@ -28,6 +29,11 @@ pub(super) fn install(ui: Ui) {
     let floats = ui.clone();
     native::set_tray(Some(
         native::tray()
+            .icon(format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD
+                    .encode(include_bytes!("../../assets/yank-icon-64.png"))
+            ))
             .tooltip("Yank · 剪贴板历史")
             .on_click(move |event| {
                 open.tray_anchor.set(event.bounds);
@@ -141,6 +147,7 @@ pub(super) fn show(ui: Ui) {
     }
     ui.page.set("history".into());
     native::main_window().focus();
+    ui.search_field.focus();
 }
 // Tray bounds and display bounds use the same screen coordinates in NSH.
 fn panel_frame(
@@ -182,6 +189,43 @@ fn panel_frame(
     }
 }
 
+pub(super) fn paste_selected(ui: Ui, index: Option<usize>) {
+    if !is_desktop() {
+        return;
+    }
+    let id = ui.snapshot.with(|snapshot| {
+        let snapshot = snapshot.as_ref()?;
+        if snapshot.query != ui.query.get() || snapshot.filter != ui.filter.get() {
+            return None;
+        }
+        let selected = ui.selected.get();
+        paste_target(&snapshot.clips, &selected, index)
+    });
+    if let Some(id) = id {
+        ui.selected.set(id.clone());
+        paste_record(ui, id);
+    } else {
+        ui.notice
+            .set("没有可粘贴的记录，请等待搜索完成或重新选择。".into());
+    }
+}
+
+pub(super) fn paste_record(ui: Ui, id: String) {
+    if is_desktop() {
+        native::main_window().hide();
+        ui.send(Command::Paste(id));
+    }
+}
+
+fn paste_target(clips: &[Clip], selected: &str, index: Option<usize>) -> Option<String> {
+    let clip = match index {
+        Some(index) => clips.get(index),
+        None if selected.is_empty() => clips.first(),
+        None => clips.iter().find(|clip| clip.id == selected),
+    };
+    clip.map(|clip| clip.id.clone())
+}
+
 pub(super) fn next(ui: Ui) {
     let clip = ui.queue.with(|q| q.first().cloned());
     if let Some(clip) = clip {
@@ -189,7 +233,7 @@ pub(super) fn next(ui: Ui) {
             q.remove(0);
         });
         native::main_window().hide();
-        ui.send(Command::Paste(clip));
+        ui.send(Command::Paste(clip.id));
     } else {
         ui.notice.set("粘贴队列已经用完。".into());
     }
@@ -258,5 +302,23 @@ pub(super) fn floating(ui: Ui, clip: Clip) {
         ui.floating.update(|ids| ids.push(id));
     } else {
         ui.notice.set("当前平台未允许创建悬浮窗口。".into());
+    }
+}
+
+#[cfg(test)]
+mod quick_paste_tests {
+    use super::*;
+
+    #[test]
+    fn deleted_selection_does_not_silently_paste_another_record() {
+        let clips = [Clip::text("test", "first"), Clip::text("test", "second")];
+        assert_eq!(paste_target(&clips, "", None), Some(clips[0].id.clone()));
+        assert_eq!(
+            paste_target(&clips, &clips[1].id, None),
+            Some(clips[1].id.clone())
+        );
+        assert_eq!(paste_target(&clips, "deleted", None), None);
+        assert_eq!(paste_target(&clips, "", Some(9)), None);
+        assert_eq!(paste_target(&[], "", None), None);
     }
 }

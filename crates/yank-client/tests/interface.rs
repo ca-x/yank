@@ -167,6 +167,39 @@ fn persisted_state_wait_does_not_require_ui_updates() -> Result<(), String> {
 }
 
 #[test]
+fn quick_paste_keys_leave_settings_alone_and_escape_hides_history() -> Result<(), String> {
+    let mut fixture = Fixture::start(1120.0, true, clips())?;
+    let app = &mut fixture.app;
+    app.press("设置与账号")?;
+    app.wait_for("账号登录（可选）")?;
+    app.press_key("mod+1")?;
+    assert!(
+        app.window_state("main")?
+            .ok_or("missing main window")?
+            .visible,
+        "history quick-paste bindings must be removed in settings"
+    );
+    app.press_key("escape")?;
+    app.wait_for("搜索文字、标题或收藏板")?;
+    assert!(
+        app.window_state("main")?
+            .ok_or("missing main window")?
+            .visible,
+        "Escape from settings returns to history first"
+    );
+    app.type_text("搜索文字、标题或收藏板", "alpha")?;
+    app.press_key("escape")?;
+    assert!(
+        !app.window_state("main")?
+            .ok_or("missing main window")?
+            .visible,
+        "Escape hides history even while search is focused"
+    );
+    assert_eq!(fixture.store.stats().map_err(|e| e.to_string())?.clips, 2);
+    Ok(())
+}
+
+#[test]
 fn headless_desktop_849_850_switches_navigation_and_detail_behavior() -> Result<(), String> {
     let mut fixture = Fixture::start(849.0, true, clips())?;
     let app = &mut fixture.app;

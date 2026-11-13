@@ -38,7 +38,7 @@ docker run --rm \
   -e YANK_PUBLIC_URL=https://yank.example.com \
   -e YANK_RELAY_URL=https://relay.example.com \
   -e YANK_COOKIE_SECURE=true \
-  -v yank-data:/data ghcr.io/ca-x/yank:0.2.0
+  -v yank-data:/data ghcr.io/ca-x/yank:0.2.1
 ```
 
 公网部署为 API 和中继配置反向代理/TLS，`YANK_RELAY_URL` 必须是客户端可达的地址。API 默认 7219/tcp，中继默认 7220/tcp。自动 NAT 地址发现可配置 `YANK_TLS_CERT`、`YANK_TLS_KEY`、`YANK_QUIC_BIND`（默认 7842/udp），并按需发布该 UDP 端口。`YANK_STORAGE_DISABLED=true` 只禁用持久化 API，不影响账号发现与中继。
