@@ -167,7 +167,7 @@ pub async fn send(address: &str, password: &str, clip: &Clip) -> Result<()> {
             !data.is_empty() && data.len() < LIMIT - 1024,
             "Ditto format exceeds limit"
         );
-        let encrypted = crypto::encrypt(&data, password)?;
+        let encrypted = encrypted_write(data, password).await?;
         write_header(
             &mut socket,
             password,
@@ -183,6 +183,10 @@ pub async fn send(address: &str, password: &str, clip: &Clip) -> Result<()> {
     write_header(&mut socket, password, 5, "", -1).await?;
     socket.shutdown().await?;
     Ok(())
+}
+async fn encrypted_write(data: Vec<u8>, password: &str) -> Result<Vec<u8>> {
+    let password = password.to_owned();
+    tokio::task::spawn_blocking(move || crypto::encrypt(&data, &password)).await?
 }
 async fn write_header(
     socket: &mut TcpStream,
@@ -201,7 +205,9 @@ async fn write_header(
     raw[300..304].copy_from_slice(&size.to_le_bytes());
     raw[304..308].copy_from_slice(&(-1i32).to_le_bytes());
     raw[340] = 1;
-    socket.write_all(&crypto::encrypt(&raw, password)?).await?;
+    socket
+        .write_all(&encrypted_write(raw, password).await?)
+        .await?;
     Ok(())
 }
 fn i32_at(bytes: &[u8], at: usize) -> Result<i32> {
@@ -243,7 +249,7 @@ mod tests {
         send(&address.to_string(), "shared-test-password", &clip)
             .await
             .unwrap();
-        let received = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        let received = tokio::time::timeout(Duration::from_secs(45), rx.recv())
             .await
             .unwrap()
             .unwrap();

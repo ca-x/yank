@@ -538,6 +538,18 @@ impl Store {
         }
         self.save_local(clip, device)
     }
+    /// Authorize recalling a file list observed through this machine's OS clipboard.
+    /// This local capability is never replicated or included in backups.
+    pub fn authorize_local_files(&self, clip: &Clip) -> Result<()> {
+        if clip.formats.iter().any(ClipFormat::is_file_list) {
+            self.set_value(&format!("local.files.{}", clip.id), &clip.content_hash())?;
+        }
+        Ok(())
+    }
+    pub fn can_copy_local_files(&self, clip: &Clip) -> Result<bool> {
+        Ok(self.value(&format!("local.files.{}", clip.id))?.as_deref()
+            == Some(clip.content_hash().as_str()))
+    }
     pub fn mutate(&self, id: &str, device: &str, apply: impl FnOnce(&mut Clip)) -> Result<Clip> {
         let tx = write_transaction(&self.conn)?;
         let mut clip = self

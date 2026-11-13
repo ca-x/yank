@@ -29,12 +29,17 @@ pub struct Snapshot {
     pub boards: Vec<String>,
     pub selected: Option<Clip>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureSource {
+    System,
+    Foreground,
+}
 #[derive(Debug)]
 pub enum Command {
     Search(String, String, u32),
     Select(String),
     PairCode(String, bool, u64),
-    Capture(Clip),
+    Capture(Clip, CaptureSource),
     Pin(String),
     Delete(String),
     Edit(String, String, String),
@@ -288,10 +293,15 @@ fn run(
                         filter = f;
                         limit = l;
                     }
-                    Command::Capture(mut clip) => {
+                    Command::Capture(mut clip, source) => {
                         #[cfg(not(target_os = "android"))]
-                        anyhow::ensure!(clipboard.is_some(), "无法验证剪贴板隐私标记，未保存内容");
-                        if clipboard.as_ref().is_some_and(|c| c.sensitive()) {
+                        anyhow::ensure!(
+                            source != CaptureSource::System || clipboard.is_some(),
+                            "无法验证剪贴板隐私标记，未保存内容"
+                        );
+                        if source == CaptureSource::System
+                            && clipboard.as_ref().is_some_and(|c| c.sensitive())
+                        {
                             return Ok(());
                         }
                         clip.device_id = device.clone();
@@ -303,6 +313,9 @@ fn run(
                         };
                         if !excluded {
                             let clip = store.capture(clip, &device)?;
+                            if source == CaptureSource::System {
+                                store.authorize_local_files(&clip)?;
+                            }
                             collect_clip(&state, clip);
                         }
                     }
@@ -479,8 +492,8 @@ fn run(
                     Command::Paste(clip) => {
                         anyhow::ensure!(
                             !clip.formats.iter().any(ClipFormat::is_file_list)
-                                || clip.device_id == device,
-                            "此记录来自其他设备，仅含远端文件路径；请在来源设备复制文件"
+                                || store.can_copy_local_files(&clip)?,
+                            "文件历史仅能复制本机捕获的路径；请在本机重新复制源文件"
                         );
                         clipboard
                             .as_ref()
@@ -493,8 +506,8 @@ fn run(
                         anyhow::ensure!(
                             plain
                                 || !clip.formats.iter().any(ClipFormat::is_file_list)
-                                || clip.device_id == device,
-                            "此记录来自其他设备，仅含远端文件路径；请在来源设备复制文件"
+                                || store.can_copy_local_files(&clip)?,
+                            "文件历史仅能复制本机捕获的路径；请在本机重新复制源文件"
                         );
                         clipboard
                             .as_ref()

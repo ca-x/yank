@@ -3,7 +3,7 @@ mod controls;
 mod desktop;
 use crate::{
     network::{Association, Decision},
-    worker::{Command, Snapshot, Worker},
+    worker::{CaptureSource, Command, Snapshot, Worker},
 };
 use controls::{action, field, hint, surface, title, toggle};
 use nsh_base::{alert_dialog, theme};
@@ -58,6 +58,7 @@ struct Ui {
     selected: Signal<String>,
     prefs: Signal<Preferences>,
     drafts: Signal<HashMap<String, Draft>>,
+    preference_drafts: Signal<HashMap<&'static str, String>>,
     pending_float: Signal<Option<String>>,
     tray_anchor: Signal<Option<Bounds<Points>>>,
     picking: Signal<bool>,
@@ -93,6 +94,7 @@ impl Ui {
             selected: signal(String::new()),
             prefs: signal(Preferences::default()),
             drafts: signal(HashMap::new()),
+            preference_drafts: signal(HashMap::new()),
             pending_float: signal(None),
             tray_anchor: signal(None),
             picking: signal(false),
@@ -350,6 +352,14 @@ pub fn app() -> impl IntoElement {
         }
     };
     let ui = Ui::new(worker);
+    let appearance = ui.clone();
+    effect(move || {
+        set_color_scheme(match appearance.prefs.get().theme.as_str() {
+            "dark" => Appearance::Dark,
+            "light" => Appearance::Light,
+            _ => Appearance::System,
+        })
+    });
     desktop::install(ui.clone());
     let back = ui.clone();
     on_back_press(move || back.back());
@@ -859,6 +869,11 @@ fn header(ui: Ui) -> impl IntoElement {
         }))
 }
 fn capture_now(ui: Ui) {
+    let source = if is_desktop() {
+        CaptureSource::System
+    } else {
+        CaptureSource::Foreground
+    };
     spawn(async move {
         let value = clipboard_string().await;
         let files = if is_desktop() {
@@ -867,13 +882,12 @@ fn capture_now(ui: Ui) {
             Vec::new()
         };
         if !files.is_empty() {
-            ui.send(Command::Capture(Clip::from_formats(
-                "",
-                &files.join("\n"),
-                vec![ClipFormat::file_list(&files)],
-            )));
+            ui.send(Command::Capture(
+                Clip::from_formats("", &files.join("\n"), vec![ClipFormat::file_list(&files)]),
+                source,
+            ));
         } else if !value.is_empty() {
-            ui.send(Command::Capture(Clip::text("", &value)));
+            ui.send(Command::Capture(Clip::text("", &value), source));
         } else {
             ui.notice.set(
                 if is_desktop() {
@@ -1199,14 +1213,13 @@ fn devices(ui: Ui) -> impl IntoElement {
                     .child(hint("本机设备码"))
                     .child(
                         text(move || {
-                            identity
-                                .worker
-                                .shared
-                                .identity
-                                .lock()
-                                .ok()
-                                .and_then(|p| p.as_ref().map(|p| p.code.clone()))
-                                .unwrap_or_else(|| "正在生成…".into())
+                            identity.snapshot.with(|snapshot| {
+                                snapshot
+                                    .as_ref()
+                                    .and_then(|snapshot| snapshot.identity.as_ref())
+                                    .map(|peer| peer.code.clone())
+                                    .unwrap_or_else(|| "正在生成…".into())
+                            })
                         })
                         .text_2xl()
                         .font_weight(FontWeight::SEMIBOLD)
@@ -1409,8 +1422,6 @@ fn confirm_pair(ui: Ui, peer: yank_core::Peer) {
     });
 }
 fn settings(ui: Ui) -> impl IntoElement {
-    let name = ui.clone();
-    let set_name = ui.clone();
     let server = ui.clone();
     let set_server = ui.clone();
     let username = ui.clone();
@@ -1422,10 +1433,6 @@ fn settings(ui: Ui) -> impl IntoElement {
     let guest = ui.clone();
     let upload = ui.clone();
     let set_upload = ui.clone();
-    let relay = ui.clone();
-    let set_relay = ui.clone();
-    let exclude = ui.clone();
-    let set_exclude = ui.clone();
     let mut choices = nsh_base::radio_group().gap_2();
     for (label, mode) in [
         ("默认中继", "relay"),
@@ -1455,20 +1462,15 @@ fn settings(ui: Ui) -> impl IntoElement {
     }
     let ditto = ui.clone();
     let set_ditto = ui.clone();
-    let ditto_listen = ui.clone();
-    let set_listen = ui.clone();
-    let ditto_password = ui.clone();
-    let set_ditto_password = ui.clone();
-    let remote = ui.clone();
-    let set_remote = ui.clone();
     let theme_ui = ui.clone();
+    let theme_label = ui.clone();
     let export = ui.clone();
     let import = ui.clone();
     scroll().flex_1().p_5().child(view().gap_5().max_w(px(760.0))
       .child(title("设置与账号"))
       .child(surface().child(title("这台设备"))
-        .child(field("设备名称",move||name.prefs.get().device_name,move|s|{let mut p=set_name.prefs.get();p.device_name=s.into();set_name.save(p);}))
-        .child(action("切换浅色 / 深色",false,move||{let mut p=theme_ui.prefs.get();p.theme=if p.theme=="dark"{"light"}else{"dark"}.into();set_color_scheme(if p.theme=="dark"{Appearance::Dark}else{Appearance::Light});theme_ui.save(p);})))
+        .child(pref_text(ui.clone(), "设备名称", "保存设备名称", |p|p.device_name.clone(), |p,v|p.device_name=v.into()))
+        .child(action(move||format!("外观：{}（点击切换）",match theme_label.prefs.get().theme.as_str(){"dark"=>"深色","light"=>"浅色",_=>"跟随系统"}),false,move||{let mut p=theme_ui.prefs.get();p.theme=match p.theme.as_str(){"system"=>"light","light"=>"dark",_=>"system"}.into();theme_ui.save(p);})))
       .child(surface().child(title("账号登录（可选）"))
         .child(hint("离线记录不需要账号。登录用于发现同账号设备；服务器存储仍需单独启用。"))
         .child(field("服务器地址，例如 https://yank.example.com",move||server.server.get(),move|s|set_server.server.set(s.into())))
@@ -1488,17 +1490,17 @@ fn settings(ui: Ui) -> impl IntoElement {
         .child(hint("默认关闭。关闭后不再上传新数据，已发出的请求可能完成；已有远端数据请在管理页删除。")))
       .child(surface().child(title("设备传输方式")).child(choices)
         .child(hint("仅直连不经过中继；自动模式尝试 NAT 穿透并保留中继回退。实际链路状态显示在窗口底部。"))
-        .child(field("中继地址（留空使用服务器提供的地址）",move||relay.prefs.get().relay_url,move|s|{let mut p=set_relay.prefs.get();p.relay_url=s.into();set_relay.save(p);})))
+        .child(pref_text(ui.clone(), "中继地址（留空使用服务器提供的地址）", "保存中继地址", |p|p.relay_url.clone(), |p,v|p.relay_url=v.into())))
       .child(surface().child(title("Ditto 插件（rutis）"))
         .child(toggle("接收 Ditto 推送",move||ditto.prefs.get().ditto_enabled,move|enabled|{let mut p=set_ditto.prefs.get();p.ditto_enabled=enabled;set_ditto.save(p);}))
-        .child(field("Ditto 监听地址",move||ditto_listen.prefs.get().ditto_listen,move|s|{let mut p=set_listen.prefs.get();p.ditto_listen=s.into();set_listen.save(p);}))
-        .child(field("Ditto 共享密码",move||ditto_password.prefs.get().ditto_password,move|s|{let mut p=set_ditto_password.prefs.get();p.ditto_password=s.into();set_ditto_password.save(p);}).masked(true))
-        .child(field("远端 Ditto 地址（主机:端口）",move||remote.prefs.get().ditto_remote,move|s|{let mut p=set_remote.prefs.get();p.ditto_remote=s.into();set_remote.save(p);}))
+        .child(pref_text(ui.clone(), "Ditto 监听地址", "保存 Ditto 监听地址", |p|p.ditto_listen.clone(), |p,v|p.ditto_listen=v.into()))
+        .child(pref_text(ui.clone(), "Ditto 共享密码", "保存 Ditto 共享密码", |p|p.ditto_password.clone(), |p,v|p.ditto_password=v.into()).masked(true))
+        .child(pref_text(ui.clone(), "远端 Ditto 地址（主机:端口）", "保存远端 Ditto 地址", |p|p.ditto_remote.clone(), |p,v|p.ditto_remote=v.into()))
         .child(hint("默认关闭，监听本机 23443。接收远端推送时，请在 Ditto 中填写本机可达地址和相同共享密码。")))
       .child(extra_preferences(ui.clone()))
       .child(surface().child(title("隐私与备份"))
         .child(hint("安卓采用前台手动记录，遵循系统剪贴板访问限制。排除表达式匹配的文字不会进入历史。"))
-        .child(field("排除内容的正则表达式（可留空）",move||exclude.prefs.get().exclude_pattern,move|s|{let mut p=set_exclude.prefs.get();p.exclude_pattern=s.into();set_exclude.save(p);}))
+        .child(pref_text(ui.clone(), "排除内容的正则表达式（可留空）", "保存排除正则", |p|p.exclude_pattern.clone(), |p,v|p.exclude_pattern=v.into()))
         .child(action("导出全部本地记录",false,move||{let u=export.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_save_path(nsh_core::file_dialog::SaveDialog::new().file_name("yank-backup.json")).await;u.picking.set(false);match result {Ok(Some(path))=>u.send(Command::Export(path)),Err(error)=>u.notice.set(format!("无法选择导出文件：{error}")),_=>{}}});}))
         .child(action("导入备份",false,move||{let u=import.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_paths(nsh_core::file_dialog::OpenDialog::files()).await;u.picking.set(false);match result {Ok(Some(paths))=>{if let Some(path)=paths.into_iter().next(){u.send(Command::Import(path));}},Err(error)=>u.notice.set(format!("无法选择导入文件：{error}")),_=>{}}});}).disabled({let ui=ui.clone();move||ui.pending()}))
         .child(recovery_controls(ui.clone()))
@@ -1695,18 +1697,44 @@ fn lists(ui: Ui) -> impl IntoElement {
 fn pref_text(
     ui: Ui,
     label: &'static str,
+    save_label: &'static str,
     get: fn(&Preferences) -> String,
     set: fn(&mut Preferences, &str),
 ) -> controls::Field {
     let read = ui.clone();
+    let edit = ui.clone();
+    let enabled = ui.clone();
     field(
         label,
-        move || get(&read.prefs.get()),
-        move |value| {
-            let mut p = ui.prefs.get();
-            set(&mut p, value);
-            ui.save(p);
+        move || {
+            read.preference_drafts
+                .with(|drafts| drafts.get(label).cloned())
+                .unwrap_or_else(|| get(&read.prefs.get()))
         },
+        move |value| {
+            edit.preference_drafts.update(|drafts| {
+                drafts.insert(label, value.into());
+            });
+        },
+    )
+    .action(
+        action(save_label, false, move || {
+            if let Some(value) = ui
+                .preference_drafts
+                .with(|drafts| drafts.get(label).cloned())
+            {
+                let mut prefs = ui.prefs.get();
+                set(&mut prefs, &value);
+                ui.save(prefs);
+            }
+        })
+        .disabled(move || {
+            let saved = get(&enabled.prefs.get());
+            enabled.pending()
+                || enabled
+                    .preference_drafts
+                    .with(|drafts| drafts.get(label).is_none_or(|draft| draft == &saved))
+        }),
     )
 }
 fn pref_toggle(
@@ -1730,7 +1758,7 @@ fn extra_preferences(ui: Ui) -> impl IntoElement {
     let mut panel = surface().child(title("剪贴板与备份设置"))
         .child(pref_toggle(ui.clone(), "后续远端变更写入系统剪贴板", |p|p.apply_remote, |p,v|p.apply_remote=v))
         .child(hint("首次历史同步不写入系统剪贴板。此开关控制后续远端内容变更；安卓受系统限制，仅支持前台手动复制。"))
-        .child(pref_text(ui.clone(), "排除的应用（每行一个）", |p|p.excluded_apps.clone(), |p,v|p.excluded_apps=v.into()).multiline(true))
+        .child(pref_text(ui.clone(), "排除的应用（每行一个）", "保存排除的应用", |p|p.excluded_apps.clone(), |p,v|p.excluded_apps=v.into()).multiline(true))
         .child(pref_toggle(ui.clone(), "每日自动备份", |p|p.backup_daily, |p,v|p.backup_daily=v));
     let read = ui.clone();
     let write = ui.clone();
@@ -1823,48 +1851,39 @@ fn extra_preferences(ui: Ui) -> impl IntoElement {
 }
 
 fn shortcut_preferences(ui: Ui) -> impl IntoElement {
-    let values = signal(ui.prefs.get());
     let mut fields = view().gap_3();
-    for (label, get, set) in [
+    for (label, save_label, get, set) in [
         (
             "显示面板快捷键",
+            "保存显示面板快捷键",
             (|p: &Preferences| p.hotkey_show.clone()) as fn(&Preferences) -> String,
             (|p: &mut Preferences, value: &str| p.hotkey_show = value.into())
                 as fn(&mut Preferences, &str),
         ),
         (
             "队列下一条快捷键",
+            "保存队列下一条快捷键",
             |p: &Preferences| p.hotkey_next.clone(),
             |p: &mut Preferences, value: &str| p.hotkey_next = value.into(),
         ),
         (
             "暂停记录快捷键",
+            "保存暂停记录快捷键",
             |p: &Preferences| p.hotkey_pause.clone(),
             |p: &mut Preferences, value: &str| p.hotkey_pause = value.into(),
         ),
         (
             "悬浮卡片快捷键",
+            "保存悬浮卡片快捷键",
             |p: &Preferences| p.hotkey_float.clone(),
             |p: &mut Preferences, value: &str| p.hotkey_float = value.into(),
         ),
     ] {
-        fields = fields.child(field(
-            label,
-            move || get(&values.get()),
-            move |value| values.update(|p| set(p, value)),
-        ));
+        fields = fields.child(pref_text(ui.clone(), label, save_label, get, set));
     }
-    fields
-        .child(hint("快捷键可留空以关闭；例如 mod+shift+v。修改后点保存。"))
-        .child(action("保存快捷键", false, move || {
-            let entered = values.get();
-            let mut prefs = ui.prefs.get();
-            prefs.hotkey_show = entered.hotkey_show;
-            prefs.hotkey_next = entered.hotkey_next;
-            prefs.hotkey_pause = entered.hotkey_pause;
-            prefs.hotkey_float = entered.hotkey_float;
-            ui.save(prefs);
-        }))
+    fields.child(hint(
+        "快捷键可留空以关闭；例如 mod+shift+v。各项修改后点击对应保存按钮。",
+    ))
 }
 
 fn recovery_controls(ui: Ui) -> impl IntoElement {

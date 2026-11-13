@@ -454,3 +454,55 @@ fn metadata_mutation_locks_before_reading_and_keeps_new_formats_recoverable() {
     assert!(clip.pinned);
     assert_eq!(clip.formats[0].html_value(), Some("<b>new rich</b>"));
 }
+
+#[test]
+fn remote_file_paths_cannot_gain_local_capability_by_forging_device_identity() {
+    let local = Store::memory().unwrap();
+    let peer = Store::memory().unwrap();
+    let files = Clip::from_formats(
+        "local-device",
+        "file",
+        vec![ClipFormat::file_list(&["/tmp/yank-fixture-file".into()])],
+    );
+    let owned = local.capture(files, "local-device").unwrap();
+    assert!(
+        !local.can_copy_local_files(&owned).unwrap(),
+        "data fields cannot grant OS file access"
+    );
+    local.authorize_local_files(&owned).unwrap();
+    assert!(local.can_copy_local_files(&owned).unwrap());
+    let restored_valid = Store::memory().unwrap();
+    restored_valid
+        .import(&local.export().unwrap(), "local-device")
+        .unwrap();
+    let restored_clip = restored_valid.list("", "all", 10, 0).unwrap().remove(0);
+    let restored_clip = restored_valid.get(&restored_clip.id).unwrap().unwrap();
+    assert!(
+        !restored_valid.can_copy_local_files(&restored_clip).unwrap(),
+        "even a currently valid local capability must not be exported"
+    );
+    peer.receive(std::slice::from_ref(&owned)).unwrap();
+    let mut forged = peer
+        .mutate(&owned.id, "peer", |c| {
+            c.formats = vec![ClipFormat::file_list(&["/tmp/yank-unobserved-path".into()])]
+        })
+        .unwrap();
+    forged.device_id = "local-device".into();
+    local.receive(&[forged]).unwrap();
+    let current = local.get(&owned.id).unwrap().unwrap();
+    assert_eq!(current.device_id, "local-device");
+    assert!(
+        !local.can_copy_local_files(&current).unwrap(),
+        "a peer cannot authorize another path by spoofing device_id"
+    );
+    let restored = Store::memory().unwrap();
+    restored
+        .import(&local.export().unwrap(), "local-device")
+        .unwrap();
+    let clip = restored.list("", "all", 10, 0).unwrap().remove(0);
+    let clip = restored.get(&clip.id).unwrap().unwrap();
+    assert!(
+        !restored.can_copy_local_files(&clip).unwrap(),
+        "backup cannot transfer local file capabilities"
+    );
+}

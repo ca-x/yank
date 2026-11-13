@@ -110,7 +110,9 @@ impl NativeClipboard {
         {
             clip.kind = "image".into();
         }
-        Ok(Some(store.capture(clip, device)?))
+        let clip = store.capture(clip, device)?;
+        store.authorize_local_files(&clip)?;
+        Ok(Some(clip))
     }
     pub fn write(&self, clip: &Clip, plain: bool) -> Result<()> {
         let mut contents = Vec::new();

@@ -66,7 +66,11 @@ pub fn field(
         .text_color(move || theme().foreground)
         .focus(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .min_w_0();
-    Field { label, control }
+    Field {
+        label,
+        control,
+        action: None,
+    }
 }
 
 pub fn toggle(
@@ -113,8 +117,13 @@ pub fn hint(label: impl IntoReactive<SharedString>) -> impl IntoElement {
 pub struct Field {
     label: &'static str,
     control: Input,
+    action: Option<ButtonElement>,
 }
 impl Field {
+    pub fn action(mut self, action: ButtonElement) -> Self {
+        self.action = Some(action);
+        self
+    }
     pub fn masked(mut self, value: bool) -> Self {
         self.control = self.control.masked(value);
         self
@@ -134,7 +143,7 @@ impl Field {
 }
 impl IntoElement for Field {
     fn into_element(self) -> AnyElement {
-        view()
+        let mut content = view()
             .gap_1()
             .min_w_0()
             .child(
@@ -142,7 +151,10 @@ impl IntoElement for Field {
                     .text_sm()
                     .text_color(move || theme().muted_foreground),
             )
-            .child(self.control)
-            .into_element()
+            .child(self.control);
+        if let Some(action) = self.action {
+            content = content.child(action);
+        }
+        content.into_element()
     }
 }

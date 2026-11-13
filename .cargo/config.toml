@@ -1,0 +1,7 @@
+# aes 0.8 opts into ARM intrinsics explicitly, then detects support at runtime
+# on these OSes. Do not force AES instructions on portable Android binaries.
+[target.aarch64-apple-darwin]
+rustflags = ["--cfg", "aes_armv8"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["--cfg", "aes_armv8"]

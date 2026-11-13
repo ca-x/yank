@@ -72,8 +72,9 @@ def main():
         if suffix:
             archive = out / f'{bundle.name}.zip'
             with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as stream:
-                for item in sorted(bundle.iterdir()):
-                    stream.write(item, f'{bundle.name}/{item.name}')
+                for item in sorted(bundle.rglob('*')):
+                    if item.is_file():
+                        stream.write(item, f'{bundle.name}/{item.relative_to(bundle).as_posix()}')
         else:
             archive = out / f'{bundle.name}.tar.gz'
             with tarfile.open(archive, 'w:gz') as stream:

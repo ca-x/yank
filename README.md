@@ -16,7 +16,7 @@
 
 Linux 发布 `.deb` 和包含独立 client/server 二进制的 `.tar.gz`。依赖 GTK 4.14+ 和 GStreamer，建议 Ubuntu 24.04 或兼容发行版。Windows/macOS 包未签名，macOS 未公证。Android APK 当前为 debug 签名测试包，不用于商店分发；跨构建升级可能需要先备份再重装。
 
-Android 采用前台手动捕获和复制，不承诺后台读取其他应用剪贴板。Wayland 上不能确认全局输入授权时只复制内容，提示用户手动粘贴。文件记录保存路径，本版不传输文件实体。更多已实现/待完成项见 [能力清单](docs/ditto-client-capability-matrix.md)。
+Android 采用前台手动捕获和复制，不承诺后台读取其他应用剪贴板。Wayland 上不能确认全局输入授权时只复制内容，提示用户手动粘贴。文件记录保存路径，本版不传输文件实体；只有本机实际捕获且内容未被改写的文件路径可写回，跨设备或导入的文件历史需在本机重新复制源文件。更多已实现/待完成项见 [能力清单](docs/ditto-client-capability-matrix.md)。
 
 ## 自托管
 

@@ -196,3 +196,24 @@ Git HEAD 为 `21d2753fe420fbd36de62f7c2e04757718802825`，存在大量已跟踪�
 2. **已完成：** 核对现有成功日志及覆盖缺口；将模型证据与实际 Rust/网络测试结果分开标注。
 3. **不适用：** 本轮没有授权修复、提交、推送或发布。
 4. **剩余发布门槛：** 实现修复并实际运行五类定向反例；当前报告不构成 release-ready 签字。
+
+## 附注：本地文件路径许可限定复核（2026-11-13）
+
+结论：**该有界修复未发现新增 P0/P1，可继续既定产物流程。** 本轮只读核查 core、clipboard、worker 的四处路径，仅追加本附注；未修改代码、重跑测试、提交或推送。定向历史检索未得到相关 Yank 约束，结论以当前源码为准。
+
+1. **本地许可：** `core/src/lib.rs` 的 authorize_local_files 只对 FileList 写入本地 metadata `local.files.<clip.id> = content_hash`；can_copy_local_files 同时绑定 ID 与完整 formats 序列的 SHA-256，校验不依赖可伪造的 device_id。同 ID 路径/格式字节变更即不匹配。许可不属于 Clip/Page/wire 字段；export 的 Backup 仅含 version、clips、views，import 不授权。全量本地数据库复制不在“export 备份不转移许可”的保证内。
+2. **授权来源：** NativeClipboard.capture 在真实 OS 采集后授权；worker 的 Command::Capture 仅 CaptureSource::System 授权。核对 UI 来源选择：桌面读取 OS files，mobile/foreground 不授予 System 来源；Ditto incoming、同步 receive、import 均未调用授权。核心 capture 本身不自动授权，避免把收到或导入的内容当作本机采集。
+3. **消费边界：** worker Copy/Paste 对 FileList 校验本地许可；Copy plain 可绕过许可检查，但 NativeClipboard.write 的 plain 路径跳过整个格式循环，仅输出文本，不写 Files。文件格式识别与 write 的 file_list_paths 使用同一 is_file_list 条件，没有看到格式别名绕过这道检查。
+4. **远端自动应用：** remoteClipboard 消费仍先拒绝任何 FileList，再写系统剪贴板，不因这次新增本地许可而自动放行远端文件路径。
+
+已阅读 `/tmp/yank-file-cap-tests.log`：core 单元 2、replication 21 全部通过，含 remote_file_paths_cannot_gain_local_capability_by_forging_device_identity。该反例证明普通 capture 不授权、本机显式授权可用、伪造 device_id 且改路径后许可失效。**测试覆盖小缺口（非实现阻塞）：** backup 断言导出时该记录已因路径变更失去有效许可；建议另在许可仍有效时 export/import 并断言目标无许可，才能直接防回归“有效 cap 随备份转移”。当前不转移的判断另有上述 Backup 结构与授权调用点的静态依据。本轮未做真实跨 OS 文件剪贴板验证，也未把此前 69 项 workspace 日志当作本补丁的全量验证。
+
+附注取证 SHA-256（本附注之后的修改需另核对）：
+
+| 文件 | SHA-256 |
+|---|---|
+| `crates/yank-core/src/lib.rs` | `bc072777aade862f5ce84e2124569ffa018767315cadb08c67f1f720e8dae9c1` |
+| `crates/yank-core/tests/replication.rs` | `3c5f03f6dc16589ee6b86971b71033aa619dc21080d75e97950e5dc45a550ef8` |
+| `crates/yank-client/src/clipboard.rs` | `a81cc5691c2aab2816b141e8549c720297b530d7091fb1f6f32699803353b680` |
+| `crates/yank-client/src/worker.rs` | `423bbdc3c38dcf3903a6750413a119aaa638c572112d2533e280b93134d12043` |
+| `/tmp/yank-file-cap-tests.log` | `be5a7cd382f40a838f9e84ad2344a559c8f04430aa08c614f192a978ecc73286` |

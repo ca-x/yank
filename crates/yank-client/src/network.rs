@@ -342,6 +342,19 @@ fn lan_daemon() -> Option<ServiceDaemon> {
     }
     Some(daemon)
 }
+struct Cadence {
+    next: Instant,
+    every: Duration,
+}
+impl Cadence {
+    fn ready(&mut self, now: Instant) -> bool {
+        if now < self.next {
+            return false;
+        }
+        self.next = now + self.every;
+        true
+    }
+}
 fn config_key(p: &Preferences) -> String {
     format!("{}|{}|{}|{}", p.mode, p.server_url, p.relay_url, p.token)
 }
@@ -381,7 +394,15 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
         .as_ref()
         .and_then(|m| m.browse("_yank-server._tcp.local.").ok());
     let mut registered = false;
-    let mut ticks = 0u64;
+    let now = Instant::now();
+    let mut announcements = Cadence {
+        next: now,
+        every: Duration::from_secs(15),
+    };
+    let mut exchanges = Cadence {
+        next: now,
+        every: Duration::from_secs(3),
+    };
     let mut incoming = tokio::task::JoinSet::new();
     let inbound_limit = Arc::new(tokio::sync::Semaphore::new(32));
     let mut jobs = tokio::task::JoinSet::new();
@@ -407,7 +428,7 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
         if let Ok(mut p) = shared.identity.lock() {
             *p = Some(peer.clone());
         }
-        if ticks.is_multiple_of(150) {
+        if announcements.ready(Instant::now()) {
             if let Some(m) = &mdns {
                 if registered {
                     let _ = m.unregister(&format!("{}.{}", peer.code, SERVICE));
@@ -537,7 +558,7 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
                 }
             }
         }
-        if ticks.is_multiple_of(30) {
+        if exchanges.ready(Instant::now()) {
             if let Ok(mut list) = shared.discovered.lock() {
                 list.retain(|_, p| p.seen.elapsed() < Duration::from_secs(90));
             }
@@ -592,7 +613,7 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
         while incoming.try_join_next().is_some() {}
         tokio::select! {
             value=endpoint.accept()=>{if let Some(value)=value{if let Ok(permit)=inbound_limit.clone().try_acquire_owned(){let state=shared.clone();incoming.spawn(async move{let _permit=permit;if let Ok(conn)=value.await{let _=tokio::time::timeout(Duration::from_secs(70),receive(conn,state)).await;}});}else{value.refuse();}}}
-            _=tokio::time::sleep(Duration::from_millis(100))=>{ticks+=1;}
+            _=tokio::time::sleep(Duration::from_millis(100))=>{}
         }
     }
     incoming.abort_all();
@@ -1171,6 +1192,30 @@ mod tests {
             .bind()
             .await
             .unwrap()
+    }
+    #[test]
+    fn periodic_work_is_independent_of_incoming_connection_frequency() {
+        let start = Instant::now();
+        let mut busy = Cadence {
+            next: start,
+            every: Duration::from_secs(3),
+        };
+        let mut idle = Cadence {
+            next: start,
+            every: Duration::from_secs(3),
+        };
+        let high_traffic = (0..=6000)
+            .filter(|ms| busy.ready(start + Duration::from_millis(*ms)))
+            .count();
+        let low_traffic = [0, 100, 2999, 3000, 6000]
+            .into_iter()
+            .filter(|ms| idle.ready(start + Duration::from_millis(*ms)))
+            .count();
+        assert_eq!(
+            high_traffic, 3,
+            "incoming accepts cannot repeatedly schedule the same heartbeat or stall time"
+        );
+        assert_eq!(high_traffic, low_traffic);
     }
     #[tokio::test]
     async fn drained_pair_intent_cannot_regrant_trust_after_unpair() {

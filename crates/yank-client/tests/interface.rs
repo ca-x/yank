@@ -43,6 +43,14 @@ struct Fixture {
 }
 impl Fixture {
     fn start(width: f32, desktop: bool, clips: Vec<Clip>) -> Result<Self, String> {
+        Self::start_with_clock(width, desktop, clips, false)
+    }
+    fn start_with_clock(
+        width: f32,
+        desktop: bool,
+        clips: Vec<Clip>,
+        manual_clock: bool,
+    ) -> Result<Self, String> {
         let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
         let app_dir = directory.path().join("default");
         std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
@@ -70,6 +78,9 @@ impl Fixture {
             .map_err(|e| e.to_string())?;
         let mut config = EngineConfig::new(Root::of::<yank_client::App>());
         config.data_dir = Some(directory.path().to_path_buf());
+        if manual_clock {
+            config.clock = nsh_core::time::Clock::manual(std::time::SystemTime::UNIX_EPOCH);
+        }
         config.viewport = size(px(width), px(900.0));
         config.environment.os = if desktop { Os::Linux } else { Os::Ios };
         let mut app = Headless::start(config).map_err(|e| e.to_string())?;
@@ -234,6 +245,164 @@ fn headless_narrow_settings_exposes_exclusive_transport_and_saved_preferences() 
         );
         assert!(node.bounds.size.height.0 >= 48.0);
     }
+    Ok(())
+}
+
+fn wait_settings_snapshot(app: &mut Headless) -> Result<(), String> {
+    app.run_for(Duration::from_millis(450))
+}
+
+#[test]
+fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
+-> Result<(), String> {
+    let mut fixture = Fixture::start_with_clock(849.0, true, clips(), true)?;
+    let app = &mut fixture.app;
+    let label = "排除内容的正则表达式（可留空）";
+    app.press("设置")?;
+    app.wait_for(label)?;
+    assert!(!app.screen().enabled("保存排除正则")?);
+    app.type_text(label, "[")?;
+    wait_settings_snapshot(app)?;
+    let backup_daily = fixture.store.preferences().unwrap().backup_daily;
+    app.press("每日自动备份")?;
+    app.wait_until(
+        "toggle snapshot while regex is unfinished",
+        Duration::from_secs(3),
+        |_| fixture.store.preferences().unwrap().backup_daily != backup_daily,
+    )?;
+    wait_settings_snapshot(app)?;
+    assert_eq!(fixture.store.preferences().unwrap().exclude_pattern, "");
+    assert_eq!(app.screen().input_text(label)?, Some("["));
+    assert!(
+        !app.screen()
+            .texts()
+            .iter()
+            .any(|s| s.contains("regex parse error")),
+        "typing an unfinished expression must not submit it"
+    );
+    app.press("保存排除正则")?;
+    app.wait_until("invalid regex rejected", Duration::from_secs(3), |s| {
+        s.texts().iter().any(|s| s.contains("regex parse error"))
+    })?;
+    assert_eq!(fixture.store.preferences().unwrap().exclude_pattern, "");
+    assert_eq!(app.screen().input_text(label)?, Some("["));
+    assert!(
+        app.screen().enabled("保存排除正则")?,
+        "a rejected draft must remain available to retry"
+    );
+    app.back()?;
+    app.press("设置")?;
+    wait_input(app, label, "[")?;
+    app.type_text(label, "ab]")?;
+    wait_settings_snapshot(app)?;
+    assert_eq!(fixture.store.preferences().unwrap().exclude_pattern, "");
+    app.press("保存排除正则")?;
+    app.wait_until("complete regex saved", Duration::from_secs(3), |_| {
+        fixture.store.preferences().unwrap().exclude_pattern == "[ab]"
+    })?;
+    wait_settings_snapshot(app)?;
+    assert_eq!(app.screen().input_text(label)?, Some("[ab]"));
+    assert!(
+        !app.screen().enabled("保存排除正则")?,
+        "a saved draft must disable its save button"
+    );
+    Ok(())
+}
+
+#[test]
+fn headless_settings_text_drafts_do_not_leak_into_toggle_saves() -> Result<(), String> {
+    let mut fixture = Fixture::start_with_clock(849.0, true, clips(), true)?;
+    let app = &mut fixture.app;
+    app.press("设置")?;
+    app.wait_for("显示面板快捷键")?;
+    let original = fixture.store.preferences().unwrap();
+    app.clear("显示面板快捷键")?;
+    for part in ["m", "od+", "shift+k"] {
+        app.type_text("显示面板快捷键", part)?;
+        wait_settings_snapshot(app)?;
+        assert_eq!(
+            fixture.store.preferences().unwrap().hotkey_show,
+            original.hotkey_show
+        );
+    }
+    let fields = [
+        (
+            "中继地址（留空使用服务器提供的地址）",
+            "保存中继地址",
+            "ws://127.0.0.1:9",
+            (|p: &Preferences| p.relay_url.clone()) as fn(&Preferences) -> String,
+        ),
+        (
+            "Ditto 监听地址",
+            "保存 Ditto 监听地址",
+            "127.0.0.1:23444",
+            |p: &Preferences| p.ditto_listen.clone(),
+        ),
+        (
+            "Ditto 共享密码",
+            "保存 Ditto 共享密码",
+            "secret",
+            |p: &Preferences| p.ditto_password.clone(),
+        ),
+        (
+            "远端 Ditto 地址（主机:端口）",
+            "保存远端 Ditto 地址",
+            "host:23443",
+            |p: &Preferences| p.ditto_remote.clone(),
+        ),
+        (
+            "排除的应用（每行一个）",
+            "保存排除的应用",
+            "Editor\nTerminal",
+            |p: &Preferences| p.excluded_apps.clone(),
+        ),
+    ];
+    for (label, _, value, get) in fields {
+        app.clear(label)?;
+        let first = &value[..1];
+        app.type_text(label, first)?;
+        wait_settings_snapshot(app)?;
+        assert_eq!(
+            get(&fixture.store.preferences().unwrap()),
+            get(&original),
+            "prefix of {label} reached the database"
+        );
+        assert_eq!(app.screen().input_text(label)?, Some(first));
+        app.type_text(label, &value[1..])?;
+    }
+    app.press("每日自动备份")?;
+    app.wait_until("toggle saved immediately", Duration::from_secs(3), |_| {
+        fixture.store.preferences().unwrap().backup_daily != original.backup_daily
+    })?;
+    wait_settings_snapshot(app)?;
+    for (label, _, value, get) in fields {
+        assert_eq!(
+            get(&fixture.store.preferences().unwrap()),
+            get(&original),
+            "toggle saved the draft for {label}"
+        );
+        assert_eq!(app.screen().input_text(label)?, Some(value));
+    }
+    assert_eq!(
+        fixture.store.preferences().unwrap().hotkey_show,
+        original.hotkey_show
+    );
+    assert_eq!(
+        app.screen().input_text("显示面板快捷键")?,
+        Some("mod+shift+k")
+    );
+    for (_, save, value, get) in fields {
+        app.press(save)?;
+        app.wait_until(
+            "complete text preference saved",
+            Duration::from_secs(3),
+            |_| get(&fixture.store.preferences().unwrap()) == value,
+        )?;
+    }
+    app.press("保存显示面板快捷键")?;
+    app.wait_until("complete shortcut saved", Duration::from_secs(3), |_| {
+        fixture.store.preferences().unwrap().hotkey_show == "mod+shift+k"
+    })?;
     Ok(())
 }
 

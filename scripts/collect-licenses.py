@@ -24,7 +24,7 @@ def collect(destination: Path):
             files.add(path if path.is_absolute() else root / path)
         for path in sorted(files):
             if path.is_file() and path.stat().st_size < 2_000_000:
-                parts.append(f'\n--- {path.name} ---\n' + path.read_text(errors='replace') + '\n')
+                parts.append(f'\n--- {path.name} ---\n' + path.read_text(encoding='utf-8', errors='replace') + '\n')
     destination.write_text(''.join(parts), encoding='utf-8')
 
 
