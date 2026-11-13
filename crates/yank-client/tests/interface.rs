@@ -31,7 +31,7 @@ fn mobile_navigation_keeps_pairing_independent_of_accounts() -> Result<(), Strin
 use nsh_core::{
     Checked,
     platform::Os,
-    prelude::{px, size},
+    prelude::{component, px, size},
 };
 use std::time::Duration;
 use yank_core::{Clip, ClipFormat, Preferences, SavedView, Store};
@@ -107,6 +107,63 @@ fn wait_input(app: &mut Headless, label: &str, value: &str) -> Result<(), String
     app.wait_until("hydrated editor value", Duration::from_secs(3), |screen| {
         screen.input_text(label).ok().flatten() == Some(value)
     })
+}
+
+// Persisted state can change without producing a new UI batch. Poll it on a
+// bounded cadence and check once more at the deadline, rather than relying on
+// Headless::wait_until's UI-event wakeups for an external database predicate.
+fn wait_store(app: &mut Headless, what: &str, done: impl Fn() -> bool) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if done() {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "{what}: database condition still false after 3000 ms"
+            ));
+        }
+        let slice = remaining.min(Duration::from_millis(20));
+        if app.clock().is_manual() {
+            app.run_for(slice)?;
+        } else {
+            let _ = app.next_batch(slice);
+        }
+    }
+}
+
+#[component]
+fn QuietWaitScreen() -> impl nsh_core::prelude::IntoElement {
+    nsh_core::prelude::text("No UI updates")
+}
+
+#[test]
+fn persisted_state_wait_does_not_require_ui_updates() -> Result<(), String> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    for manual in [false, true] {
+        let mut config = EngineConfig::new(Root::of::<QuietWaitScreen>());
+        if manual {
+            config.clock = nsh_core::time::Clock::manual(std::time::SystemTime::UNIX_EPOCH);
+        }
+        let mut app = Headless::start(config).map_err(|e| e.to_string())?;
+        app.wait_for("No UI updates")?;
+        let changed = Arc::new(AtomicBool::new(false));
+        let writer = changed.clone();
+        let task = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            writer.store(true, Ordering::SeqCst);
+        });
+        let result = wait_store(&mut app, "external state changed on a quiet screen", || {
+            changed.load(Ordering::SeqCst)
+        });
+        task.join().map_err(|_| "external writer panicked")?;
+        result?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -204,7 +261,7 @@ fn headless_narrow_settings_exposes_exclusive_transport_and_saved_preferences() 
             .checked,
         Some(Checked::False)
     );
-    app.wait_until("saved transport", Duration::from_secs(3), |_| {
+    wait_store(app, "saved transport", || {
         fixture.store.preferences().unwrap().mode == "auto"
     })?;
     for label in [
@@ -224,7 +281,7 @@ fn headless_narrow_settings_exposes_exclusive_transport_and_saved_preferences() 
         assert!(app.shows(label), "missing preference {label}");
     }
     app.press("后续远端变更写入系统剪贴板")?;
-    app.wait_until("remote apply disabled", Duration::from_secs(3), |_| {
+    wait_store(app, "remote apply disabled", || {
         !fixture.store.preferences().unwrap().apply_remote
     })?;
     app.set_viewport(size(px(390.0), px(900.0)))?;
@@ -265,11 +322,9 @@ fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
     wait_settings_snapshot(app)?;
     let backup_daily = fixture.store.preferences().unwrap().backup_daily;
     app.press("每日自动备份")?;
-    app.wait_until(
-        "toggle snapshot while regex is unfinished",
-        Duration::from_secs(3),
-        |_| fixture.store.preferences().unwrap().backup_daily != backup_daily,
-    )?;
+    wait_store(app, "toggle snapshot while regex is unfinished", || {
+        fixture.store.preferences().unwrap().backup_daily != backup_daily
+    })?;
     wait_settings_snapshot(app)?;
     assert_eq!(fixture.store.preferences().unwrap().exclude_pattern, "");
     assert_eq!(app.screen().input_text(label)?, Some("["));
@@ -297,7 +352,7 @@ fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
     wait_settings_snapshot(app)?;
     assert_eq!(fixture.store.preferences().unwrap().exclude_pattern, "");
     app.press("保存排除正则")?;
-    app.wait_until("complete regex saved", Duration::from_secs(3), |_| {
+    wait_store(app, "complete regex saved", || {
         fixture.store.preferences().unwrap().exclude_pattern == "[ab]"
     })?;
     wait_settings_snapshot(app)?;
@@ -371,7 +426,7 @@ fn headless_settings_text_drafts_do_not_leak_into_toggle_saves() -> Result<(), S
         app.type_text(label, &value[1..])?;
     }
     app.press("每日自动备份")?;
-    app.wait_until("toggle saved immediately", Duration::from_secs(3), |_| {
+    wait_store(app, "toggle saved immediately", || {
         fixture.store.preferences().unwrap().backup_daily != original.backup_daily
     })?;
     wait_settings_snapshot(app)?;
@@ -393,14 +448,12 @@ fn headless_settings_text_drafts_do_not_leak_into_toggle_saves() -> Result<(), S
     );
     for (_, save, value, get) in fields {
         app.press(save)?;
-        app.wait_until(
-            "complete text preference saved",
-            Duration::from_secs(3),
-            |_| get(&fixture.store.preferences().unwrap()) == value,
-        )?;
+        wait_store(app, "complete text preference saved", || {
+            get(&fixture.store.preferences().unwrap()) == value
+        })?;
     }
     app.press("保存显示面板快捷键")?;
-    app.wait_until("complete shortcut saved", Duration::from_secs(3), |_| {
+    wait_store(app, "complete shortcut saved", || {
         fixture.store.preferences().unwrap().hotkey_show == "mod+shift+k"
     })?;
     Ok(())
@@ -440,11 +493,9 @@ fn headless_binary_fallback_can_change_collection_without_changing_formats() -> 
     app.clear("收藏板名称")?;
     app.type_text("收藏板名称", "Binary board")?;
     app.press("保存编辑")?;
-    app.wait_until(
-        "binary collection persisted",
-        Duration::from_secs(3),
-        |_| fixture.store.get(&original.id).unwrap().unwrap().collection == "Binary board",
-    )?;
+    wait_store(app, "binary collection persisted", || {
+        fixture.store.get(&original.id).unwrap().unwrap().collection == "Binary board"
+    })?;
     let saved = fixture
         .store
         .get(&original.id)
@@ -628,7 +679,7 @@ fn headless_tray_click_places_panel_at_anchor_and_falls_back_without_coordinates
     let app = &mut fixture.app;
     app.press("设置")?;
     app.press("托盘附近")?;
-    app.wait_until("tray position persisted", Duration::from_secs(3), |_| {
+    wait_store(app, "tray position persisted", || {
         fixture.store.preferences().unwrap().panel_position == "tray"
     })?;
     let click = app
