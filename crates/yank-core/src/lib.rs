@@ -8,6 +8,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const APP_NAME: &str = "yank";
+pub mod history;
+pub mod icons;
 pub const MAX_WIRE_BYTES: usize = 16 * 1024 * 1024;
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
@@ -298,12 +300,87 @@ pub struct Peer {
     pub code: String,
     pub address: PeerAddress,
 }
+/// Cleanup preferences belong to this replica; deletion mutations use normal sync.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupMode {
+    #[default]
+    Total,
+    PerType,
+}
+
+pub const CLIP_KINDS: [&str; 6] = ["text", "link", "image", "files", "code", "color"];
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CleanupPolicy {
+    pub enabled: bool,
+    pub mode: CleanupMode,
+    /// Limits count live, unpinned clips; favorites never consume this budget.
+    pub max_items: u32,
+    pub per_type: BTreeMap<String, u32>,
+}
+
+impl Default for CleanupPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: CleanupMode::Total,
+            max_items: 1000,
+            per_type: CLIP_KINDS
+                .into_iter()
+                .map(|kind| (kind.into(), 200))
+                .collect(),
+        }
+    }
+}
+
+impl CleanupPolicy {
+    pub fn validate(&self) -> Result<()> {
+        if !(1..=1_000_000).contains(&self.max_items)
+            || self.per_type.iter().any(|(kind, count)| {
+                !CLIP_KINDS.contains(&kind.as_str()) || !(1..=1_000_000).contains(count)
+            })
+            || (self.mode == CleanupMode::PerType
+                && CLIP_KINDS
+                    .iter()
+                    .any(|kind| !self.per_type.contains_key(*kind)))
+        {
+            return Err(Error::Invalid(
+                "Cleanup limits must be between 1 and 1000000 for every selected type".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseBehavior {
+    #[default]
+    Ask,
+    Minimize,
+    Quit,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowStyle {
+    #[default]
+    System,
+    TrafficLights,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub auto_update: bool,
     pub launch_at_login: bool,
+    pub close_behavior: CloseBehavior,
+    pub window_style: WindowStyle,
+    pub history_range: history::HistoryRange,
     pub retention_days: u32,
+    pub cleanup: CleanupPolicy,
     pub backup_daily: bool,
     pub excluded_apps: String,
     pub panel_position: String,
@@ -337,7 +414,11 @@ impl Default for Preferences {
         Self {
             auto_update: false,
             launch_at_login: false,
+            close_behavior: CloseBehavior::Ask,
+            window_style: WindowStyle::System,
+            history_range: history::HistoryRange::default(),
             retention_days: 0,
+            cleanup: CleanupPolicy::default(),
             backup_daily: true,
             excluded_apps: String::new(),
             panel_position: "center".into(),
@@ -392,11 +473,13 @@ impl Store {
           CREATE TABLE IF NOT EXISTS conflicts(id TEXT PRIMARY KEY,clip_id TEXT NOT NULL,body TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS peers(id TEXT PRIMARY KEY,body TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS clips_search ON clips(deleted,pinned DESC,updated DESC,id);
-          CREATE INDEX IF NOT EXISTS clips_hash ON clips(hash);")?;
+          CREATE INDEX IF NOT EXISTS clips_hash ON clips(hash);
+          CREATE INDEX IF NOT EXISTS clips_cleanup ON clips(deleted,pinned,kind,updated DESC,id DESC);")?;
         conn.execute(
             "INSERT OR IGNORE INTO metadata VALUES('epoch',?1)",
             [new_id()],
         )?;
+        history::init(&conn)?;
         let store = Self { conn };
         if store.value("default_views_initialized")?.is_none() {
             let tx = write_transaction(&store.conn)?;
@@ -484,7 +567,12 @@ impl Store {
     }
     fn write(&self, clip: &Clip) -> Result<()> {
         let body = self.pack(clip)?;
-        self.conn.execute("INSERT INTO clips VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET body=excluded.body,deleted=excluded.deleted,pinned=excluded.pinned,kind=excluded.kind,collection=excluded.collection,search=excluded.search,updated=excluded.updated,hash=excluded.hash", params![clip.id,body,clip.deleted,clip.pinned,clip.kind,clip.collection,format!("{} {} {}",clip.description,clip.text,clip.collection),clip.updated_at,clip.content_hash()])?;
+        self.conn.execute("INSERT INTO clips(id,body,deleted,pinned,kind,collection,search,updated,hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET body=excluded.body,deleted=excluded.deleted,pinned=excluded.pinned,kind=excluded.kind,collection=excluded.collection,search=excluded.search,updated=excluded.updated,hash=excluded.hash", params![clip.id,body,clip.deleted,clip.pinned,clip.kind,clip.collection,format!("{} {} {}",clip.description,clip.text,clip.collection),clip.updated_at,clip.content_hash()])?;
+        let rank = self.next_history_rank()?;
+        self.conn.execute(
+            "UPDATE clips SET recency=?2,activity_at=MAX(activity_at,updated) WHERE id=?1",
+            params![clip.id, rank],
+        )?;
         self.conn.execute(
             "INSERT INTO changes(clip_id,body) VALUES(?1,?2)",
             params![clip.id, body],
@@ -740,6 +828,7 @@ impl Store {
             .unwrap_or_else(|| Ok(Preferences::default()))
     }
     pub fn save_preferences(&self, prefs: &Preferences) -> Result<()> {
+        prefs.cleanup.validate()?;
         self.set_value("preferences", &serde_json::to_string(prefs)?)
     }
     pub fn peers(&self) -> Result<Vec<Peer>> {
@@ -930,20 +1019,83 @@ impl Store {
             .query_map([], |r| r.get(0))?
             .collect::<std::result::Result<_, _>>()?)
     }
+    /// Select victims and append their tombstones/outbox mutations under one write lock.
+    /// A bounded batch keeps capture and incoming synchronization responsive.
+    pub fn cleanup(&self, policy: &CleanupPolicy, days: u32, device: &str) -> Result<usize> {
+        policy.validate()?;
+        if !policy.enabled {
+            return Ok(0);
+        }
+        self.cleanup_batch(Some(policy), days, device)
+    }
+
+    /// Legacy age-only maintenance, retained for callers that explicitly request expiry.
     pub fn expire(&self, days: u32, device: &str) -> Result<usize> {
         if days == 0 {
             return Ok(0);
         }
-        let cutoff = now_ts() - i64::from(days) * 86400;
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM clips WHERE deleted=0 AND pinned=0 AND updated<?1 LIMIT 200",
-        )?;
-        let ids: Vec<String> = stmt
-            .query_map([cutoff], |r| r.get(0))?
-            .collect::<std::result::Result<_, _>>()?;
-        for id in &ids {
-            self.mutate(id, device, |c| c.deleted = true)?;
+        self.cleanup_batch(None, days, device)
+    }
+
+    fn cleanup_batch(
+        &self,
+        policy: Option<&CleanupPolicy>,
+        days: u32,
+        device: &str,
+    ) -> Result<usize> {
+        let tx = write_transaction(&self.conn)?;
+        let mut ids = std::collections::BTreeSet::new();
+        if days > 0 {
+            let cutoff = now_ts().saturating_sub(i64::from(days) * 86400);
+            let mut stmt = self.conn.prepare(
+                "SELECT id FROM clips WHERE deleted=0 AND pinned=0 AND updated<?1 ORDER BY updated,id LIMIT 200",
+            )?;
+            ids.extend(
+                stmt.query_map([cutoff], |row| row.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
         }
+        if let Some(policy) = policy {
+            match policy.mode {
+                CleanupMode::Total => {
+                    let mut stmt = self.conn.prepare(
+                        "SELECT id FROM clips WHERE deleted=0 AND pinned=0 ORDER BY updated DESC,id DESC LIMIT 200 OFFSET ?1",
+                    )?;
+                    for id in stmt.query_map([policy.max_items], |row| row.get::<_, String>(0))? {
+                        if ids.len() == 200 {
+                            break;
+                        }
+                        ids.insert(id?);
+                    }
+                }
+                CleanupMode::PerType => {
+                    let mut stmt = self.conn.prepare(
+                        "SELECT id FROM clips WHERE deleted=0 AND pinned=0 AND kind=?1 ORDER BY updated DESC,id DESC LIMIT 200 OFFSET ?2",
+                    )?;
+                    for (kind, count) in &policy.per_type {
+                        for id in
+                            stmt.query_map(params![kind, count], |row| row.get::<_, String>(0))?
+                        {
+                            if ids.len() == 200 {
+                                break;
+                            }
+                            ids.insert(id?);
+                        }
+                        if ids.len() == 200 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        for id in &ids {
+            let mut clip = self
+                .get(id)?
+                .ok_or_else(|| Error::Invalid("Cleanup candidate disappeared".into()))?;
+            clip.deleted = true;
+            self.save_local_record(clip, device)?;
+        }
+        tx.commit()?;
         Ok(ids.len())
     }
 }

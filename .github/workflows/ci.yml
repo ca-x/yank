@@ -48,6 +48,9 @@ jobs:
       - name: Install NSH Linux dependencies
         if: runner.os == 'Linux'
         run: bash scripts/package-linux-deps.sh
+      - name: Management UI localization tests
+        if: runner.os == 'Linux'
+        run: node --test crates/yank-server/web/i18n.test.cjs
       - name: Format
         run: cargo fmt --all --check
       - name: Check all targets

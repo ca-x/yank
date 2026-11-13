@@ -9,6 +9,7 @@ Yank source is available under MIT OR Apache-2.0. Dependencies retain their own 
 - SQLite/rusqlite: local and per-account storage.
 - clipboard-rs, active-win-pos-rs and enigo: desktop clipboard, active-window metadata and authorized input integration.
 - self_update and auto-launch: optional desktop updates and login startup.
+- Kubai Icons: bundled static SVG icons, MIT. Exact source revision, selected icons and export palette are recorded in `assets/icons/SOURCE.json`; the upstream notice is in `assets/icons/LICENSE` and included in desktop release notices. No React runtime or remote CDN is required.
 
 Clips (https://clips.5km.tech/) is a functional/UI research reference only. Its implementation, branding and assets are not bundled. Yank has independent storage and synchronization semantics. WeChat input-method integration is excluded from this release.
 

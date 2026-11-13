@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2.5 -5.5 36 36" width="28" height="28" fill="none"><metadata>MIT License
+
+Copyright (c) 2026 Kubai087 and the Kubai Icons contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</metadata><defs><linearGradient id="loS-ki-list-ordered" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#84B7A8"/><stop offset="1" stop-color="#6DAA98"/></linearGradient><linearGradient id="upS-ki-list-ordered" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C5DDD6"/><stop offset="1" stop-color="#A2C8BD"/></linearGradient><filter id="sh-ki-list-ordered" x="-40%" y="-40%" width="180%" height="190%" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/><feOffset dy="2"/><feGaussianBlur stdDeviation="2"/><feComposite in2="hardAlpha" operator="out"/><feColorMatrix type="matrix" values="0 0 0 0 0.4784 0 0 0 0 0.698 0 0 0 0 0.6275 0 0 0 0.21 0"/><feBlend in2="BackgroundImageFix" mode="normal" result="shadow"/><feBlend in="SourceGraphic" in2="shadow" mode="normal"/></filter><filter id="hi-ki-list-ordered" x="-10%" y="-10%" width="120%" height="130%" color-interpolation-filters="sRGB"><feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="a"/><feOffset in="a" dy="0.7"/><feGaussianBlur stdDeviation="0.35"/><feComposite in2="a" operator="arithmetic" k2="-1" k3="1"/><feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0"/><feBlend in2="SourceGraphic" mode="overlay"/></filter><mask id="ol-ki-list-ordered-0" maskUnits="userSpaceOnUse" x="-40" y="-40" width="111" height="109"><rect x="-40" y="-40" width="111" height="109" fill="#fff"/><path d="M5.2 4.4Q5.2 2.2 7.4 2.2L23.6 2.2Q25.8 2.2 25.8 4.4L25.8 20.6Q25.8 22.8 23.6 22.8L7.4 22.8Q5.2 22.8 5.2 20.6Z" fill="#000"/></mask></defs><path d="M5.2 4.4Q5.2 2.2 7.4 2.2L23.6 2.2Q25.8 2.2 25.8 4.4L25.8 20.6Q25.8 22.8 23.6 22.8L7.4 22.8Q5.2 22.8 5.2 20.6Z" fill="none" stroke-width="1" stroke="url(#loS-ki-list-ordered)"/><g filter="url(#sh-ki-list-ordered)"><g filter="url(#hi-ki-list-ordered)"><path d="M5.2 4.4Q5.2 2.2 7.4 2.2L23.6 2.2Q25.8 2.2 25.8 4.4L25.8 20.6Q25.8 22.8 23.6 22.8L7.4 22.8Q5.2 22.8 5.2 20.6Z" fill="url(#loS-ki-list-ordered)"/></g></g><path d="M5.2 4.4Q5.2 2.2 7.4 2.2L23.6 2.2Q25.8 2.2 25.8 4.4L25.8 20.6Q25.8 22.8 23.6 22.8L7.4 22.8Q5.2 22.8 5.2 20.6Z" mask="url(#ol-ki-list-ordered-0)" fill="none" stroke-width="2" stroke="#3B8D74"/><text x="9.6" y="9.35" text-anchor="middle" font-size="5" font-weight="700" fill="#FFFFFF" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif">1</text><text x="9.6" y="14.25" text-anchor="middle" font-size="5" font-weight="700" fill="#FFFFFF" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif">2</text><text x="9.6" y="19.15" text-anchor="middle" font-size="5" font-weight="700" fill="#FFFFFF" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif">3</text><path fill="#FFFFFF" d="M12.8 7.6Q12.8 6.4 14 6.4L18 6.4Q19.2 6.4 19.2 7.6L19.2 7.6Q19.2 8.8 18 8.8L14 8.8Q12.8 8.8 12.8 7.6Z"/><path fill="#FFFFFF" d="M12.8 12.5Q12.8 11.3 14 11.3L20.8 11.3Q22 11.3 22 12.5L22 12.5Q22 13.7 20.8 13.7L14 13.7Q12.8 13.7 12.8 12.5Z"/><path fill="#FFFFFF" d="M12.8 17.4Q12.8 16.2 14 16.2L19.4 16.2Q20.6 16.2 20.6 17.4L20.6 17.4Q20.6 18.6 19.4 18.6L14 18.6Q12.8 18.6 12.8 17.4Z"/></svg>

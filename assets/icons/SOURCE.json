@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/kubai087/kubai-icons",
+  "revision": "c583030f168294d0e1926e1e7a4fbcf4ee0676ae",
+  "variant": "color",
+  "accent": "#3b8d74",
+  "icons": [
+    "clipboard",
+    "star",
+    "monitor",
+    "list-ordered",
+    "settings",
+    "file-text",
+    "link",
+    "image",
+    "folder",
+    "code",
+    "palette",
+    "trash",
+    "search",
+    "checkbox",
+    "arrow-right",
+    "users",
+    "rotate-cw",
+    "download",
+    "copy",
+    "shield-check"
+  ]
+}

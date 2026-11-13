@@ -1,11 +1,12 @@
 //! Responsive, content-first native clipboard workspace.
 mod controls;
 mod desktop;
+use crate::l10n::text;
 use crate::{
     network::{Association, Decision},
     worker::{CaptureSource, Command, Snapshot, Worker},
 };
-use controls::{action, field, hint, surface, title, toggle};
+use controls::{action, field, hint, icon_action, nav_action, surface, title, toggle};
 use nsh_base::{alert_dialog, theme};
 use nsh_core::{platform::Appearance, prelude::*};
 use std::{collections::HashMap, rc::Rc, sync::atomic::Ordering, time::Duration};
@@ -61,6 +62,8 @@ struct Ui {
     prefs: Signal<Preferences>,
     drafts: Signal<HashMap<String, Draft>>,
     preference_drafts: Signal<HashMap<&'static str, String>>,
+    cleanup_draft: Signal<CleanupDraft>,
+    cleanup_edited: Signal<bool>,
     pending_float: Signal<Option<String>>,
     tray_anchor: Signal<Option<Bounds<Points>>>,
     picking: Signal<bool>,
@@ -83,9 +86,18 @@ struct Ui {
     code: Signal<String>,
     limit: Signal<u32>,
     prompting: Signal<bool>,
+    close_prompting: Signal<bool>,
+    close_after_save: Signal<Option<yank_core::CloseBehavior>>,
 }
 impl Ui {
     fn new(worker: Rc<Worker>) -> Self {
+        let initial = worker
+            .shared
+            .prefs
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or_default();
+        crate::l10n::init(initial.language.clone());
         Self {
             worker,
             busy: signal(String::new()),
@@ -96,7 +108,9 @@ impl Ui {
             history_list: element_ref(),
             filter: signal("all".into()),
             selected: signal(String::new()),
-            prefs: signal(Preferences::default()),
+            cleanup_draft: signal(CleanupDraft::from_prefs(&initial)),
+            cleanup_edited: signal(false),
+            prefs: signal(initial),
             drafts: signal(HashMap::new()),
             preference_drafts: signal(HashMap::new()),
             pending_float: signal(None),
@@ -117,6 +131,8 @@ impl Ui {
             code: signal(String::new()),
             limit: signal(100),
             prompting: signal(false),
+            close_prompting: signal(false),
+            close_after_save: signal(None),
         }
     }
 
@@ -251,6 +267,7 @@ impl Ui {
         let mut displayed = prefs.clone();
         // Enabling uploads becomes visible only after the worker validates and persists it.
         displayed.upload &= self.worker.shared.prefs.lock().is_ok_and(|p| p.upload);
+        crate::l10n::set(displayed.language.clone());
         self.prefs.set(displayed);
         self.send(Command::Save(prefs, 0));
     }
@@ -284,18 +301,18 @@ impl Ui {
     fn feedback(&self) -> String {
         if self.pending() {
             return if self.picking.get() {
-                "请选择文件…".into()
+                crate::l10n::tr("请选择文件…")
             } else {
-                self.busy.get()
+                crate::l10n::render(&self.busy.get())
             };
         }
         let error = self
             .snapshot
             .with(|s| s.as_ref().map(|s| s.error.clone()).unwrap_or_default());
         if !error.is_empty() {
-            format!("操作失败：{error}")
+            crate::l10n::message("操作失败：{error}", &[("error", (error).to_string())])
         } else {
-            self.notice.get()
+            crate::l10n::render(&self.notice.get())
         }
     }
     fn back(&self) -> bool {
@@ -351,7 +368,10 @@ pub fn app() -> impl IntoElement {
         Err(error) => {
             return view()
                 .p_6()
-                .child(text(format!("无法打开本地资料库：{error}")))
+                .child(text(crate::l10n::message(
+                    "无法打开本地资料库：{error}",
+                    &[("error", (error).to_string())],
+                )))
                 .into_element();
         }
     };
@@ -419,6 +439,7 @@ pub fn app() -> impl IntoElement {
             if state.prefs.get().token != snapshot.prefs.token && !snapshot.prefs.token.is_empty() {
                 state.password.set(String::new());
             }
+            crate::l10n::set(snapshot.prefs.language.clone());
             state.prefs.set(snapshot.prefs.clone());
             if snapshot.query == state.query.get() && snapshot.filter == state.filter.get() {
                 if let Some(clip) = &snapshot.selected {
@@ -452,9 +473,9 @@ pub fn app() -> impl IntoElement {
                 state.recovery_path.set(Some(path.clone()));
                 state.prompting.set(true);
                 let ui = state.clone();
-                let answer = alert_dialog().title("本地历史文件不存在，恢复自动备份？")
-                    .description("仅恢复剪贴板历史，不包含账号或登录凭据。恢复失败后可以在设置中重试；等待恢复期间暂停自动采集和自动备份，保护原备份。")
-                    .cancel("empty", "暂不恢复，使用空资料库").action("restore", "恢复历史").show();
+                let answer = alert_dialog().title(crate::l10n::tr("本地历史文件不存在，恢复自动备份？"))
+                    .description(crate::l10n::tr("仅恢复剪贴板历史，不包含账号或登录凭据。恢复失败后可以在设置中重试；等待恢复期间暂停自动采集和自动备份，保护原备份。"))
+                    .cancel("empty", crate::l10n::tr("暂不恢复，使用空资料库")).action("restore", crate::l10n::tr("恢复历史")).show();
                 spawn(async move {
                     if answer
                         .await
@@ -484,17 +505,20 @@ pub fn app() -> impl IntoElement {
                 state.prompting.set(true);
                 let ui = state.clone();
                 let mut dialog = alert_dialog()
-                    .title(format!("与 {} 配对？", peer.name))
-                    .description(format!(
-                        "设备码 {}。确认后，这台设备可以收发你的剪贴板记录。",
-                        peer.code
-                    ))
-                    .cancel("reject", "拒绝")
-                    .action("pair", "仅设备互通");
+                    .title(crate::l10n::render(&crate::l10n::message(
+                        "与 {0} 配对？",
+                        &[("0", (peer.name).to_string())],
+                    )))
+                    .description(crate::l10n::render(&crate::l10n::message(
+                        "设备码 {0}。确认后，这台设备可以收发你的剪贴板记录。",
+                        &[("0", (peer.code).to_string())],
+                    )))
+                    .cancel("reject", crate::l10n::tr("拒绝"))
+                    .action("pair", crate::l10n::tr("仅设备互通"));
                 if invitation.is_some() {
-                    dialog = dialog.action("account", "配对并选择登录关联账号");
+                    dialog = dialog.action("account", crate::l10n::tr("配对并选择登录关联账号"));
                 } else if !state.prefs.get().token.is_empty() {
-                    dialog = dialog.action("account", "互通并邀请关联账号");
+                    dialog = dialog.action("account", crate::l10n::tr("互通并邀请关联账号"));
                 }
                 let answer = dialog.show();
                 spawn(async move {
@@ -581,6 +605,10 @@ pub fn app() -> impl IntoElement {
         .pb(move || px(safe_area().bottom.0.max(keyboard_height().0)))
         .bg(move || theme().background)
         .text_color(move || theme().foreground)
+        .child(when(is_desktop, {
+            let ui = ui.clone();
+            move || desktop::title_bar(ui.clone())
+        }))
         .child(
             view()
                 .flex_row()
@@ -620,17 +648,20 @@ pub fn app() -> impl IntoElement {
                             .snapshot
                             .with(|s| s.as_ref().map(|s| s.error.clone()).unwrap_or_default());
                         if !error.is_empty() {
-                            return format!("操作失败：{error}");
+                            return crate::l10n::message(
+                                "操作失败：{error}",
+                                &[("error", (error).to_string())],
+                            );
                         }
                         let notice = foot.notice.get();
                         if !notice.is_empty() {
-                            notice
+                            crate::l10n::render(&notice)
                         } else {
                             foot.worker
                                 .shared
                                 .status
                                 .lock()
-                                .map(|s| s.clone())
+                                .map(|s| crate::l10n::render(&s))
                                 .unwrap_or_default()
                         }
                     })
@@ -679,22 +710,50 @@ fn sidebar(ui: Ui) -> impl IntoElement {
         )
         .child(hint("随时找回，接着使用。"))
         .child(view().h(px(24.0)))
-        .child(action("全部记录", false, move || {
-            u.page.set("history".into());
-            u.filter.set("all".into());
-            u.send(Command::Search(u.query.get(), "all".into(), 100));
-        }))
-        .child(action("收藏", false, move || {
-            s.page.set("history".into());
-            s.filter.set("pinned".into());
-            s.send(Command::Search(s.query.get(), "pinned".into(), 100));
-        }))
-        .child(action("设备与同步", false, move || {
-            d.page.set("devices".into())
-        }))
-        .child(action("顺序复制", false, move || {
-            q.page.set("queue".into())
-        }))
+        .child(nav_action(
+            "全部记录",
+            "clipboard",
+            {
+                let ui = ui.clone();
+                move || ui.page.get() == "history" && ui.filter.get() == "all"
+            },
+            move || {
+                u.page.set("history".into());
+                u.filter.set("all".into());
+                u.send(Command::Search(u.query.get(), "all".into(), 100));
+            },
+        ))
+        .child(nav_action(
+            "收藏",
+            "star",
+            {
+                let ui = ui.clone();
+                move || ui.page.get() == "history" && ui.filter.get() == "pinned"
+            },
+            move || {
+                s.page.set("history".into());
+                s.filter.set("pinned".into());
+                s.send(Command::Search(s.query.get(), "pinned".into(), 100));
+            },
+        ))
+        .child(nav_action(
+            "设备与同步",
+            "monitor",
+            {
+                let ui = ui.clone();
+                move || ui.page.get() == "devices"
+            },
+            move || d.page.set("devices".into()),
+        ))
+        .child(nav_action(
+            "顺序复制",
+            "list-ordered",
+            {
+                let ui = ui.clone();
+                move || ui.page.get() == "queue"
+            },
+            move || q.page.set("queue".into()),
+        ))
         .child(view().h(px(16.0)))
         .child(hint("内容类型"));
     for (label, filter) in [
@@ -706,11 +765,19 @@ fn sidebar(ui: Ui) -> impl IntoElement {
         ("颜色", "color"),
     ] {
         let u = ui.clone();
-        nav = nav.child(action(label, false, move || {
-            u.page.set("history".into());
-            u.filter.set(filter.into());
-            u.send(Command::Search(u.query.get(), filter.into(), 100));
-        }));
+        nav = nav.child(nav_action(
+            label,
+            yank_core::icons::kind(filter),
+            {
+                let ui = ui.clone();
+                move || ui.page.get() == "history" && ui.filter.get() == filter
+            },
+            move || {
+                u.page.set("history".into());
+                u.filter.set(filter.into());
+                u.send(Command::Search(u.query.get(), filter.into(), 100));
+            },
+        ));
     }
     let views = ui.clone();
     let boards = ui.clone();
@@ -728,7 +795,7 @@ fn sidebar(ui: Ui) -> impl IntoElement {
             move |item: ReadSignal<yank_core::SavedView>, _| {
                 let ui = select.clone();
                 action(
-                    move || item.get().name,
+                    move || saved_view_label(&item.get()),
                     false,
                     move || {
                         let filter = format!("smart:{}", item.get().id);
@@ -776,14 +843,26 @@ fn sidebar(ui: Ui) -> impl IntoElement {
                     stats.snapshot.with(|s| {
                         s.as_ref()
                             .map(|s| {
-                                format!("{} 条记录 · {} 条收藏", s.stats.clips, s.stats.pinned)
+                                crate::l10n::message(
+                                    "{0} 条记录 · {1} 条收藏",
+                                    &[
+                                        ("0", (s.stats.clips).to_string()),
+                                        ("1", (s.stats.pinned).to_string()),
+                                    ],
+                                )
                             })
-                            .unwrap_or_else(|| "正在打开本地资料库…".into())
+                            .unwrap_or_else(|| crate::l10n::tr("正在打开本地资料库…"))
                     })
                 }))
-                .child(action("设置与账号", false, move || {
-                    settings.page.set("settings".into())
-                })),
+                .child(nav_action(
+                    "设置与账号",
+                    "settings",
+                    {
+                        let ui = ui.clone();
+                        move || ui.page.get() == "settings"
+                    },
+                    move || settings.page.set("settings".into()),
+                )),
         )
 }
 fn mobile_nav(ui: Ui) -> impl IntoElement {
@@ -796,7 +875,18 @@ fn mobile_nav(ui: Ui) -> impl IntoElement {
         ("设置", "settings"),
     ] {
         let u = ui.clone();
-        row = row.child(action(label, false, move || u.page.set(page.into())).flex_1());
+        let selected = ui.clone();
+        row = row.child(
+            action(label, false, move || u.page.set(page.into()))
+                .bg(move || {
+                    if selected.page.get() == page {
+                        theme().accent
+                    } else {
+                        theme().card
+                    }
+                })
+                .flex_1(),
+        );
     }
     row
 }
@@ -817,7 +907,7 @@ fn header(ui: Ui) -> impl IntoElement {
             view()
                 .gap_1()
                 .child(
-                    text("我的剪贴板")
+                    text(move || crate::l10n::tr("我的剪贴板"))
                         .text_lg()
                         .font_weight(FontWeight::SEMIBOLD),
                 )
@@ -825,20 +915,23 @@ fn header(ui: Ui) -> impl IntoElement {
                     let p = prefs.prefs.get();
                     if !is_desktop() {
                         if p.token.is_empty() {
-                            "前台手动记录 · 无需账号".into()
+                            crate::l10n::tr("前台手动记录 · 无需账号")
                         } else {
-                            format!("{} · 前台手动记录", p.username)
+                            crate::l10n::message(
+                                "{0} · 前台手动记录",
+                                &[("0", (p.username).to_string())],
+                            )
                         }
                     } else if p.token.is_empty() {
-                        "本地优先 · 无需账号".into()
+                        crate::l10n::tr("本地优先 · 无需账号")
                     } else {
                         format!(
                             "{} · {}",
                             p.username,
                             if p.upload {
-                                "服务器存储已开启"
+                                crate::l10n::tr("服务器存储已开启")
                             } else {
-                                "不上传存储"
+                                crate::l10n::tr("不上传存储")
                             }
                         )
                     }
@@ -852,11 +945,11 @@ fn header(ui: Ui) -> impl IntoElement {
             let toggle_ui = toggle_ui.clone();
             action(
                 move || {
-                    if label.prefs.get().capture {
+                    crate::l10n::tr(if label.prefs.get().capture {
                         "暂停记录"
                     } else {
                         "继续记录"
-                    }
+                    })
                 },
                 false,
                 move || {
@@ -1001,16 +1094,12 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                 s.as_ref()
                     .map(|s| {
                         if is_desktop() {
-                            format!(
-                                "{} 条结果 · ↑ ↓ 选择 · Enter 粘贴 · {}+1…0 快贴前十条 · Esc 收起",
-                                s.clips.len(),
-                                if apple_keys() { "⌘" } else { "Ctrl" }
-                            )
+                            crate::l10n::message("{0} 条结果 · ↑ ↓ 选择 · Enter 粘贴 · {1}+1…0 快贴前十条 · Esc 收起", &[("0", (s.clips.len()).to_string()), ("1", (if apple_keys() { "⌘" } else { "Ctrl" }).to_string())])
                         } else {
-                            format!("{} 条结果", s.clips.len())
+                            crate::l10n::message("{0} 条结果", &[("0", (s.clips.len()).to_string())])
                         }
                     })
-                    .unwrap_or_else(|| "正在读取本地历史…".into())
+                    .unwrap_or_else(|| crate::l10n::tr("正在读取本地历史…"))
             })
         }))
         .child(
@@ -1049,13 +1138,13 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                                         text({
                                             let ui = ui.clone();
                                             move || {
-                                                if ui.query.get().is_empty()
+                                                crate::l10n::tr(if ui.query.get().is_empty()
                                                     && ui.filter.get() == "all"
                                                 {
                                                     "复制过的内容，会留在这里"
                                                 } else {
                                                     "没有匹配的记录"
-                                                }
+                                                })
                                             }
                                         })
                                         .text_lg()
@@ -1075,17 +1164,17 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                             ),
                         )
                         .child(
-                            action("加载更多记录", false, move || {
-                                more.limit.update(|l| *l += 100);
-                                more.send(Command::Search(
-                                    more.query.get(),
-                                    more.filter.get(),
-                                    more.limit.get(),
-                                ));
+                            action({ let ui=ui.clone(); move || crate::l10n::tr(if ui.snapshot.with(|snapshot| snapshot.as_ref().is_some_and(|snapshot| snapshot.has_more)) { "加载更多记录" } else { "加载更早的记录" }) }, false, move || {
+                                more.limit.update(|limit| *limit = limit.saturating_add(100));
+                                if more.snapshot.with(|snapshot| snapshot.as_ref().is_some_and(|snapshot| snapshot.has_more)) {
+                                    more.send(Command::Search(more.query.get(),more.filter.get(),more.limit.get()));
+                                } else {
+                                    more.send(Command::Earlier);
+                                }
                             })
                             .disabled({
                                 let u = ui.clone();
-                                move || !u.snapshot.with(|s| s.as_ref().is_some_and(|s| s.has_more))
+                                move || !u.snapshot.with(|s| s.as_ref().is_some_and(|s| s.has_more || s.has_earlier))
                             }),
                         ),
                 )
@@ -1163,7 +1252,11 @@ fn clip_row(ui: Ui, at: Position) -> impl IntoElement {
                             .map(|c| {
                                 format!(
                                     "{}{}",
-                                    if c.pinned { "已收藏 · " } else { "" },
+                                    if c.pinned {
+                                        crate::l10n::tr("已收藏 · ")
+                                    } else {
+                                        String::new()
+                                    },
                                     c.description
                                 )
                             })
@@ -1180,7 +1273,13 @@ fn clip_row(ui: Ui, at: Position) -> impl IntoElement {
                     .get()
                     .map(|c| {
                         if c.text.is_empty() {
-                            format!("{} · {} 个格式", c.kind, c.formats.len())
+                            crate::l10n::message(
+                                "{0} · {1} 个格式",
+                                &[
+                                    ("0", kind_label(&c.kind)),
+                                    ("1", (c.formats.len()).to_string()),
+                                ],
+                            )
                         } else {
                             c.text.chars().take(110).collect()
                         }
@@ -1192,6 +1291,24 @@ fn clip_row(ui: Ui, at: Position) -> impl IntoElement {
         )
 }
 fn details(ui: Ui) -> impl IntoElement {
+    let empty = ui.clone();
+    let selected = ui.clone();
+    view()
+        .flex_1()
+        .child(when(
+            move || empty.selected().is_none(),
+            || {
+                surface()
+                    .child(title("内容详情"))
+                    .child(hint("选择一条记录，查看完整内容。"))
+            },
+        ))
+        .child(when(
+            move || selected.selected().is_some(),
+            move || detail_editor(ui.clone()),
+        ))
+}
+fn detail_editor(ui: Ui) -> impl IntoElement {
     let get = ui.clone();
     let text = ui.clone();
     let draft = ui.clone();
@@ -1214,8 +1331,8 @@ fn details(ui: Ui) -> impl IntoElement {
             .child(title("内容详情"))
             .child(hint(move || {
                 get.selected()
-                    .map(|c| format!("{} · {} 个格式", c.kind, c.formats.len()))
-                    .unwrap_or_else(|| "选择一条记录，查看完整内容。".into())
+                    .map(|c| crate::l10n::message("{0} · {1} 个格式", &[("0", kind_label(&c.kind)), ("1", (c.formats.len()).to_string())]))
+                    .unwrap_or_else(|| crate::l10n::tr("选择一条记录，查看完整内容。"))
             }))
             .child(
                 field(
@@ -1231,23 +1348,23 @@ fn details(ui: Ui) -> impl IntoElement {
                 move || collection.draft().map(|d| d.collection).unwrap_or_default(),
                 move |s| set_collection.edit_draft(|d| d.collection = s.into()),
             ).readonly(move || collection_ready.selected().is_none()))
-            .child(hint({let ui=ui.clone();move || if ui.selected().is_some_and(|c| !text_editable(&c)) { "含二进制或文件格式：仅可修改收藏板，复制使用完整已保存格式。" } else { "编辑文字后保存将以纯文本存储。" }}))
+            .child(hint({let ui=ui.clone();move || crate::l10n::tr(if ui.selected().is_some_and(|c| !text_editable(&c)) { "含二进制或文件格式：仅可修改收藏板，复制使用完整已保存格式。" } else { "编辑文字后保存将以纯文本存储。" })}))
             .child(hint(move || {
                 text.selected()
-                    .map(|c| format!("记录 ID：{}", c.id))
+                    .map(|c| crate::l10n::message("记录 ID：{0}", &[("0", (c.id).to_string())]))
                     .unwrap_or_default()
             }))
             .child(when(move||image_ui.selected().is_some_and(|c|c.kind=="image"),{let ui=ui.clone();move||{let ui=ui.clone();image(move||{use base64::Engine;ui.selected().and_then(|c|c.formats.into_iter().find(|f|f.mime.as_deref()==Some("image/png"))).map(|f|format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(f.data))).unwrap_or_default()}).h(px(180.0))}}))
             .child(action("Markdown / 代码预览",false,move||preview.page.set("preview".into())))
             .child(action("悬浮为置顶卡片",false,move||{if let Some(c)=float.selected(){desktop::floating(float.clone(),c);}}))
-            .child(hint({ let ui = ui.clone(); move || if ui.dirty() { "未保存 · 切换记录或返回后草稿仍保留" } else { "已保存" } }))
+            .child(hint({ let ui = ui.clone(); move || crate::l10n::tr(if ui.dirty() { "未保存 · 切换记录或返回后草稿仍保留" } else { "已保存" }) }))
             .child(when(is_desktop, { let ui = ui.clone(); move || {
                 action("粘贴到原应用", true, { let ui = ui.clone(); move || {
                     if let Some(clip) = ui.selected() { desktop::paste_record(ui.clone(), clip.id); }
                 } })
                     .disabled({ let ui = ui.clone(); move || ui.selected().is_none_or(|clip| clip.deleted) })
             }}))
-            .child(action("复制已保存内容", false, move || copy.copy()))
+            .child(icon_action("复制已保存内容", "copy", false, move || copy.copy()))
             .child(action("复制草稿文字", false, { let ui = ui.clone(); move || {
                 if let Some(mut clip) = ui.selected().filter(text_editable)
                     && let Some(draft) = ui.draft() {
@@ -1268,7 +1385,7 @@ fn details(ui: Ui) -> impl IntoElement {
                     queue.notice.set("已加入顺序复制".into());
                 }
             }))
-            .child(action("保存编辑", false, move || {
+            .child(icon_action("保存编辑", "checkbox", false, move || {
                 if let Some(c) = save.selected() && let Some(draft) = save.draft() {
                     let text = if text_editable(&c) { draft.text } else { c.text.clone() };
                     save.send(Command::Edit(c.id, text, draft.collection));
@@ -1280,9 +1397,9 @@ fn details(ui: Ui) -> impl IntoElement {
                 }
             }).disabled({let ui = ui.clone(); move || ui.pending()}))
             .child(form_feedback(ui.clone()))
-            .child(action("删除记录", false, move || {
+            .child(icon_action("删除记录", "trash", false, move || {
                 if let Some(c) = delete.selected() {
-                    let u=delete.clone();let answer=alert_dialog().title("删除这条记录？").description("删除状态会同步到已配对设备；启用服务器存储时也会同步到服务器。请确认后删除。").cancel("cancel","取消").destructive("delete","删除记录").show();spawn(async move{if answer.await.is_ok_and(|a|a.action.as_deref()==Some("delete")){u.send(Command::Delete(c.id.clone()));u.selected.set(String::new());u.drafts.update(|drafts| { drafts.remove(&c.id); });}});
+                    let u=delete.clone();let answer=alert_dialog().title(crate::l10n::tr("删除这条记录？")).description(crate::l10n::tr("删除状态会同步到已配对设备；启用服务器存储时也会同步到服务器。请确认后删除。")).cancel("cancel",crate::l10n::tr("取消")).destructive("delete",crate::l10n::tr("删除记录")).show();spawn(async move{if answer.await.is_ok_and(|a|a.action.as_deref()==Some("delete")){u.send(Command::Delete(c.id.clone()));u.selected.set(String::new());u.drafts.update(|drafts| { drafts.remove(&c.id); });}});
                 }
             })),
     )
@@ -1307,7 +1424,7 @@ fn queue(ui: Ui) -> impl IntoElement {
                 "先把记录加入队列，再逐条复制。桌面可用全局快捷键把下一条粘贴到当前应用。",
             ))
             .child(hint(move || {
-                format!("队列中还有 {} 条", count.queue.with(Vec::len))
+                crate::l10n::message("队列中还有 {0} 条", &[("0", (count.queue.with(Vec::len)).to_string())])
             }))
             .child(action("复制下一条", true, move || {
                 let clip = next.queue.with(|q| q.first().cloned());
@@ -1353,7 +1470,7 @@ fn devices(ui: Ui) -> impl IntoElement {
                                     .as_ref()
                                     .and_then(|snapshot| snapshot.identity.as_ref())
                                     .map(|peer| peer.code.clone())
-                                    .unwrap_or_else(|| "正在生成…".into())
+                                    .unwrap_or_else(|| crate::l10n::tr("正在生成…"))
                             })
                         })
                         .text_2xl()
@@ -1375,12 +1492,14 @@ fn devices(ui: Ui) -> impl IntoElement {
                     .child(action("请求配对", true, move || {
                         let u = pair.clone();
                         let mut dialog = alert_dialog()
-                            .title("使用设备码配对")
-                            .description("可以仅连接两台设备。账号关联需要单独同意。")
-                            .cancel("cancel", "取消")
-                            .action("pair", "仅设备互通");
+                            .title(crate::l10n::tr("使用设备码配对"))
+                            .description(crate::l10n::tr(
+                                "可以仅连接两台设备。账号关联需要单独同意。",
+                            ))
+                            .cancel("cancel", crate::l10n::tr("取消"))
+                            .action("pair", crate::l10n::tr("仅设备互通"));
                         if !u.prefs.get().token.is_empty() {
-                            dialog = dialog.action("account", "邀请关联当前账号");
+                            dialog = dialog.action("account", crate::l10n::tr("邀请关联当前账号"));
                         }
                         let answer = dialog.show();
                         spawn(async move {
@@ -1423,14 +1542,14 @@ fn devices(ui: Ui) -> impl IntoElement {
                                 let selected = server.get();
                                 let ui = ui.clone();
                                 let answer = alert_dialog()
-                                    .title("发现 Yank 服务")
-                                    .description(format!(
-                                        "{}\n可以登录关联账号，也可以只使用发现与中继。",
-                                        selected.url
-                                    ))
-                                    .cancel("cancel", "暂不使用")
-                                    .action("relay", "仅使用发现与中继")
-                                    .action("login", "登录并关联账号")
+                                    .title(crate::l10n::tr("发现 Yank 服务"))
+                                    .description(crate::l10n::render(&crate::l10n::message(
+                                        "{0}\n可以登录关联账号，也可以只使用发现与中继。",
+                                        &[("0", (selected.url).to_string())],
+                                    )))
+                                    .cancel("cancel", crate::l10n::tr("暂不使用"))
+                                    .action("relay", crate::l10n::tr("仅使用发现与中继"))
+                                    .action("login", crate::l10n::tr("登录并关联账号"))
                                     .show();
                                 spawn(async move {
                                     let choice = answer.await.ok().and_then(|a| a.action);
@@ -1469,8 +1588,14 @@ fn devices(ui: Ui) -> impl IntoElement {
                         let u = ui.clone();
                         surface()
                             .child(
-                                text(move || format!("{} · {}", p.get().peer.name, p.get().via))
-                                    .text_base(),
+                                text(move || {
+                                    format!(
+                                        "{} · {}",
+                                        p.get().peer.name,
+                                        crate::l10n::tr(&p.get().via)
+                                    )
+                                })
+                                .text_base(),
                             )
                             .child(hint(move || p.get().peer.code))
                             .child(action("配对并选择关联方式", false, move || {
@@ -1526,15 +1651,18 @@ fn devices(ui: Ui) -> impl IntoElement {
 }
 fn confirm_pair(ui: Ui, peer: yank_core::Peer) {
     let mut dialog = alert_dialog()
-        .title(format!("连接 {}？", peer.name))
-        .description(format!(
-            "请核对设备码 {}。对方确认后可交换剪贴板数据；可以选择不关联账号。",
-            peer.code
-        ))
-        .cancel("cancel", "取消")
-        .action("pair", "仅设备互通");
+        .title(crate::l10n::render(&crate::l10n::message(
+            "连接 {0}？",
+            &[("0", (peer.name).to_string())],
+        )))
+        .description(crate::l10n::render(&crate::l10n::message(
+            "请核对设备码 {0}。对方确认后可交换剪贴板数据；可以选择不关联账号。",
+            &[("0", (peer.code).to_string())],
+        )))
+        .cancel("cancel", crate::l10n::tr("取消"))
+        .action("pair", crate::l10n::tr("仅设备互通"));
     if !ui.prefs.get().token.is_empty() {
-        dialog = dialog.action("account", "邀请关联当前账号");
+        dialog = dialog.action("account", crate::l10n::tr("邀请关联当前账号"));
     }
     let answer = dialog.show();
     spawn(async move {
@@ -1551,7 +1679,10 @@ fn confirm_pair(ui: Ui, peer: yank_core::Peer) {
             };
             match ui.worker.shared.queue_pair(peer, account, None) {
                 Ok(()) => ui.notice.set("配对请求已发送，等待对方确认。".into()),
-                Err(error) => ui.notice.set(format!("无法发送配对请求：{error}")),
+                Err(error) => ui.notice.set(crate::l10n::message(
+                    "无法发送配对请求：{error}",
+                    &[("error", (error).to_string())],
+                )),
             }
         }
     });
@@ -1592,7 +1723,11 @@ fn settings(ui: Ui) -> impl IntoElement {
                 .bg(move || theme().card)
                 .checked_style(|style| style.bg(theme().accent).border_color(theme().primary))
                 .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
-                .child(text(label).text_sm().text_color(move || theme().foreground)),
+                .child(
+                    text(move || crate::l10n::tr(label))
+                        .text_sm()
+                        .text_color(move || theme().foreground),
+                ),
         );
     }
     let ditto = ui.clone();
@@ -1601,11 +1736,15 @@ fn settings(ui: Ui) -> impl IntoElement {
     let theme_label = ui.clone();
     let export = ui.clone();
     let import = ui.clone();
-    scroll().flex_1().p_5().child(view().gap_5().max_w(px(760.0))
+    scroll().test_id("settings-scroll").flex_1().p_5().child(view().gap_5().max_w(px(760.0))
       .child(title("设置与账号"))
+      .child(language_settings(ui.clone()))
+      .child(cleanup_settings(ui.clone()))
+      .child(history_settings(ui.clone()))
+      .child(when(is_desktop, { let ui=ui.clone(); move || desktop_settings(ui.clone()) }))
       .child(surface().child(title("这台设备"))
         .child(pref_text(ui.clone(), "设备名称", "保存设备名称", |p|p.device_name.clone(), |p,v|p.device_name=v.into()))
-        .child(action(move||format!("外观：{}（点击切换）",match theme_label.prefs.get().theme.as_str(){"dark"=>"深色","light"=>"浅色",_=>"跟随系统"}),false,move||{let mut p=theme_ui.prefs.get();p.theme=match p.theme.as_str(){"system"=>"light","light"=>"dark",_=>"system"}.into();theme_ui.save(p);})))
+        .child(action(move||crate::l10n::message("外观：{0}（点击切换）", &[("0", crate::l10n::tr(match theme_label.prefs.get().theme.as_str(){"dark"=>"深色","light"=>"浅色",_=>"跟随系统"}))]),false,move||{let mut p=theme_ui.prefs.get();p.theme=match p.theme.as_str(){"system"=>"light","light"=>"dark",_=>"system"}.into();theme_ui.save(p);})))
       .child(surface().child(title("账号登录（可选）"))
         .child(hint("离线记录不需要账号。登录用于发现同账号设备；服务器存储仍需单独启用。"))
         .child(field("服务器地址，例如 https://yank.example.com",move||server.server.get(),move|s|set_server.server.set(s.into())))
@@ -1618,7 +1757,7 @@ fn settings(ui: Ui) -> impl IntoElement {
       .child(surface().child(title("数据存储"))
         .child(toggle("上传并保存在服务端",move||upload.prefs.get().upload,move|enabled|{
             if enabled {if set_upload.prefs.get().token.is_empty(){set_upload.notice.set("请先登录账号；本地历史仍可正常使用。".into());return;}
-                let u=set_upload.clone();let answer=alert_dialog().title("启用服务器存储？").description("本机历史及后续修改将上传到当前账号的服务器存储。设备中继不需要此选项。关闭后，已上传内容仍保留在服务器。").cancel("cancel","取消").action("enable","启用存储").show();
+                let u=set_upload.clone();let answer=alert_dialog().title(crate::l10n::tr("启用服务器存储？")).description(crate::l10n::tr("本机历史及后续修改将上传到当前账号的服务器存储。设备中继不需要此选项。关闭后，已上传内容仍保留在服务器。")).cancel("cancel",crate::l10n::tr("取消")).action("enable",crate::l10n::tr("启用存储")).show();
                 spawn(async move{if answer.await.is_ok_and(|a|a.action.as_deref()==Some("enable")){let mut p=u.prefs.get();p.upload=true;u.save(p);}});
             }else{let mut p=set_upload.prefs.get();p.upload=false;set_upload.save(p);}
         }))
@@ -1636,8 +1775,8 @@ fn settings(ui: Ui) -> impl IntoElement {
       .child(surface().child(title("隐私与备份"))
         .child(hint("安卓采用前台手动记录，遵循系统剪贴板访问限制。排除表达式匹配的文字不会进入历史。"))
         .child(pref_text(ui.clone(), "排除内容的正则表达式（可留空）", "保存排除正则", |p|p.exclude_pattern.clone(), |p,v|p.exclude_pattern=v.into()))
-        .child(action("导出全部本地记录",false,move||{let u=export.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_save_path(nsh_core::file_dialog::SaveDialog::new().file_name("yank-backup.json")).await;u.picking.set(false);match result {Ok(Some(path))=>u.send(Command::Export(path)),Err(error)=>u.notice.set(format!("无法选择导出文件：{error}")),_=>{}}});}))
-        .child(action("导入备份",false,move||{let u=import.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_paths(nsh_core::file_dialog::OpenDialog::files()).await;u.picking.set(false);match result {Ok(Some(paths))=>{if let Some(path)=paths.into_iter().next(){u.send(Command::Import(path));}},Err(error)=>u.notice.set(format!("无法选择导入文件：{error}")),_=>{}}});}).disabled({let ui=ui.clone();move||ui.pending()}))
+        .child(action("导出全部本地记录",false,move||{let u=export.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_save_path(nsh_core::file_dialog::SaveDialog::new().file_name("yank-backup.json")).await;u.picking.set(false);match result {Ok(Some(path))=>u.send(Command::Export(path)),Err(error)=>u.notice.set(crate::l10n::message("无法选择导出文件：{error}", &[("error", (error).to_string())])),_=>{}}});}))
+        .child(action("导入备份",false,move||{let u=import.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_paths(nsh_core::file_dialog::OpenDialog::files()).await;u.picking.set(false);match result {Ok(Some(paths))=>{if let Some(path)=paths.into_iter().next(){u.send(Command::Import(path));}},Err(error)=>u.notice.set(crate::l10n::message("无法选择导入文件：{error}", &[("error", (error).to_string())])),_=>{}}});}).disabled({let ui=ui.clone();move||ui.pending()}))
         .child(recovery_controls(ui.clone()))
         .child(form_feedback(ui.clone()))))
 }
@@ -1678,14 +1817,17 @@ fn smart_editor(ui: Ui) -> impl IntoElement {
             ))
             .child(action(
                 move || {
-                    format!(
-                        "时间范围：{}",
-                        match days.smart_days.get() {
-                            0 => "不限",
-                            7 => "最近一周",
-                            30 => "最近一月",
-                            _ => "最近一年",
-                        }
+                    crate::l10n::message(
+                        "时间范围：{0}",
+                        &[(
+                            "0",
+                            crate::l10n::tr(match days.smart_days.get() {
+                                0 => "不限",
+                                7 => "最近一周",
+                                30 => "最近一月",
+                                _ => "最近一年",
+                            }),
+                        )],
                     )
                 },
                 false,
@@ -1746,6 +1888,118 @@ fn smart_editor(ui: Ui) -> impl IntoElement {
     )
 }
 
+fn history_settings(ui: Ui) -> impl IntoElement {
+    use yank_core::history::HistoryRange;
+    let mut choices = nsh_base::radio_group().flex_row().flex_wrap().gap_2();
+    for (label, range) in [
+        ("当天", HistoryRange::Today),
+        ("近 1 天", HistoryRange::Day1),
+        ("近 2 天", HistoryRange::Day2),
+        ("近 3 天", HistoryRange::Day3),
+        ("近 4 天", HistoryRange::Day4),
+        ("近 5 天", HistoryRange::Day5),
+        ("本周", HistoryRange::Week),
+        ("本月", HistoryRange::Month),
+        ("不限日期", HistoryRange::All),
+    ] {
+        let selected = ui.clone();
+        let change = ui.clone();
+        choices = choices.child(
+            nsh_base::radio()
+                .checked(move || selected.prefs.get().history_range == range)
+                .on_change(move |_: &bool| {
+                    let mut prefs = change.prefs.get();
+                    prefs.history_range = range;
+                    change.limit.set(100);
+                    change.save(prefs);
+                })
+                .min_h(px(48.0))
+                .p_3()
+                .border_1()
+                .rounded(move || theme().radius)
+                .border_color(move || theme().border)
+                .bg(move || theme().card)
+                .checked_style(|style| style.bg(theme().accent).border_color(theme().primary))
+                .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
+                .child(text(move || crate::l10n::tr(label)).text_sm()),
+        );
+    }
+    surface().child(title("历史显示范围"))
+        .child(hint("默认显示最近 3 天；加载更早可继续浏览。搜索和收藏始终覆盖全部历史。此设置不会删除记录。"))
+        .child(choices)
+        .child(hint("粘贴或复制后在本机提前显示，不修改内容或同步版本。"))
+}
+
+fn desktop_settings(ui: Ui) -> impl IntoElement {
+    let mut panel = surface().child(title("窗口与启动")).child(hint("窗口样式"));
+    let mut styles = nsh_base::radio_group().flex_row().flex_wrap().gap_2();
+    for (label, style) in [
+        ("系统窗口按钮", yank_core::WindowStyle::System),
+        ("红绿灯窗口按钮", yank_core::WindowStyle::TrafficLights),
+    ] {
+        let selected = ui.clone();
+        let change = ui.clone();
+        styles = styles.child(
+            nsh_base::radio()
+                .checked(move || selected.prefs.get().window_style == style)
+                .on_change(move |_: &bool| {
+                    let mut prefs = change.prefs.get();
+                    prefs.window_style = style;
+                    change.save(prefs);
+                })
+                .min_h(px(48.0))
+                .p_3()
+                .border_1()
+                .rounded(move || theme().radius)
+                .border_color(move || theme().border)
+                .bg(move || theme().card)
+                .checked_style(|style| style.bg(theme().accent).border_color(theme().primary))
+                .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
+                .child(text(move || crate::l10n::tr(label)).text_sm()),
+        );
+    }
+    panel = panel.child(styles).child(hint("关闭窗口时"));
+    let mut choices = nsh_base::radio_group().flex_row().flex_wrap().gap_2();
+    for (label, behavior) in [
+        ("每次询问", yank_core::CloseBehavior::Ask),
+        ("最小化并继续运行", yank_core::CloseBehavior::Minimize),
+        ("退出程序", yank_core::CloseBehavior::Quit),
+    ] {
+        let selected = ui.clone();
+        let change = ui.clone();
+        choices = choices.child(
+            nsh_base::radio()
+                .checked(move || selected.prefs.get().close_behavior == behavior)
+                .on_change(move |_: &bool| {
+                    let mut prefs = change.prefs.get();
+                    prefs.close_behavior = behavior;
+                    change.save(prefs);
+                })
+                .min_h(px(48.0))
+                .p_3()
+                .border_1()
+                .rounded(move || theme().radius)
+                .border_color(move || theme().border)
+                .bg(move || theme().card)
+                .checked_style(|style| style.bg(theme().accent).border_color(theme().primary))
+                .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
+                .child(text(move || crate::l10n::tr(label)).text_sm()),
+        );
+    }
+    panel
+        .child(choices)
+        .child(hint(
+            "最小化后继续记录与同步；退出会停止后台任务。选择会被记住，也可在设置中修改。",
+        ))
+        .child(pref_toggle(
+            ui,
+            "登录系统时启动",
+            |prefs| prefs.launch_at_login,
+            |prefs, enabled| prefs.launch_at_login = enabled,
+        ))
+        .child(hint("开机启动后在后台运行，可从托盘或快捷键打开。"))
+}
+
 fn form_feedback(ui: Ui) -> impl IntoElement {
     let message = ui.clone();
     text(move || message.feedback())
@@ -1793,7 +2047,7 @@ fn lists(ui: Ui) -> impl IntoElement {
                 move |item, _| {
                     let ui = select.clone();
                     action(
-                        move || item.get().name,
+                        move || saved_view_label(&item.get()),
                         false,
                         move || {
                             let filter = format!("smart:{}", item.get().id);
@@ -1895,21 +2149,6 @@ fn extra_preferences(ui: Ui) -> impl IntoElement {
         .child(hint("首次历史同步不写入系统剪贴板。此开关控制后续远端内容变更；安卓受系统限制，仅支持前台手动复制。"))
         .child(pref_text(ui.clone(), "排除的应用（每行一个）", "保存排除的应用", |p|p.excluded_apps.clone(), |p,v|p.excluded_apps=v.into()).multiline(true))
         .child(pref_toggle(ui.clone(), "每日自动备份", |p|p.backup_daily, |p,v|p.backup_daily=v));
-    let read = ui.clone();
-    let write = ui.clone();
-    panel = panel.child(field(
-        "保留天数（0 为永久）",
-        move || read.prefs.get().retention_days.to_string(),
-        move |value| {
-            if let Ok(days) = value.parse::<u32>() {
-                let mut p = write.prefs.get();
-                p.retention_days = days;
-                write.save(p);
-            } else {
-                write.notice.set("保留天数请输入非负整数".into());
-            }
-        },
-    ));
     if is_desktop() {
         panel = panel
             .child(title("桌面快捷键与面板"))
@@ -1923,7 +2162,12 @@ fn extra_preferences(ui: Ui) -> impl IntoElement {
         let size = ui.clone();
         let set_size = ui.clone();
         panel = panel.child(action(
-            move || format!("面板大小：{} / 5（点击调整）", size.prefs.get().panel_size),
+            move || {
+                crate::l10n::message(
+                    "面板大小：{0} / 5（点击调整）",
+                    &[("0", (size.prefs.get().panel_size).to_string())],
+                )
+            },
             false,
             move || {
                 let mut p = set_size.prefs.get();
@@ -1955,16 +2199,22 @@ fn extra_preferences(ui: Ui) -> impl IntoElement {
                     .border_1()
                     .border_color(move || theme().border)
                     .checked_style(|s| s.bg(theme().accent).border_color(theme().primary))
-                    .child(text(label).text_color(move || theme().foreground)),
+                    .child(
+                        text(move || crate::l10n::tr(label)).text_color(move || theme().foreground),
+                    ),
             );
         }
-        let check = ui.clone();
         panel = panel.child(hint("面板位置")).child(positions)
-            .child(hint("托盘附近：使用最近一次托盘点击提供的位置。系统未提供坐标时居中显示；Linux 不提供托盘坐标。"))
-            .child(pref_toggle(ui.clone(), "登录系统时启动", |p|p.launch_at_login, |p,v|p.launch_at_login=v))
+            .child(hint("托盘附近：使用最近一次托盘点击提供的位置。系统未提供坐标时居中显示；Linux 不提供托盘坐标。"));
+        if let Some(reason) = crate::integration::update_unavailable_reason() {
+            panel = panel.child(hint(reason));
+        } else {
+            let check = ui.clone();
+            panel = panel
             .child(pref_toggle(ui.clone(), "自动检查并下载更新", |p|p.auto_update, |p,v|p.auto_update=v))
-            .child(hint("自动更新默认关闭。开启后每日访问 GitHub，下载并校验 SHA256，下次启动生效。开发构建不替换自身；安装目录需可写。"))
+            .child(hint("使用 NSH Updater，默认关闭。开启后每日检查 GitHub 发布清单，校验 SHA256 后替换便携版程序目录，下次启动生效。请勿在程序目录存放个人文件。包管理器安装不使用应用内更新。"))
             .child(action("检查并下载更新", false, move || check.send(Command::CheckUpdate)));
+        }
     } else {
         panel = panel
             .child(hint(
@@ -2058,6 +2308,236 @@ fn recovery_controls(ui: Ui) -> impl IntoElement {
     )
 }
 
+fn kind_label(kind: &str) -> String {
+    crate::l10n::tr(match kind {
+        "text" => "文字",
+        "link" => "链接",
+        "image" => "图片",
+        "files" => "文件",
+        "code" => "代码",
+        "color" => "颜色",
+        _ => kind,
+    })
+}
+
+fn saved_view_label(view: &yank_core::SavedView) -> String {
+    let seeded = match view.id.as_str() {
+        "default-images" => "图片",
+        "default-links" => "链接",
+        "default-code" => "代码",
+        "default-files" => "文件",
+        "default-colors" => "颜色",
+        _ => return view.name.clone(),
+    };
+    if view.name == seeded {
+        crate::l10n::tr(seeded)
+    } else {
+        view.name.clone()
+    }
+}
+
+fn language_settings(ui: Ui) -> impl IntoElement {
+    let mut group = nsh_base::radio_group().gap_2();
+    for (label, language) in [("中文", "zh"), ("English", "en")] {
+        let read = ui.clone();
+        let write = ui.clone();
+        group = group.child(
+            nsh_base::radio()
+                .checked(move || read.prefs.get().language == language)
+                .on_change(move |selected: &bool| {
+                    if *selected {
+                        let mut p = write.prefs.get();
+                        p.language = language.into();
+                        write.save(p);
+                    }
+                })
+                .min_h(px(48.0))
+                .p_3()
+                .border_1()
+                .rounded(move || theme().radius)
+                .border_color(move || theme().border)
+                .bg(move || theme().card)
+                .checked_style(|style| style.bg(theme().accent).border_color(theme().primary))
+                .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
+                .child(
+                    text(move || crate::l10n::tr(label))
+                        .text_sm()
+                        .text_color(move || theme().foreground),
+                ),
+        );
+    }
+    surface().child(title("语言 / Language")).child(group)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CleanupDraft {
+    enabled: bool,
+    mode: yank_core::CleanupMode,
+    max_items: String,
+    per_type: std::collections::BTreeMap<String, String>,
+    days: String,
+}
+impl CleanupDraft {
+    fn from_prefs(p: &Preferences) -> Self {
+        Self {
+            enabled: p.cleanup.enabled,
+            mode: p.cleanup.mode,
+            max_items: p.cleanup.max_items.to_string(),
+            per_type: p
+                .cleanup
+                .per_type
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+            days: p.retention_days.to_string(),
+        }
+    }
+    fn parse(&self) -> Result<(yank_core::CleanupPolicy, u32), ()> {
+        fn count(value: &str) -> Result<u32, ()> {
+            let n = value.parse::<u32>().map_err(|_| ())?;
+            if (1..=1_000_000).contains(&n) {
+                Ok(n)
+            } else {
+                Err(())
+            }
+        }
+        let policy = yank_core::CleanupPolicy {
+            enabled: self.enabled,
+            mode: self.mode,
+            max_items: count(&self.max_items)?,
+            per_type: self
+                .per_type
+                .iter()
+                .map(|(kind, value)| Ok((kind.clone(), count(value)?)))
+                .collect::<Result<_, ()>>()?,
+        };
+        policy.validate().map_err(|_| ())?;
+        Ok((policy, self.days.parse::<u32>().map_err(|_| ())?))
+    }
+}
+fn cleanup_reduces(old: &Preferences, policy: &yank_core::CleanupPolicy, days: u32) -> bool {
+    policy.enabled
+        && (!old.cleanup.enabled
+            || old.cleanup.mode != policy.mode
+            || policy.max_items < old.cleanup.max_items
+            || policy.per_type.iter().any(|(kind, n)| {
+                old.cleanup
+                    .per_type
+                    .get(kind)
+                    .is_none_or(|previous| n < previous)
+            })
+            || (days > 0 && (old.retention_days == 0 || days < old.retention_days)))
+}
+fn cleanup_settings(ui: Ui) -> impl IntoElement {
+    let draft = ui.cleanup_draft;
+    let edited = ui.cleanup_edited;
+    let sync = ui.clone();
+    effect(move || {
+        let prefs = sync.prefs.get();
+        if !edited.get() {
+            draft.set(CleanupDraft::from_prefs(&prefs));
+        }
+    });
+    let mut panel = surface()
+        .child(title("自动清理历史"))
+        .child(hint("仅清理未收藏的有效记录，收藏始终保留。保存后生效。"))
+        .child(toggle(
+            "启用自动清理",
+            move || draft.get().enabled,
+            move |enabled| {
+                edited.set(true);
+                draft.update(|d| d.enabled = enabled);
+            },
+        ));
+    let mut modes = nsh_base::radio_group().gap_2();
+    for (label, mode) in [
+        ("按总数保留", yank_core::CleanupMode::Total),
+        ("按类型分别保留", yank_core::CleanupMode::PerType),
+    ] {
+        modes = modes.child(
+            nsh_base::radio()
+                .checked(move || draft.get().mode == mode)
+                .on_change(move |selected: &bool| {
+                    if *selected {
+                        edited.set(true);
+                        draft.update(|d| d.mode = mode);
+                    }
+                })
+                .min_h(px(48.0))
+                .p_3()
+                .border_1()
+                .rounded(move || theme().radius)
+                .border_color(move || theme().border)
+                .bg(move || theme().card)
+                .checked_style(|style| style.bg(theme().accent).border_color(theme().primary))
+                .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
+                .child(
+                    text(move || crate::l10n::tr(label))
+                        .text_sm()
+                        .text_color(move || theme().foreground),
+                ),
+        );
+    }
+    panel = panel.child(modes).child(when(
+        move || draft.get().mode == yank_core::CleanupMode::Total,
+        move || {
+            field(
+                "保留最新的未收藏记录总数",
+                move || draft.get().max_items,
+                move |value| {
+                    edited.set(true);
+                    draft.update(|d| d.max_items = value.into());
+                },
+            )
+        },
+    ));
+    panel = panel.child(when(
+        move || draft.get().mode == yank_core::CleanupMode::PerType,
+        move || {
+            let mut fields = view().gap_3();
+            for (kind, label) in [
+                ("text", "文字保留条数"),
+                ("link", "链接保留条数"),
+                ("image", "图片保留条数"),
+                ("files", "文件保留条数"),
+                ("code", "代码保留条数"),
+                ("color", "颜色保留条数"),
+            ] {
+                fields = fields.child(field(
+                    label,
+                    move || draft.get().per_type.get(kind).cloned().unwrap_or_default(),
+                    move |value| {
+                        edited.set(true);
+                        draft.update(|d| {
+                            d.per_type.insert(kind.into(), value.into());
+                        });
+                    },
+                ));
+            }
+            fields.child(hint("每类保留最新的未收藏记录；其他类型不按数量清理。"))
+        },
+    ));
+    let save = ui.clone();
+    panel.child(field("同时清理超过天数的记录（0 为不按时间清理）", move || draft.get().days, move |value| { edited.set(true); draft.update(|d|d.days=value.into()); }))
+        .child(hint("条数请输入 1 至 1,000,000 的整数；天数请输入非负整数。关闭自动清理时，天数也不生效。"))
+        .child(hint("清理删除会同步到已配对设备；启用服务器存储时也会同步到服务器。策略仅保存在本机，不会同步；不同设备的限制可能导致更多记录被清理。"))
+        .child(action("保存清理设置", true, move || {
+            let Ok((policy, days)) = draft.get().parse() else { save.notice.set("清理设置无效：条数须为 1 至 1,000,000 的整数，天数须为非负整数。".into()); return; };
+            let old = save.prefs.get();
+            let commit = save.clone();
+            let apply = move || { let mut current = commit.prefs.get();
+                if current.cleanup != old.cleanup || current.retention_days != old.retention_days { commit.notice.set("清理设置已变化，请重新检查后保存。".into()); return; }
+                current.cleanup=policy.clone(); current.retention_days=days; commit.save(current); edited.set(false);
+            };
+            if cleanup_reduces(&save.prefs.get(), &draft.get().parse().unwrap().0, days) {
+                let answer = alert_dialog().title(crate::l10n::tr("应用清理限制？"))
+                    .description(crate::l10n::tr("启用或降低限制后，超出限制的未收藏记录将被清理。删除会同步到已配对设备及已启用的服务器存储。收藏不受影响。"))
+                    .cancel("cancel",crate::l10n::tr("取消")).destructive("apply",crate::l10n::tr("应用清理设置")).show();
+                spawn(async move { if answer.await.is_ok_and(|a|a.action.as_deref()==Some("apply")) { apply(); } });
+            } else { apply(); }
+        }).disabled(move || ui.pending() || !edited.get()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2128,6 +2608,7 @@ mod tests {
             filter: "all".into(),
             error: String::new(),
             has_more: false,
+            has_earlier: false,
             views: Vec::new(),
             boards: Vec::new(),
             selected: None,

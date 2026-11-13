@@ -9,6 +9,8 @@ import sys
 def collect(destination: Path):
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1'], text=True, encoding='utf-8'))
     parts = ['Yank dependency notices\nExact versions/sources are recorded in Cargo.lock.\n']
+    icon_license = Path(__file__).resolve().parent.parent / 'assets/icons/LICENSE'
+    parts.append('\nKubai Icons (bundled SVG assets)\n' + icon_license.read_text(encoding='utf-8'))
     for package in sorted(metadata['packages'], key=lambda p: (p['name'], p['version'])):
         root = Path(package['manifest_path']).parent
         parts.append(f'\n{"=" * 72}\n{package["name"]} {package["version"]}\nSPDX: {package.get("license") or "see bundled license"}\nSource: {package.get("repository") or package.get("source") or "Yank workspace"}\n')

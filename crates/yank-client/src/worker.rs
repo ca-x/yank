@@ -25,6 +25,7 @@ pub struct Snapshot {
     pub filter: String,
     pub error: String,
     pub has_more: bool,
+    pub has_earlier: bool,
     pub views: Vec<yank_core::SavedView>,
     pub boards: Vec<String>,
     pub selected: Option<Clip>,
@@ -37,6 +38,7 @@ pub enum CaptureSource {
 #[derive(Debug)]
 pub enum Command {
     Search(String, String, u32),
+    Earlier,
     Select(String),
     PairCode(String, bool, u64),
     Capture(Clip, CaptureSource),
@@ -114,10 +116,16 @@ impl Worker {
                         Ok(rt) => {
                             let state = shared.clone();
                             if let Err(e) = rt.block_on(network::run(state)) {
-                                shared.status(format!("网络不可用：{e}"));
+                                shared.status(crate::l10n::message(
+                                    "网络不可用：{e}",
+                                    &[("e", (e).to_string())],
+                                ));
                             }
                         }
-                        Err(e) => shared.status(format!("网络启动失败：{e}")),
+                        Err(e) => shared.status(crate::l10n::message(
+                            "网络启动失败：{e}",
+                            &[("e", (e).to_string())],
+                        )),
                     }
                 })?;
         }
@@ -184,7 +192,10 @@ fn revoke_session(prefs: &Preferences) -> anyhow::Result<()> {
             .await
         })
         .map_err(|e| {
-            anyhow::anyhow!("已解除本机账号；服务端会话撤销失败，请在服务端修改密码以撤销会话：{e}")
+            anyhow::anyhow!(crate::l10n::message(
+                "已解除本机账号；服务端会话撤销失败，请在服务端修改密码以撤销会话：{e}",
+                &[("e", e.to_string())]
+            ))
         })
 }
 fn run(
@@ -207,6 +218,7 @@ fn run(
     let mut update_check = Instant::now() - Duration::from_secs(86401);
     let mut selected = String::new();
     let (mut query, mut filter, mut limit) = (String::new(), "all".to_owned(), 100u32);
+    let mut history_expanded = false;
     let mut error = String::new();
     let mut dirty = true;
     let mut last_snapshot = Instant::now();
@@ -285,13 +297,23 @@ fn run(
                             .name("yank-update".into())
                             .spawn(move || match crate::integration::update() {
                                 Ok(message) => state.status(message),
-                                Err(e) => state.status(format!("更新失败：{e}")),
+                                Err(e) => state.status(crate::l10n::message(
+                                    "更新失败：{e}",
+                                    &[("e", (e).to_string())],
+                                )),
                             })?;
                     }
                     Command::Search(q, f, l) => {
+                        if query != q || filter != f || l <= limit {
+                            history_expanded = false;
+                        }
                         query = q;
                         filter = f;
                         limit = l;
+                    }
+                    Command::Earlier => {
+                        history_expanded = true;
+                        limit = limit.saturating_add(100);
                     }
                     Command::Capture(mut clip, source) => {
                         #[cfg(not(target_os = "android"))]
@@ -350,6 +372,10 @@ fn run(
                             return Ok(());
                         }
                         let previous = store.preferences()?;
+                        if previous.history_range != prefs.history_range {
+                            history_expanded = false;
+                            limit = 100;
+                        }
                         for key in [
                             &prefs.hotkey_show,
                             &prefs.hotkey_next,
@@ -375,12 +401,14 @@ fn run(
                         if !previous.auto_update && prefs.auto_update {
                             update_check = Instant::now() - Duration::from_secs(86401);
                         }
+                        prefs.cleanup.validate()?;
                         if previous.launch_at_login != prefs.launch_at_login {
                             crate::integration::launch_at_login(prefs.launch_at_login)?;
                         }
                         store.save_preferences(&prefs)?;
                         *current = prefs.clone();
                         drop(current);
+                        maintenance = Instant::now() - Duration::from_secs(61);
                         if !previous.token.is_empty() && previous.token != prefs.token {
                             revoke_session(&previous)?;
                         }
@@ -466,7 +494,10 @@ fn run(
                         anyhow::ensure!(bytes.len() <= 64 * 1024 * 1024, "导入文件超过 64 MiB");
                         let count = store.import(std::str::from_utf8(&bytes)?, &device)?;
                         state.recovery_pending.store(false, Ordering::Relaxed);
-                        state.status(format!("已导入 {count} 条记录"));
+                        state.status(crate::l10n::message(
+                            "已导入 {count} 条记录",
+                            &[("count", (count).to_string())],
+                        ));
                     }
                     Command::SendDitto(clip) => {
                         let prefs = store.preferences()?;
@@ -503,6 +534,7 @@ fn run(
                             .ok_or_else(|| anyhow::anyhow!("系统剪贴板不可用"))?
                             .write(&clip, false)?;
                         paste()?;
+                        store.mark_used(&clip.id)?;
                         state.status("已发送粘贴按键");
                     }
                     Command::Copy(clip, plain) => {
@@ -516,6 +548,7 @@ fn run(
                             .as_ref()
                             .ok_or_else(|| anyhow::anyhow!("系统剪贴板不可用"))?
                             .write(&clip, plain)?;
+                        store.mark_used(&clip.id)?;
                         state.status("已复制，可以接着使用了");
                     }
                 }
@@ -574,50 +607,60 @@ fn run(
         }
         if capture && update_check.elapsed() > Duration::from_secs(86400) {
             update_check = Instant::now();
-            if state.prefs.lock().map(|p| p.auto_update).unwrap_or(false) {
+            if state.prefs.lock().map(|p| p.auto_update).unwrap_or(false)
+                && crate::integration::update_unavailable_reason().is_none()
+            {
                 let state = state.clone();
                 let _ = std::thread::Builder::new()
                     .name("yank-update".into())
                     .spawn(move || match crate::integration::update() {
                         Ok(message) => state.status(message),
-                        Err(e) => state.status(format!("自动更新未完成：{e}")),
+                        Err(e) => state.status(crate::l10n::message(
+                            "自动更新未完成：{e}",
+                            &[("e", (e).to_string())],
+                        )),
                     });
             }
         }
-        if maintenance.elapsed() > Duration::from_secs(3600) {
+        if maintenance.elapsed() > Duration::from_secs(60) {
             maintenance = Instant::now();
-            if let Err(e) = maintain(&store, &state, &device) {
-                error = e.to_string();
+            match maintain(&store, &state, &device) {
+                Ok(deleted) => dirty |= deleted > 0,
+                Err(e) => error = e.to_string(),
             }
         }
         if dirty || last_snapshot.elapsed() > Duration::from_millis(700) {
             let snapshot = (|| -> yank_core::Result<Snapshot> {
-                let mut clips = Vec::new();
-                let mut offset = 0;
-                while offset < limit {
-                    let saved = store
-                        .views()?
-                        .into_iter()
-                        .find(|v| format!("smart:{}", v.id) == filter);
-                    let page = if let Some(view) = saved {
-                        store.list_with_age(
-                            &view.query,
-                            &view.filter,
-                            view.days,
-                            (limit - offset).min(100),
-                            offset,
-                        )?
-                    } else {
-                        store.list(&query, &filter, (limit - offset).min(100), offset)?
-                    };
-                    let count = page.len();
-                    clips.extend(page);
-                    if count < 100 {
-                        break;
-                    }
-                    offset += 100;
-                }
-                let has_more = clips.len() == limit as usize;
+                let saved = store
+                    .views()?
+                    .into_iter()
+                    .find(|view| format!("smart:{}", view.id) == filter);
+                let prefs = store.preferences()?;
+                let (search, kind, cutoff) = if let Some(view) = &saved {
+                    (
+                        view.query.as_str(),
+                        view.filter.as_str(),
+                        if view.days == 0 {
+                            i64::MIN
+                        } else {
+                            yank_core::now_ts().saturating_sub(i64::from(view.days) * 86400)
+                        },
+                    )
+                } else {
+                    (
+                        query.as_str(),
+                        filter.as_str(),
+                        if history_expanded || !query.trim().is_empty() || filter == "pinned" {
+                            i64::MIN
+                        } else {
+                            prefs.history_range.cutoff()
+                        },
+                    )
+                };
+                let window = store.history_window(search, kind, cutoff, limit)?;
+                let clips = window.clips;
+                let has_more = window.has_more;
+                let has_earlier = saved.is_none() && window.has_earlier;
                 let network_status = state.status.lock().map(|s| s.clone()).unwrap_or_default();
                 let identity = state.identity.lock().ok().and_then(|s| s.clone());
                 let mut discovered = state
@@ -646,6 +689,7 @@ fn run(
                     filter: filter.clone(),
                     error: error.clone(),
                     has_more,
+                    has_earlier,
                     views: store.views()?,
                     boards: store.collections()?,
                     selected: store.get(&selected)?,
@@ -661,19 +705,19 @@ fn run(
         }
     }
 }
-fn maintain(store: &Store, state: &Shared, device: &str) -> anyhow::Result<()> {
+fn maintain(store: &Store, state: &Shared, device: &str) -> anyhow::Result<usize> {
     if state.recovery_pending.load(Ordering::Relaxed) {
-        return Ok(());
+        return Ok(0);
     }
     let prefs = store.preferences()?;
-    store.expire(prefs.retention_days, device)?;
+    let deleted = store.cleanup(&prefs.cleanup, prefs.retention_days, device)?;
     if !prefs.backup_daily {
-        return Ok(());
+        return Ok(deleted);
     }
     let day = yank_core::now_ts() / 86400;
     let key = format!("backup.{day}");
     if store.value(&key)?.is_some() {
-        return Ok(());
+        return Ok(deleted);
     }
     let directory = state
         .db
@@ -700,7 +744,7 @@ fn maintain(store: &Store, state: &Shared, device: &str) -> anyhow::Result<()> {
             std::fs::remove_file(entry.path())?;
         }
     }
-    Ok(())
+    Ok(deleted)
 }
 
 fn saved_paste_clip(store: &Store, id: &str) -> anyhow::Result<Clip> {

@@ -316,7 +316,10 @@ pub async fn run(shared: Arc<Shared>) -> Result<()> {
         match session(shared.clone(), key.clone(), prefs).await {
             Ok(()) => {}
             Err(e) => {
-                shared.status(format!("连接不可用：{e}"));
+                shared.status(crate::l10n::message(
+                    "连接不可用：{e}",
+                    &[("e", (e).to_string())],
+                ));
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
@@ -466,7 +469,10 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
                 let result =
                     server_discovery(&client, &settings, &self_peer, &state, &signing_key).await;
                 if let Err(e) = result {
-                    state.status(format!("服务器暂不可用：{e}"));
+                    state.status(crate::l10n::message(
+                        "服务器暂不可用：{e}",
+                        &[("e", (e).to_string())],
+                    ));
                 }
                 String::new()
             });
@@ -475,7 +481,10 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
                 let prefs = current.clone();
                 jobs.spawn(async move {
                     if let Err(e) = crate::sync::upload(state.clone(), prefs).await {
-                        state.status(format!("服务器存储：{e}"));
+                        state.status(crate::l10n::message(
+                            "服务器存储：{e}",
+                            &[("e", (e).to_string())],
+                        ));
                     }
                     "storage".into()
                 });
@@ -578,7 +587,10 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
                         if let Err(e) =
                             pair(&ep, &mode, target, me, account, revision, &state).await
                         {
-                            state.status(format!("配对失败：{e}"));
+                            state.status(crate::l10n::message(
+                                "配对失败：{e}",
+                                &[("e", (e).to_string())],
+                            ));
                         }
                         id
                     });
@@ -598,7 +610,10 @@ async fn session(shared: Arc<Shared>, key: SecretKey, prefs: Preferences) -> Res
                     jobs.spawn(async move {
                         let id = target.id.clone();
                         if let Err(e) = exchange(&ep, &mode, &target, &state).await {
-                            state.status(format!("{}：{e}", target.name));
+                            state.status(crate::l10n::message(
+                                "{name}：{e}",
+                                &[("name", target.name.clone()), ("e", e.to_string())],
+                            ));
                         }
                         id
                     });
@@ -716,7 +731,10 @@ async fn pair(
             {
                 *target = Some(account);
             }
-            state.status(format!("已与 {} 配对", peer.name));
+            state.status(crate::l10n::message(
+                "已与 {0} 配对",
+                &[("0", (peer.name).to_string())],
+            ));
             Ok(())
         }
         _ => anyhow::bail!("对方未同意配对"),
@@ -751,7 +769,10 @@ async fn exchange(ep: &Endpoint, mode: &str, peer: &Peer, state: &Shared) -> Res
                 &format!("peer.sent.{}", peer.id),
                 &if page.epoch == remote_epoch { next } else { 0 }.to_string(),
             )?;
-            state.status(format!("{} · {}", peer.name, path));
+            state.status(crate::l10n::message(
+                "{name} · {path}",
+                &[("name", peer.name.clone()), ("path", path)],
+            ));
             Ok(())
         }),
         Response::Denied(message) => anyhow::bail!(message),
@@ -1027,10 +1048,13 @@ async fn plugins(shared: Arc<Shared>) -> Result<()> {
             continue;
         }
         let config = (prefs.ditto_listen.clone(), prefs.ditto_password.clone());
-        let listen = match prefs.ditto_listen.parse() {
+        let listen = match prefs.ditto_listen.parse::<std::net::SocketAddr>() {
             Ok(value) => value,
             Err(e) => {
-                shared.status(format!("Ditto 监听地址无效：{e}"));
+                shared.status(crate::l10n::message(
+                    "Ditto 监听地址无效：{e}",
+                    &[("e", (e).to_string())],
+                ));
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
@@ -1040,7 +1064,10 @@ async fn plugins(shared: Arc<Shared>) -> Result<()> {
             password: prefs.ditto_password,
         });
         if let Err(e) = (&plugin).await {
-            shared.status(format!("Ditto 插件：{e}"));
+            shared.status(crate::l10n::message(
+                "Ditto 插件：{e}",
+                &[("e", (e).to_string())],
+            ));
         }
         loop {
             tokio::time::sleep(Duration::from_millis(250)).await;

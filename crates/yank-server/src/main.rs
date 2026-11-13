@@ -229,12 +229,37 @@ fn router(state: AppState) -> Router {
             }),
         )
         .route(
+            "/i18n.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/i18n.js"),
+                )
+            }),
+        )
+        .route(
             "/app.css",
             get(|| async {
                 (
                     [("content-type", "text/css; charset=utf-8")],
                     include_str!("../web/app.css"),
                 )
+            }),
+        )
+        .route(
+            "/icons/{name}",
+            get(|Path(name): Path<String>| async move {
+                match name.strip_suffix(".svg").and_then(yank_core::icons::svg) {
+                    Some(svg) => (
+                        [
+                            ("content-type", "image/svg+xml"),
+                            ("cache-control", "public, max-age=3600"),
+                        ],
+                        svg,
+                    )
+                        .into_response(),
+                    None => StatusCode::NOT_FOUND.into_response(),
+                }
             }),
         )
         .route(

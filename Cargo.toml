@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -41,3 +41,4 @@ nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7
 nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
 nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
 nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
+nsh-updater = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1" }

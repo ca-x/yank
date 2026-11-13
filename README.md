@@ -7,16 +7,32 @@
 ## 客户端
 
 - 文字、HTML/RTF、PNG、文件路径记录；搜索、收藏板、智能列表、Markdown/代码预览。
+- 中英文界面、Kubai 图标；最近历史可选当天、近 1–5 天、本周或本月，按需加载更早内容，复制/粘贴成功后提前。
+- 默认关闭的自动清理：总条数或按类型限额，可结合天数；收藏不删。清理产生同步删除，规则只属于本机。
 - 顺序复制与桌面粘贴队列、自动收集、最多八张置顶悬浮卡片。
 - 设备码或局域网发现配对，首次需要对端确认；可选择仅互通，或自行登录关联账号。
 - 默认中继、仅直连、自动 NAT/中继回退；设备间走加密 QUIC + Protobuf。
 - 默认关闭服务端上传；支持脱离服务器离线使用、隐私标记过滤、应用/内容排除、历史保留、每日备份和导入恢复。
 - 桌面托盘、可配置全局快捷键、窗口位置/大小、浅深色外观、可选开机启动和校验和验证的自动更新。
+
+桌面自动更新使用 NSH Updater，默认关闭，仅支持从发布归档解压的、带 `yank-portable.json` 标记的独立程序目录。开启后每日检查 GitHub 的 `latest.json`，下载并校验 SHA256，再替换整个程序目录，下次启动生效；请勿将个人文件放在程序目录。程序数据保存在独立用户数据目录中，不随更新替换。包管理器安装（deb/rpm/pacman、Homebrew、Scoop、WinGet 等）、系统目录及来源不明的安装禁用应用内更新，需通过原安装渠道升级；即使旧配置开启自动更新也不会绕过此限制。开发构建不替换自身，Android 仍使用发布页手动安装。GitHub 更新清单目前依赖 GitHub HTTPS 和仓库发布权限，尚未配置独立 Ed25519 发布签名。
+- 客户端与管理页支持简体中文/English 即时切换，语言选择保存在本机。
+- 自动清理可关闭，支持总体条目上限或按类型限额，可额外设置过期天数；收藏记录保留。清理删除会同步到已配对设备及已启用存储的服务端，规则本身仅在本机生效，详见 [一致性设计](docs/design/cleanup-consistency.md)。
 - rutis 承载的可选 Ditto 网络适配器，见 [互通范围](docs/ditto-protocol.md)。
 
 Linux 发布 `.deb` 和包含独立 client/server 二进制的 `.tar.gz`。依赖 GTK 4.14+ 和 GStreamer，建议 Ubuntu 24.04 或兼容发行版。Windows/macOS 包未签名，macOS 未公证。Android APK 当前为 debug 签名测试包，不用于商店分发；跨构建升级可能需要先备份再重装。
 
 Android 采用前台手动捕获和复制，不承诺后台读取其他应用剪贴板。Wayland 上不能确认全局输入授权时只复制内容，提示用户手动粘贴。文件记录保存路径，本版不传输文件实体；只有本机实际捕获且内容未被改写的文件路径可写回，跨设备或导入的文件历史需在本机重新复制源文件。更多已实现/待完成项见 [能力清单](docs/ditto-client-capability-matrix.md)。
+
+## 界面
+
+以下为 Linux 原生客户端和服务端管理页的真实运行截图，使用隔离的演示数据库；中英文界面不会翻译用户自己的剪贴板内容。
+
+![原生客户端：最近历史与可选红绿灯窗口按钮](docs/screenshots/native-history-light.png)
+![原生客户端：多语言与自动清理设置](docs/screenshots/native-cleanup-light.png)
+![服务端管理页：剪贴板历史与内容详情](docs/screenshots/server-history-light.png)
+
+深色与窄屏示例：[原生客户端](docs/screenshots/native-history-dark.png) · [管理页](docs/screenshots/server-history-dark.png) · [手机宽度](docs/screenshots/server-mobile-dark.png)。
 
 ## 自托管
 
@@ -38,7 +54,7 @@ docker run --rm \
   -e YANK_PUBLIC_URL=https://yank.example.com \
   -e YANK_RELAY_URL=https://relay.example.com \
   -e YANK_COOKIE_SECURE=true \
-  -v yank-data:/data ghcr.io/ca-x/yank:0.2.1
+  -v yank-data:/data ghcr.io/ca-x/yank:0.3.0
 ```
 
 公网部署为 API 和中继配置反向代理/TLS，`YANK_RELAY_URL` 必须是客户端可达的地址。API 默认 7219/tcp，中继默认 7220/tcp。自动 NAT 地址发现可配置 `YANK_TLS_CERT`、`YANK_TLS_KEY`、`YANK_QUIC_BIND`（默认 7842/udp），并按需发布该 UDP 端口。`YANK_STORAGE_DISABLED=true` 只禁用持久化 API，不影响账号发现与中继。

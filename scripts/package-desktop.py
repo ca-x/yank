@@ -45,6 +45,10 @@ def main():
         stage = Path(scratch)
         bundle = stage / f'yank-{version}-{args.platform}'
         bundle.mkdir()
+        (bundle / 'yank-portable.json').write_text(json.dumps({
+            'id': 'io.github.cax.yank', 'channel': 'portable',
+            'executable': f'yank-client{suffix}',
+        }) + '\n', encoding='utf-8')
         for name in ('yank-client', 'yank-server'):
             source = args.target_dir / 'release' / f'{name}{suffix}'
             if not source.is_file() or source.stat().st_size == 0:

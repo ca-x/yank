@@ -1,5 +1,6 @@
 {
-  "name":"Yank","id":"io.github.cax.yank","version":"0.2.1","build":2,
+  "name":"Yank","id":"io.github.cax.yank","version":"0.3.0","build":3,
   "rust":".","root":"App","appearance":"system","theme":"src/ui/theme.json",
-  "icon":"assets/yank-icon-512.png","android":{"targetSdk":35}
+  "icon":"assets/yank-icon-512.png","android":{"targetSdk":35},
+  "updater":{"github":"ca-x/yank"}
 }

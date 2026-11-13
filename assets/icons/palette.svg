@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2.5 -5.5 36 36" width="28" height="28" fill="none"><metadata>MIT License
+
+Copyright (c) 2026 Kubai087 and the Kubai Icons contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</metadata><defs><linearGradient id="loS-ki-palette" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#84B7A8"/><stop offset="1" stop-color="#6DAA98"/></linearGradient><linearGradient id="upS-ki-palette" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C5DDD6"/><stop offset="1" stop-color="#A2C8BD"/></linearGradient><linearGradient id="pure-ki-palette-2F6FE0" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2F5E5C"/><stop offset="1" stop-color="#2F5E5C"/></linearGradient><filter id="sh-ki-palette" x="-40%" y="-40%" width="180%" height="190%" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/><feOffset dy="2"/><feGaussianBlur stdDeviation="2"/><feComposite in2="hardAlpha" operator="out"/><feColorMatrix type="matrix" values="0 0 0 0 0.4784 0 0 0 0 0.698 0 0 0 0 0.6275 0 0 0 0.21 0"/><feBlend in2="BackgroundImageFix" mode="normal" result="shadow"/><feBlend in="SourceGraphic" in2="shadow" mode="normal"/></filter><filter id="hi-ki-palette" x="-10%" y="-10%" width="120%" height="130%" color-interpolation-filters="sRGB"><feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="a"/><feOffset in="a" dy="0.7"/><feGaussianBlur stdDeviation="0.35"/><feComposite in2="a" operator="arithmetic" k2="-1" k3="1"/><feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0"/><feBlend in2="SourceGraphic" mode="overlay"/></filter><mask id="ol-ki-palette-0" maskUnits="userSpaceOnUse" x="-40" y="-40" width="111" height="109"><rect x="-40" y="-40" width="111" height="109" fill="#fff"/><path d="M26.091 16.719A11.4 11.4 0 1 0 19.989 22.979A4.4 4.4 0 0 1 26.091 16.719ZM10.1 17.6A2.3 2.3 0 1 0 14.7 17.6A2.3 2.3 0 1 0 10.1 17.6Z" fill="#000" fill-rule="evenodd"/></mask></defs><g filter="url(#sh-ki-palette)"><g filter="url(#hi-ki-palette)"><g transform="rotate(0 12.4 17.6)"><path d="M26.091 16.719A11.4 11.4 0 1 0 19.989 22.979A4.4 4.4 0 0 1 26.091 16.719ZM10.1 17.6A2.3 2.3 0 1 0 14.7 17.6A2.3 2.3 0 1 0 10.1 17.6Z" fill="none" stroke-width="1" stroke="url(#loS-ki-palette)"/><path d="M26.091 16.719A11.4 11.4 0 1 0 19.989 22.979A4.4 4.4 0 0 1 26.091 16.719ZM10.1 17.6A2.3 2.3 0 1 0 14.7 17.6A2.3 2.3 0 1 0 10.1 17.6Z" fill-rule="evenodd" fill="url(#loS-ki-palette)"/></g></g></g><g transform="rotate(0 12.4 17.6)"><path d="M26.091 16.719A11.4 11.4 0 1 0 19.989 22.979A4.4 4.4 0 0 1 26.091 16.719ZM10.1 17.6A2.3 2.3 0 1 0 14.7 17.6A2.3 2.3 0 1 0 10.1 17.6Z" fill-rule="evenodd" mask="url(#ol-ki-palette-0)" fill="none" stroke-width="2" stroke="#3B8D74"/><circle cx="9.6" cy="10.4" fill="#fff" r="2.4"/><circle cx="13" cy="5.6" fill="url(#pure-ki-palette-2F6FE0)" r="2.4"/><circle cx="18.8" cy="5.6" fill="#fff" r="2.4"/><circle cx="22.2" cy="10.6" fill="url(#pure-ki-palette-2F6FE0)" r="2.4"/></g></svg>

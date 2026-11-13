@@ -8,6 +8,7 @@ fn offline_client_exposes_history_and_settings_without_login() -> Result<(), Str
     app.wait_for("复制过的内容，会留在这里")?;
     app.press("设置")?;
     app.wait_for("账号登录（可选）")?;
+    app.wait_for("账号登录（可选）")?;
     app.wait_for("上传并保存在服务端")?;
     assert!(app.shows("隐私与备份"));
     Ok(())
@@ -85,7 +86,7 @@ impl Fixture {
         config.environment.os = if desktop { Os::Linux } else { Os::Ios };
         let mut app = Headless::start(config).map_err(|e| e.to_string())?;
         app.wait_for("我的剪贴板")?;
-        app.wait_until("seeded history", Duration::from_secs(3), |screen| {
+        wait_screen(&mut app, "seeded history", |screen| {
             screen.matches("Alpha clip").unwrap_or(false)
         })?;
         Ok(Self {
@@ -107,6 +108,29 @@ fn wait_input(app: &mut Headless, label: &str, value: &str) -> Result<(), String
     app.wait_until("hydrated editor value", Duration::from_secs(3), |screen| {
         screen.input_text(label).ok().flatten() == Some(value)
     })
+}
+
+fn wait_screen(
+    app: &mut Headless,
+    what: &str,
+    done: impl Fn(&nsh_testing::Screen) -> bool,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if done(app.screen()) {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("{what}: UI condition still false after 3000 ms"));
+        }
+        let slice = remaining.min(Duration::from_millis(20));
+        if app.clock().is_manual() {
+            app.run_for(slice)?;
+        } else {
+            let _ = app.next_batch(slice);
+        }
+    }
 }
 
 // Persisted state can change without producing a new UI batch. Poll it on a
@@ -133,9 +157,49 @@ fn wait_store(app: &mut Headless, what: &str, done: impl Fn() -> bool) -> Result
     }
 }
 
+fn replace_input(app: &mut Headless, label: &str, value: &str) -> Result<(), String> {
+    app.clear(label)?;
+    if !value.is_empty() {
+        app.type_text(label, value)?;
+    }
+    Ok(())
+}
+
 #[component]
 fn QuietWaitScreen() -> impl nsh_core::prelude::IntoElement {
     nsh_core::prelude::text("No UI updates")
+}
+
+#[component]
+fn BackgroundPolledScreen() -> impl nsh_core::prelude::IntoElement {
+    use nsh_core::prelude::*;
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = ready.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(80));
+        writer.store(true, std::sync::atomic::Ordering::Release);
+    });
+    let shown = signal(false);
+    set_interval(Duration::from_millis(20), move || {
+        shown.set(ready.load(std::sync::atomic::Ordering::Acquire));
+    });
+    text(move || {
+        if shown.get() {
+            "Worker ready"
+        } else {
+            "Waiting for worker"
+        }
+    })
+}
+
+#[test]
+fn manual_clock_keeps_polling_until_real_worker_has_published() -> Result<(), String> {
+    let mut config = EngineConfig::new(Root::of::<BackgroundPolledScreen>());
+    config.clock = nsh_core::time::Clock::manual(std::time::SystemTime::UNIX_EPOCH);
+    let mut app = Headless::start(config).map_err(|error| error.to_string())?;
+    wait_screen(&mut app, "real worker result", |screen| {
+        screen.matches("Worker ready").unwrap_or(false)
+    })
 }
 
 #[test]
@@ -268,6 +332,7 @@ fn headless_narrow_settings_exposes_exclusive_transport_and_saved_preferences() 
     let mut fixture = Fixture::start(849.0, true, clips())?;
     let app = &mut fixture.app;
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
     app.wait_for("设备传输方式")?;
     assert_eq!(
         app.screen()
@@ -301,7 +366,7 @@ fn headless_narrow_settings_exposes_exclusive_transport_and_saved_preferences() 
         "后续远端变更写入系统剪贴板",
         "排除的应用（每行一个）",
         "每日自动备份",
-        "保留天数（0 为永久）",
+        "同时清理超过天数的记录（0 为不按时间清理）",
         "显示面板快捷键",
         "队列下一条快捷键",
         "暂停记录快捷键",
@@ -309,10 +374,13 @@ fn headless_narrow_settings_exposes_exclusive_transport_and_saved_preferences() 
         "静默启动",
         "面板位置",
         "登录系统时启动",
-        "自动检查并下载更新",
     ] {
         assert!(app.shows(label), "missing preference {label}");
     }
+    assert!(!app.shows("自动检查并下载更新"));
+    assert!(
+        app.shows("由软件包管理器安装或安装来源未确认，请使用原安装渠道更新；应用内更新已禁用。")
+    );
     app.press("后续远端变更写入系统剪贴板")?;
     wait_store(app, "remote apply disabled", || {
         !fixture.store.preferences().unwrap().apply_remote
@@ -349,6 +417,7 @@ fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
     let app = &mut fixture.app;
     let label = "排除内容的正则表达式（可留空）";
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
     app.wait_for(label)?;
     assert!(!app.screen().enabled("保存排除正则")?);
     app.type_text(label, "[")?;
@@ -380,6 +449,7 @@ fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
     );
     app.back()?;
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
     wait_input(app, label, "[")?;
     app.type_text(label, "ab]")?;
     wait_settings_snapshot(app)?;
@@ -402,6 +472,7 @@ fn headless_settings_text_drafts_do_not_leak_into_toggle_saves() -> Result<(), S
     let mut fixture = Fixture::start_with_clock(849.0, true, clips(), true)?;
     let app = &mut fixture.app;
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
     app.wait_for("显示面板快捷键")?;
     let original = fixture.store.preferences().unwrap();
     app.clear("显示面板快捷键")?;
@@ -607,6 +678,7 @@ fn headless_pending_login_disables_duplicate_login_import_and_ditto() -> Result<
     app.press("Alpha clip")?;
     wait_input(app, "编辑文字", "alpha saved")?;
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
     app.type_text(
         "服务器地址，例如 https://yank.example.com",
         &format!("http://{address}"),
@@ -625,6 +697,7 @@ fn headless_pending_login_disables_duplicate_login_import_and_ditto() -> Result<
         .join()
         .map_err(|_| "fixture HTTP server panicked".to_string())?;
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
     app.wait_until(
         "form error and footer error",
         Duration::from_secs(3),
@@ -660,6 +733,7 @@ fn headless_failed_recovery_preserves_backup_and_offers_retry() -> Result<(), St
             .any(|d| d.title.as_deref() == Some("本地历史文件不存在，恢复自动备份？"))
     })?;
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
     app.wait_for("重试恢复自动备份")?;
     assert_eq!(
         std::fs::read_to_string(&backup).map_err(|e| e.to_string())?,
@@ -701,6 +775,37 @@ fn headless_desktop_floating_card_reopens_after_native_close() -> Result<(), Str
 }
 
 #[test]
+fn headless_close_cancel_preserves_ask_and_minimize_is_saved_before_hiding() -> Result<(), String> {
+    let mut fixture = Fixture::start(850.0, true, clips())?;
+    let app = &mut fixture.app;
+    app.on_dialog(|_| nsh_testing::DialogAnswer::Press("取消".into()));
+    app.press_window_close("main")?;
+    assert_eq!(
+        fixture.store.preferences().unwrap().close_behavior,
+        yank_core::CloseBehavior::Ask
+    );
+    assert!(!app.window_state("main")?.unwrap().minimized);
+    app.on_dialog(|_| nsh_testing::DialogAnswer::Press("最小化并继续运行".into()));
+    app.press_window_close("main")?;
+    wait_store(app, "close behavior saved", || {
+        fixture.store.preferences().unwrap().close_behavior == yank_core::CloseBehavior::Minimize
+    })?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !app
+        .window_state("main")?
+        .is_some_and(|state| state.minimized)
+    {
+        if std::time::Instant::now() >= deadline {
+            return Err("window was not minimized after saving close behavior".into());
+        }
+        let _ = app.next_batch(Duration::from_millis(20));
+    }
+    app.on_dialog(|_| panic!("remembered close behavior must not ask again"));
+    app.press_window_close("main")?;
+    Ok(())
+}
+
+#[test]
 fn headless_tray_click_places_panel_at_anchor_and_falls_back_without_coordinates()
 -> Result<(), String> {
     use nsh_core::{
@@ -711,6 +816,8 @@ fn headless_tray_click_places_panel_at_anchor_and_falls_back_without_coordinates
     let mut fixture = Fixture::start(849.0, true, clips())?;
     let app = &mut fixture.app;
     app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
+    app.wait_for("托盘附近")?;
     app.press("托盘附近")?;
     wait_store(app, "tray position persisted", || {
         fixture.store.preferences().unwrap().panel_position == "tray"
@@ -785,6 +892,141 @@ fn headless_tray_click_places_panel_at_anchor_and_falls_back_without_coordinates
         centered.origin,
         point(px(480.0), px(200.0)),
         "missing tray coordinates use the primary monitor center"
+    );
+    Ok(())
+}
+
+#[test]
+fn headless_language_switch_rebinds_controls_and_preserves_user_content() -> Result<(), String> {
+    let mut records = clips();
+    records[0].text = "图片".into();
+    records[0].collection = "文字".into();
+    let mut fixture = Fixture::start(1120.0, true, records)?;
+    // A renamed seeded list is user content, even if it matches another UI label.
+    let mut renamed = fixture
+        .store
+        .views()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|v| v.id == "default-images")
+        .ok_or("missing seeded view")?;
+    renamed.name = "设置".into();
+    fixture
+        .store
+        .save_view(renamed)
+        .map_err(|e| e.to_string())?;
+    let app = &mut fixture.app;
+    app.press("设置与账号")?;
+    app.wait_for("保留最新的未收藏记录总数")?;
+    replace_input(app, "保留最新的未收藏记录总数", "4321")?;
+    app.press("English")?;
+    app.wait_for("Settings and account")?;
+    app.wait_for("Enable automatic cleanup")?;
+    app.wait_for("Save device name")?;
+    wait_input(app, "Keep latest unpinned records (total)", "4321")?;
+    wait_store(app, "language persisted", || {
+        fixture.store.preferences().unwrap().language == "en"
+    })?;
+    app.press("All history")?;
+    app.wait_for("Alpha clip")?;
+    app.press("Alpha clip")?;
+    wait_input(app, "Edit text", "图片")?;
+    wait_input(app, "Board name", "文字")?;
+    assert!(app.shows("设置"), "renamed seeded list must stay unchanged");
+    app.press("Settings and account")?;
+    app.wait_for("中文")?;
+    app.press("中文")?;
+    app.wait_for("上传并保存在服务端")?;
+    wait_store(app, "Chinese persisted", || {
+        fixture.store.preferences().unwrap().language == "zh"
+    })?;
+    Ok(())
+}
+
+#[test]
+fn headless_cleanup_rejects_invalid_drafts_and_requires_destructive_confirmation()
+-> Result<(), String> {
+    let mut fixture = Fixture::start(849.0, true, clips())?;
+    let app = &mut fixture.app;
+    app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
+    app.wait_for("启用自动清理")?;
+    app.press("启用自动清理")?;
+    replace_input(app, "保留最新的未收藏记录总数", "1")?;
+    app.on_dialog(|_| nsh_testing::DialogAnswer::Press("取消".into()));
+    app.press("保存清理设置")?;
+    let _ = app.next_batch(Duration::from_millis(200));
+    assert!(!fixture.store.preferences().unwrap().cleanup.enabled);
+    assert_eq!(fixture.store.stats().unwrap().clips, 2);
+    for value in ["0", "-1", "1000001", "1.5", ""] {
+        replace_input(app, "保留最新的未收藏记录总数", value)?;
+        app.press("保存清理设置")?;
+        app.wait_for("清理设置无效：条数须为 1 至 1,000,000 的整数，天数须为非负整数。")?;
+        assert!(!fixture.store.preferences().unwrap().cleanup.enabled);
+        assert_eq!(fixture.store.stats().unwrap().clips, 2);
+    }
+    replace_input(app, "保留最新的未收藏记录总数", "2")?;
+    app.on_dialog(|_| nsh_testing::DialogAnswer::Press("应用清理设置".into()));
+    app.press("保存清理设置")?;
+    wait_store(app, "cleanup enabled", || {
+        fixture.store.preferences().unwrap().cleanup.enabled
+    })?;
+    replace_input(app, "保留最新的未收藏记录总数", "1")?;
+    app.on_dialog(|_| nsh_testing::DialogAnswer::Press("取消".into()));
+    app.press("保存清理设置")?;
+    let _ = app.next_batch(Duration::from_millis(200));
+    assert_eq!(fixture.store.preferences().unwrap().cleanup.max_items, 2);
+    assert_eq!(fixture.store.stats().unwrap().clips, 2);
+    app.on_dialog(|_| nsh_testing::DialogAnswer::Press("应用清理设置".into()));
+    app.press("保存清理设置")?;
+    wait_store(app, "immediate cleanup after save", || {
+        fixture.store.stats().unwrap().clips == 1
+    })?;
+    app.press("记录")?;
+    app.wait_for("text:/^1 条结果/")?;
+    Ok(())
+}
+
+#[test]
+fn headless_per_type_cleanup_draft_does_not_overwrite_policy_when_invalid() -> Result<(), String> {
+    let mut fixture = Fixture::start(849.0, true, clips())?;
+    let app = &mut fixture.app;
+    app.press("设置")?;
+    app.wait_for("账号登录（可选）")?;
+    app.press("按类型分别保留")?;
+    for label in [
+        "文字保留条数",
+        "链接保留条数",
+        "图片保留条数",
+        "文件保留条数",
+        "代码保留条数",
+        "颜色保留条数",
+    ] {
+        app.wait_for(label)?;
+    }
+    replace_input(app, "颜色保留条数", "0")?;
+    app.press("保存清理设置")?;
+    app.wait_for("清理设置无效：条数须为 1 至 1,000,000 的整数，天数须为非负整数。")?;
+    assert_eq!(
+        fixture.store.preferences().unwrap().cleanup.mode,
+        yank_core::CleanupMode::Total
+    );
+    replace_input(app, "颜色保留条数", "15")?;
+    replace_input(app, "同时清理超过天数的记录（0 为不按时间清理）", "-1")?;
+    app.press("保存清理设置")?;
+    assert_eq!(fixture.store.preferences().unwrap().retention_days, 0);
+    replace_input(app, "同时清理超过天数的记录（0 为不按时间清理）", "0")?;
+    app.press("保存清理设置")?;
+    wait_store(app, "valid per-type draft persisted", || {
+        let p = fixture.store.preferences().unwrap();
+        p.cleanup.mode == yank_core::CleanupMode::PerType
+            && p.cleanup.per_type.get("color") == Some(&15)
+            && p.retention_days == 0
+    })?;
+    assert_eq!(
+        fixture.store.stats().unwrap().clips,
+        2,
+        "disabled cleanup never deletes"
     );
     Ok(())
 }
