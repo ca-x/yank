@@ -6,7 +6,10 @@ use crate::{
     network::{Association, Decision},
     worker::{CaptureSource, Command, Snapshot, Worker},
 };
-use controls::{action, field, hint, icon_action, nav_action, surface, title, toggle};
+use controls::{
+    action, field, hint, icon, icon_action, keycap, nav_action, quiet_action, surface, title,
+    toggle,
+};
 use nsh_base::{alert_dialog, theme};
 use nsh_core::{platform::Appearance, prelude::*};
 use std::{collections::HashMap, rc::Rc, sync::atomic::Ordering, time::Duration};
@@ -62,6 +65,9 @@ struct Ui {
     prefs: Signal<Preferences>,
     drafts: Signal<HashMap<String, Draft>>,
     preference_drafts: Signal<HashMap<&'static str, String>>,
+    preference_fields: Rc<std::cell::RefCell<HashMap<&'static str, PreferenceBinding>>>,
+    settings_query: Signal<String>,
+    recording_hotkey: Signal<Option<&'static str>>,
     cleanup_draft: Signal<CleanupDraft>,
     cleanup_edited: Signal<bool>,
     pending_float: Signal<Option<String>>,
@@ -80,6 +86,11 @@ struct Ui {
     smart_name: Signal<String>,
     smart_days: Signal<u32>,
     notice: Signal<String>,
+    notice_revision: Signal<u64>,
+    alert: Signal<String>,
+    notice_opacity: Signal<f32>,
+    copied: Signal<String>,
+    minute: Signal<i64>,
     server: Signal<String>,
     username: Signal<String>,
     password: Signal<String>,
@@ -88,6 +99,11 @@ struct Ui {
     prompting: Signal<bool>,
     close_prompting: Signal<bool>,
     close_after_save: Signal<Option<yank_core::CloseBehavior>>,
+    editing: Signal<bool>,
+    detail_more: Signal<bool>,
+    dismissed_status: Signal<String>,
+    queue_undo: Signal<Option<Clip>>,
+    checked_clips: Signal<std::collections::HashSet<String>>,
 }
 impl Ui {
     fn new(worker: Rc<Worker>) -> Self {
@@ -113,6 +129,9 @@ impl Ui {
             prefs: signal(initial),
             drafts: signal(HashMap::new()),
             preference_drafts: signal(HashMap::new()),
+            preference_fields: Rc::default(),
+            settings_query: signal(String::new()),
+            recording_hotkey: signal(None),
             pending_float: signal(None),
             tray_anchor: signal(None),
             picking: signal(false),
@@ -125,6 +144,11 @@ impl Ui {
             smart_name: signal(String::new()),
             smart_days: signal(0),
             notice: signal(String::new()),
+            notice_revision: signal(0),
+            alert: signal(String::new()),
+            notice_opacity: signal(1.0),
+            copied: signal(String::new()),
+            minute: signal(yank_core::now_ts() / 60),
             server: signal(String::new()),
             username: signal(String::new()),
             password: signal(String::new()),
@@ -133,6 +157,11 @@ impl Ui {
             prompting: signal(false),
             close_prompting: signal(false),
             close_after_save: signal(None),
+            editing: signal(false),
+            detail_more: signal(false),
+            dismissed_status: signal(String::new()),
+            queue_undo: signal(None),
+            checked_clips: signal(std::collections::HashSet::new()),
         }
     }
 
@@ -184,7 +213,7 @@ impl Ui {
                         *busy = None;
                     }
                 }
-                self.notice.set("设置不可用，请重启应用".into());
+                self.alert.set("设置不可用，请重启应用".into());
                 return;
             }
         }
@@ -199,7 +228,7 @@ impl Ui {
             if let Ok(mut busy) = self.worker.shared.busy.lock() {
                 *busy = None;
             }
-            self.notice.set("后台服务已停止，请重启应用".into());
+            self.alert.set("后台服务已停止，请重启应用".into());
         }
     }
     fn selected(&self) -> Option<Clip> {
@@ -210,6 +239,9 @@ impl Ui {
         })
     }
     fn choose(&self, clip: Clip) {
+        self.editing
+            .set(self.drafts.with(|drafts| drafts.contains_key(&clip.id)));
+        self.detail_more.set(false);
         self.pending_float.set(None);
         let hydrated = self
             .selected()
@@ -376,6 +408,31 @@ pub fn app() -> impl IntoElement {
         }
     };
     let ui = Ui::new(worker);
+    let notices = ui.clone();
+    effect(move || {
+        let notice = notices.notice.get();
+        let revision = notices.notice_revision.get();
+        if !notice.is_empty() {
+            notices.notice_opacity.set(1.0);
+            let ui = notices.clone();
+            let fade = notices.clone();
+            let fading = notice.clone();
+            set_timeout(Duration::from_millis(3800), move || {
+                if fade.notice.get_untracked() == fading
+                    && fade.notice_revision.get_untracked() == revision
+                {
+                    fade.notice_opacity.set(0.0);
+                }
+            });
+            set_timeout(Duration::from_secs(4), move || {
+                if ui.notice.get_untracked() == notice
+                    && ui.notice_revision.get_untracked() == revision
+                {
+                    ui.notice.set(String::new());
+                }
+            });
+        }
+    });
     let appearance = ui.clone();
     effect(move || {
         set_color_scheme(match appearance.prefs.get().theme.as_str() {
@@ -392,6 +449,7 @@ pub fn app() -> impl IntoElement {
     let state = ui.clone();
     let startup_done = std::cell::Cell::new(false);
     set_interval(Duration::from_millis(80), move || {
+        state.minute.set(yank_core::now_ts() / 60);
         state
             .recovery_pending
             .set(state.worker.shared.recovery_pending.load(Ordering::Relaxed));
@@ -425,6 +483,32 @@ pub fn app() -> impl IntoElement {
                 .unwrap_or_default(),
         );
         while let Ok(snapshot) = state.worker.snapshots.try_recv() {
+            if let Some(feedback) = &snapshot.feedback
+                && state.snapshot.with(|previous| {
+                    previous
+                        .as_ref()
+                        .and_then(|previous| previous.feedback.as_ref())
+                        .is_none_or(|previous| previous.sequence != feedback.sequence)
+                })
+            {
+                state.notice.set(feedback.message.clone());
+                state.notice_revision.set(feedback.sequence);
+                state
+                    .copied
+                    .set(feedback.copied_id.clone().unwrap_or_default());
+                let ui = state.clone();
+                let sequence = feedback.sequence;
+                set_timeout(Duration::from_millis(600), move || {
+                    if ui.snapshot.with(|snapshot| {
+                        snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.feedback.as_ref())
+                            .is_some_and(|feedback| feedback.sequence == sequence)
+                    }) {
+                        ui.copied.set(String::new());
+                    }
+                });
+            }
             if !startup_done.replace(true)
                 && is_desktop()
                 && (snapshot.prefs.silent_start
@@ -605,7 +689,7 @@ pub fn app() -> impl IntoElement {
         .pb(move || px(safe_area().bottom.0.max(keyboard_height().0)))
         .bg(move || theme().background)
         .text_color(move || theme().foreground)
-        .child(when(is_desktop, {
+        .child(when(move || is_desktop() && !desktop.get(), {
             let ui = ui.clone();
             move || desktop::title_bar(ui.clone())
         }))
@@ -636,40 +720,139 @@ pub fn app() -> impl IntoElement {
                         })),
                 ),
         )
+        .child(feedback(foot))
+        .into_element()
+}
+fn platform_shortcut(value: &str) -> String {
+    value
+        .split('+')
+        .map(|part| {
+            if part.len() == 1 || part.starts_with('f') && part[1..].parse::<u8>().is_ok() {
+                part.to_uppercase()
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+        .replace("mod+", if apple_keys() { "⌘" } else { "Ctrl+" })
+        .replace("shift+", if apple_keys() { "⇧" } else { "Shift+" })
+        .replace("alt+", if apple_keys() { "⌥" } else { "Alt+" })
+        .replace("ctrl+", "Ctrl+")
+}
+
+fn feedback(ui: Ui) -> impl IntoElement {
+    let warning = computed({
+        let ui = ui.clone();
+        move || {
+            let alert = ui.alert.get();
+            ui.snapshot.with(|snapshot| {
+                let Some(snapshot) = snapshot else {
+                    return alert;
+                };
+                if !snapshot.error.is_empty() {
+                    return crate::l10n::message(
+                        "操作失败：{error}",
+                        &[("error", snapshot.error.clone())],
+                    );
+                }
+                if !alert.is_empty() {
+                    return alert;
+                }
+                if ["失败", "不可用", "权限", "快捷键"]
+                    .iter()
+                    .any(|part| snapshot.network_status.contains(part))
+                {
+                    snapshot.network_status.clone()
+                } else {
+                    String::new()
+                }
+            })
+        }
+    });
+    let dismissed = ui.clone();
+    let dismiss = ui.clone();
+    let settings = ui.clone();
+    let notice = ui.clone();
+    let status = ui.clone();
+    view()
+        .relative()
+        .gap_1()
+        .child(when(
+            move || !warning.get().is_empty() && dismissed.dismissed_status.get() != warning.get(),
+            move || {
+                let dismiss = dismiss.clone();
+                let settings = settings.clone();
+                view()
+                    .px_4()
+                    .py_2()
+                    .gap_2()
+                    .flex_row()
+                    .items_center()
+                    .bg(move || theme().accent)
+                    .child(text("⚠").text_color(move || {
+                        theme().color("warning").unwrap_or(theme().destructive)
+                    }))
+                    .child(
+                        text(move || platform_shortcut(&crate::l10n::render(&warning.get())))
+                            .text_xs()
+                            .number_of_lines(2u32)
+                            .flex_1(),
+                    )
+                    .child(quiet_action("去设置", move || {
+                        settings.page.set("settings".into())
+                    }))
+                    .child(quiet_action("关闭提示", move || {
+                        dismiss.dismissed_status.set(warning.get())
+                    }))
+            },
+        ))
+        .child(when(
+            {
+                let ui = ui.clone();
+                move || !ui.notice.get().is_empty()
+            },
+            move || {
+                let ui = notice.clone();
+                let opacity = notice.clone();
+                surface()
+                    .absolute()
+                    .pointer_events(nsh_core::PointerEvents::None)
+                    .right(px(16.0))
+                    .bottom(px(32.0))
+                    .max_w(move || px((window().width.0 - 32.0).min(420.0)))
+                    .shadow_md()
+                    .py_2()
+                    .opacity(move || opacity.notice_opacity.get())
+                    .transition_opacity()
+                    .duration(move || if reduce_motion() { 0.0_f32 } else { 180.0_f32 })
+                    .child(hint(move || ui.notice.get()))
+            },
+        ))
         .child(
             view()
+                .flex_row()
+                .items_center()
+                .gap_2()
                 .px_4()
-                .py_2()
+                .py_1()
                 .border_t_1()
                 .border_color(move || theme().border)
                 .child(
-                    text(move || {
-                        let error = foot
-                            .snapshot
-                            .with(|s| s.as_ref().map(|s| s.error.clone()).unwrap_or_default());
-                        if !error.is_empty() {
-                            return crate::l10n::message(
-                                "操作失败：{error}",
-                                &[("error", (error).to_string())],
-                            );
-                        }
-                        let notice = foot.notice.get();
-                        if !notice.is_empty() {
-                            crate::l10n::render(&notice)
-                        } else {
-                            foot.worker
-                                .shared
-                                .status
-                                .lock()
-                                .map(|s| crate::l10n::render(&s))
-                                .unwrap_or_default()
-                        }
+                    text("●")
+                        .text_xs()
+                        .text_color(move || theme().color("success").unwrap_or(theme().primary)),
+                )
+                .child(hint("本地资料库可用"))
+                .child(view().flex_1())
+                .child(hint(move || {
+                    crate::l10n::tr(match status.prefs.get().mode.as_str() {
+                        "direct" => "仅直连",
+                        "auto" => "自动 NAT / 中继保底",
+                        _ => "默认中继",
                     })
-                    .text_xs()
-                    .text_color(move || theme().muted_foreground),
-                ),
+                })),
         )
-        .into_element()
 }
 fn navigate(ui: &Ui, delta: isize) {
     if ui.page.get() != "history" {
@@ -700,22 +883,16 @@ fn sidebar(ui: Ui) -> impl IntoElement {
     let q = ui.clone();
     let settings = ui.clone();
     let mut nav = view()
-        .p_5()
+        .p_4()
         .gap_2()
-        .child(
-            text("yank")
-                .text_3xl()
-                .font_weight(FontWeight::BOLD)
-                .text_color(move || theme().primary),
-        )
-        .child(hint("随时找回，接着使用。"))
-        .child(view().h(px(24.0)))
+        .child(desktop::brand(ui.clone()))
+        .child(view().h(px(12.0)))
         .child(nav_action(
             "全部记录",
             "clipboard",
             {
                 let ui = ui.clone();
-                move || ui.page.get() == "history" && ui.filter.get() == "all"
+                move || ui.page.get() == "history" && ui.filter.get() != "pinned"
             },
             move || {
                 u.page.set("history".into());
@@ -754,31 +931,7 @@ fn sidebar(ui: Ui) -> impl IntoElement {
             },
             move || q.page.set("queue".into()),
         ))
-        .child(view().h(px(16.0)))
-        .child(hint("内容类型"));
-    for (label, filter) in [
-        ("文字", "text"),
-        ("链接", "link"),
-        ("图片", "image"),
-        ("文件", "files"),
-        ("代码", "code"),
-        ("颜色", "color"),
-    ] {
-        let u = ui.clone();
-        nav = nav.child(nav_action(
-            label,
-            yank_core::icons::kind(filter),
-            {
-                let ui = ui.clone();
-                move || ui.page.get() == "history" && ui.filter.get() == filter
-            },
-            move || {
-                u.page.set("history".into());
-                u.filter.set(filter.into());
-                u.send(Command::Search(u.query.get(), filter.into(), 100));
-            },
-        ));
-    }
+        .child(view().h(px(12.0)));
     let views = ui.clone();
     let boards = ui.clone();
     let select = ui.clone();
@@ -829,7 +982,8 @@ fn sidebar(ui: Ui) -> impl IntoElement {
         ));
     let stats = ui.clone();
     view()
-        .w(px(214.0))
+        .w(px(220.0))
+        .flex_shrink_0()
         .min_h_0()
         .bg(move || theme().secondary)
         .border_r_1()
@@ -890,75 +1044,75 @@ fn mobile_nav(ui: Ui) -> impl IntoElement {
     }
     row
 }
+fn page_title(ui: &Ui) -> String {
+    crate::l10n::tr(match ui.page.get().as_str() {
+        "settings" => "设置与账号",
+        "devices" => "设备与同步",
+        "queue" => "顺序复制",
+        "preview" => "内容预览",
+        "detail" => "内容详情",
+        "smart" | "lists" => "智能列表",
+        _ if ui.filter.get() == "pinned" => "收藏",
+        _ => "全部记录",
+    })
+}
+
 fn header(ui: Ui) -> impl IntoElement {
+    let heading = ui.clone();
     let capture = ui.clone();
-    let prefs = ui.clone();
+    let status = ui.clone();
     let toggle_ui = ui.clone();
     view()
         .flex_row()
         .items_center()
-        .justify_between()
         .gap_3()
         .px_5()
-        .py_4()
+        .py_3()
         .border_b_1()
         .border_color(move || theme().border)
         .child(
             view()
+                .flex_1()
+                .min_w_0()
                 .gap_1()
                 .child(
-                    text(move || crate::l10n::tr("我的剪贴板"))
+                    text(move || page_title(&heading))
                         .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .truncate(),
                 )
-                .child(hint(move || {
-                    let p = prefs.prefs.get();
-                    if !is_desktop() {
-                        if p.token.is_empty() {
-                            crate::l10n::tr("前台手动记录 · 无需账号")
-                        } else {
-                            crate::l10n::message(
-                                "{0} · 前台手动记录",
-                                &[("0", (p.username).to_string())],
-                            )
-                        }
-                    } else if p.token.is_empty() {
-                        crate::l10n::tr("本地优先 · 无需账号")
-                    } else {
-                        format!(
-                            "{} · {}",
-                            p.username,
-                            if p.upload {
-                                crate::l10n::tr("服务器存储已开启")
-                            } else {
-                                crate::l10n::tr("不上传存储")
-                            }
-                        )
-                    }
+                .child(hint(if is_desktop() {
+                    "本地优先 · 无需账号"
+                } else {
+                    "前台手动记录 · 无需账号"
                 })),
         )
-        .child(action("记录剪贴板", true, move || {
-            capture_now(capture.clone())
-        }))
         .child(when(is_desktop, move || {
-            let label = ui.clone();
+            let label = status.clone();
             let toggle_ui = toggle_ui.clone();
             action(
                 move || {
                     crate::l10n::tr(if label.prefs.get().capture {
-                        "暂停记录"
+                        "● 记录中"
                     } else {
-                        "继续记录"
+                        "○ 已暂停"
                     })
                 },
                 false,
                 move || {
-                    let mut p = toggle_ui.prefs.get();
-                    p.capture = !p.capture;
-                    toggle_ui.save(p);
+                    let mut prefs = toggle_ui.prefs.get();
+                    prefs.capture = !prefs.capture;
+                    toggle_ui.save(prefs);
                 },
             )
+            .accessibility_label(move || Some(SharedString::from(crate::l10n::tr("切换记录状态"))))
         }))
+        .child(icon_action(
+            "记录剪贴板",
+            "clipboard",
+            true,
+            move || capture_now(capture.clone()),
+        ))
 }
 fn capture_now(ui: Ui) {
     let source = if is_desktop() {
@@ -1009,6 +1163,9 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                 nsh_core::keymap::When::NotEditing
             };
             for (key, delta) in [("arrowdown", 1), ("arrowup", -1)] {
+                if !search_focused.get() {
+                    continue;
+                }
                 let state = state.clone();
                 on_key_with(
                     key,
@@ -1035,24 +1192,6 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                 );
             }
         });
-        let list_focused = signal(false);
-        ui.history_list.on_focus_in(move || list_focused.set(true));
-        ui.history_list
-            .on_focus_out(move || list_focused.set(false));
-        let state = ui.clone();
-        effect(move || {
-            if list_focused.get() {
-                let state = state.clone();
-                on_key_with(
-                    "enter",
-                    KeyOptions {
-                        when: nsh_core::keymap::When::NotEditing,
-                        ..Default::default()
-                    },
-                    move |_| desktop::paste_selected(state.clone(), None),
-                );
-            }
-        });
     }
     let query = ui.clone();
     let change = ui.clone();
@@ -1068,40 +1207,74 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
         .p_4()
         .gap_3()
         .child(
-            field(
-                "搜索文字、标题或收藏板",
-                move || query.query.get(),
-                move |value| {
-                    change.query.set(value.into());
-                    change.limit.set(100);
-                    change.selected.set(String::new());
-                    change.send(Command::Search(value.into(), change.filter.get(), 100));
-                },
-            )
-            .element_ref(&ui.search_field)
-            .auto_focus(is_desktop())
-            .on_submit({
-                let ui = ui.clone();
-                move |_| desktop::paste_selected(ui.clone(), None)
-            }),
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(icon("search"))
+                .child(
+                    view().flex_1().min_w_0().child(
+                        field(
+                            "搜索文字、标题或收藏板",
+                            move || query.query.get(),
+                            move |value| {
+                                change.query.set(value.into());
+                                change.limit.set(100);
+                                change.selected.set(String::new());
+                                change.send(Command::Search(
+                                    value.into(),
+                                    change.filter.get(),
+                                    100,
+                                ));
+                            },
+                        )
+                        .hide_label()
+                        .element_ref(&ui.search_field)
+                        .auto_focus(is_desktop())
+                        .on_submit({
+                            let ui = ui.clone();
+                            move |_| desktop::paste_selected(ui.clone(), None)
+                        }),
+                    ),
+                ),
         )
-        .child(action("保存筛选为智能列表", false, {
-            let ui = ui.clone();
-            move || ui.page.set("smart".into())
-        }))
-        .child(hint(move || {
-            info.snapshot.with(|s| {
-                s.as_ref()
-                    .map(|s| {
-                        if is_desktop() {
-                            crate::l10n::message("{0} 条结果 · ↑ ↓ 选择 · Enter 粘贴 · {1}+1…0 快贴前十条 · Esc 收起", &[("0", (s.clips.len()).to_string()), ("1", (if apple_keys() { "⌘" } else { "Ctrl" }).to_string())])
-                        } else {
-                            crate::l10n::message("{0} 条结果", &[("0", (s.clips.len()).to_string())])
-                        }
+        .child(history_filters(ui.clone()))
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .child(history_selection(ui.clone()))
+                .child(hint(move || {
+                    info.snapshot.with(|s| {
+                        s.as_ref()
+                            .map(|s| {
+                                crate::l10n::message(
+                                    "{0} 条结果",
+                                    &[("0", (s.clips.len()).to_string())],
+                                )
+                            })
+                            .unwrap_or_else(|| crate::l10n::tr("正在读取本地历史…"))
                     })
-                    .unwrap_or_else(|| crate::l10n::tr("正在读取本地历史…"))
-            })
-        }))
+                }))
+                .child(view().flex_1())
+                .child(when(
+                    {
+                        let ui = ui.clone();
+                        move || !ui.query.get().trim().is_empty()
+                    },
+                    {
+                        let ui = ui.clone();
+                        move || {
+                            let ui = ui.clone();
+                            quiet_action("保存筛选为智能列表", move || {
+                                ui.page.set("smart".into())
+                            })
+                        }
+                    },
+                )),
+        )
         .child(
             view()
                 .flex_row()
@@ -1130,7 +1303,7 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                                 })
                             })
                             .element_ref(&ui.history_list)
-                            .estimated_item_size(px(92.0))
+                            .estimated_item_size(px(70.0))
                             .flex_1()
                             .empty(
                                 surface()
@@ -1138,13 +1311,15 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                                         text({
                                             let ui = ui.clone();
                                             move || {
-                                                crate::l10n::tr(if ui.query.get().is_empty()
-                                                    && ui.filter.get() == "all"
-                                                {
-                                                    "复制过的内容，会留在这里"
-                                                } else {
-                                                    "没有匹配的记录"
-                                                })
+                                                crate::l10n::tr(
+                                                    if ui.query.get().is_empty()
+                                                        && ui.filter.get() == "all"
+                                                    {
+                                                        "复制过的内容，会留在这里"
+                                                    } else {
+                                                        "没有匹配的记录"
+                                                    },
+                                                )
                                             }
                                         })
                                         .text_lg()
@@ -1163,20 +1338,57 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                                     })),
                             ),
                         )
-                        .child(
-                            action({ let ui=ui.clone(); move || crate::l10n::tr(if ui.snapshot.with(|snapshot| snapshot.as_ref().is_some_and(|snapshot| snapshot.has_more)) { "加载更多记录" } else { "加载更早的记录" }) }, false, move || {
-                                more.limit.update(|limit| *limit = limit.saturating_add(100));
-                                if more.snapshot.with(|snapshot| snapshot.as_ref().is_some_and(|snapshot| snapshot.has_more)) {
-                                    more.send(Command::Search(more.query.get(),more.filter.get(),more.limit.get()));
-                                } else {
-                                    more.send(Command::Earlier);
+                        .child(when(
+                            {
+                                let ui = ui.clone();
+                                move || {
+                                    ui.snapshot.with(|snapshot| {
+                                        snapshot.as_ref().is_some_and(|snapshot| {
+                                            snapshot.has_more || snapshot.has_earlier
+                                        })
+                                    })
                                 }
-                            })
-                            .disabled({
-                                let u = ui.clone();
-                                move || !u.snapshot.with(|s| s.as_ref().is_some_and(|s| s.has_more || s.has_earlier))
-                            }),
-                        ),
+                            },
+                            move || {
+                                let more = more.clone();
+                                action(
+                                    {
+                                        let ui = ui.clone();
+                                        move || {
+                                            crate::l10n::tr(
+                                                if ui.snapshot.with(|snapshot| {
+                                                    snapshot
+                                                        .as_ref()
+                                                        .is_some_and(|snapshot| snapshot.has_more)
+                                                }) {
+                                                    "加载更多记录"
+                                                } else {
+                                                    "加载更早的记录"
+                                                },
+                                            )
+                                        }
+                                    },
+                                    false,
+                                    move || {
+                                        more.limit
+                                            .update(|limit| *limit = limit.saturating_add(100));
+                                        if more.snapshot.with(|snapshot| {
+                                            snapshot
+                                                .as_ref()
+                                                .is_some_and(|snapshot| snapshot.has_more)
+                                        }) {
+                                            more.send(Command::Search(
+                                                more.query.get(),
+                                                more.filter.get(),
+                                                more.limit.get(),
+                                            ));
+                                        } else {
+                                            more.send(Command::Earlier);
+                                        }
+                                    },
+                                )
+                            },
+                        )),
                 )
                 .child(when(
                     move || desktop.get(),
@@ -1184,19 +1396,177 @@ fn history(ui: Ui, desktop: Memo<bool>) -> impl IntoElement {
                 )),
         )
 }
+fn history_filters(ui: Ui) -> impl IntoElement {
+    let mut chips = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
+    for (label, filter) in [
+        ("全部记录", "all"),
+        ("文字", "text"),
+        ("链接", "link"),
+        ("图片", "image"),
+        ("文件", "files"),
+        ("代码", "code"),
+        ("颜色", "color"),
+    ] {
+        let selected = ui.clone();
+        let change = ui.clone();
+        chips = chips.child(
+            nsh_base::radio()
+                .checked(move || selected.filter.get() == filter)
+                .on_change(move |checked: &bool| {
+                    if *checked {
+                        change.filter.set(filter.into());
+                        change.limit.set(100);
+                        change.selected.set(String::new());
+                        change.send(Command::Search(change.query.get(), filter.into(), 100));
+                    }
+                })
+                .min_h(move || px(if is_desktop() { 32.0 } else { 44.0 }))
+                .px_2()
+                .rounded(px(6.0))
+                .bg(move || theme().background)
+                .checked_style(|style| style.bg(theme().accent))
+                .hover(|style| style.bg(theme().muted))
+                .focus(|style| style.outline(px(3.0)).outline_color(theme().ring))
+                .child(text(crate::l10n::label(label)).text_sm()),
+        );
+    }
+    chips
+}
+fn history_selection(ui: Ui) -> impl IntoElement {
+    let all = ui.clone();
+    let clear = ui.clone();
+    let delete = ui.clone();
+    let count = ui.clone();
+    view().flex_row().gap_2().items_center()
+        .child(quiet_action("选择已加载记录", move || {
+            let ids=all.snapshot.with(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.clips.iter().take(1000).map(|clip| clip.id.clone()).collect()).unwrap_or_default());
+            all.checked_clips.set(ids);
+        }))
+        .child(when({let ui=ui.clone(); move || !ui.checked_clips.with(|checked| checked.is_empty())}, move || {
+            let clear=clear.clone(); let delete=delete.clone(); let count=count.clone();
+            view().flex_row().flex_wrap().gap_2().items_center()
+                .child(hint(move || crate::l10n::message("已选 {0} 条", &[("0", count.checked_clips.with(|checked| checked.len()).to_string())])))
+                .child(quiet_action("取消选择", move || clear.checked_clips.set(Default::default())))
+                .child(action("删除所选", false, move || {
+                    let ids=delete.checked_clips.get(); let ui=delete.clone();
+                    let answer=alert_dialog().title(crate::l10n::tr("删除所选记录？"))
+                        .description(crate::l10n::tr("将逐条删除选中的记录，并同步删除状态；失败的条目会显示错误提示。"))
+                        .cancel("cancel", crate::l10n::tr("取消")).destructive("delete", crate::l10n::tr("删除所选")).show();
+                    spawn(async move {if answer.await.is_ok_and(|answer| answer.action.as_deref()==Some("delete")) {
+                        ui.send(Command::DeleteMany(ids.into_iter().collect()));
+                        ui.checked_clips.set(Default::default());
+                    }});
+                }).border_color(move || theme().destructive))
+        }))
+}
+fn relative_time(timestamp: i64) -> String {
+    let elapsed = yank_core::now_ts().saturating_sub(timestamp).max(0);
+    let (source, count) = match elapsed {
+        0..60 => return crate::l10n::tr("刚刚"),
+        60..3600 => ("{0} 分钟前", elapsed / 60),
+        3600..86400 => ("{0} 小时前", elapsed / 3600),
+        _ => ("{0} 天前", elapsed / 86400),
+    };
+    crate::l10n::render(&crate::l10n::message(source, &[("0", count.to_string())]))
+}
+
+fn compact_preview(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(160)
+        .collect()
+}
+
+fn delete_clip(ui: Ui, clip: Clip) {
+    let answer = alert_dialog()
+        .title(crate::l10n::tr("删除这条记录？"))
+        .description(crate::l10n::tr(
+            "删除状态会同步到已配对设备；启用服务器存储时也会同步到服务器。请确认后删除。",
+        ))
+        .cancel("cancel", crate::l10n::tr("取消"))
+        .destructive("delete", crate::l10n::tr("删除记录"))
+        .show();
+    spawn(async move {
+        if answer
+            .await
+            .is_ok_and(|answer| answer.action.as_deref() == Some("delete"))
+        {
+            ui.send(Command::Delete(clip.id.clone()));
+            if ui.selected.get() == clip.id {
+                ui.selected.set(String::new());
+            }
+            ui.drafts.update(|drafts| {
+                drafts.remove(&clip.id);
+            });
+        }
+    });
+}
+
+fn clip_art(clip: Memo<Option<Clip>>) -> impl IntoElement {
+    dynamic(move || {
+        let Some(clip) = clip.get() else {
+            return view().into_element();
+        };
+        if clip.kind == "color"
+            && let Ok(color) = nsh_core::color::Hsla::parse_hex(clip.text.trim())
+        {
+            return view()
+                .w(px(32.0))
+                .h(px(32.0))
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(move || theme().border)
+                .bg(color)
+                .into_element();
+        }
+        if clip.kind == "image"
+            && let Some(format) = clip.formats.iter().find(|format| {
+                format.mime.as_deref() == Some("image/png") && !format.data.is_empty()
+            })
+        {
+            use base64::Engine;
+            let url = format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&format.data)
+            );
+            return image(url)
+                .w(px(32.0))
+                .h(px(32.0))
+                .rounded(px(6.0))
+                .into_element();
+        }
+        view()
+            .w(px(32.0))
+            .h(px(32.0))
+            .items_center()
+            .justify_center()
+            .child(icon(yank_core::icons::kind(&clip.kind)))
+            .into_element()
+    })
+}
+
 fn clip_row(ui: Ui, at: Position) -> impl IntoElement {
+    let minute = ui.minute;
     let current = computed({
-        let u = ui.clone();
+        let ui = ui.clone();
         move || {
-            u.snapshot
-                .with(|s| s.as_ref().and_then(|s| s.clips.get(at.index()).cloned()))
+            ui.snapshot.with(|snapshot| {
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.clips.get(at.index()).cloned())
+            })
         }
     });
     let choose = ui.clone();
     let selected = ui.clone();
     let focused = ui.clone();
     let row_ref = element_ref();
+    let row_focused = signal(false);
     row_ref.on_focus_in(move || {
+        row_focused.set(true);
         if let Some(clip) = current.get()
             && focused.selected.get() != clip.id
         {
@@ -1205,89 +1575,306 @@ fn clip_row(ui: Ui, at: Position) -> impl IntoElement {
             focused.send(Command::Select(clip.id));
         }
     });
-    nsh_base::button()
+    row_ref.on_focus_out(move || row_focused.set(false));
+    let paste = ui.clone();
+    effect(move || {
+        if is_desktop() && row_focused.get() {
+            for (key, delta) in [("arrowdown", 1), ("arrowup", -1)] {
+                let ui = paste.clone();
+                on_key_with(
+                    key,
+                    KeyOptions {
+                        when: nsh_core::keymap::When::NotEditing,
+                        repeat: true,
+                        ..Default::default()
+                    },
+                    move |_| navigate(&ui, delta),
+                );
+            }
+            let ui = paste.clone();
+            on_key_with(
+                "enter",
+                KeyOptions {
+                    when: nsh_core::keymap::When::NotEditing,
+                    ..Default::default()
+                },
+                move |_| {
+                    if let Some(clip) = current.get() {
+                        desktop::paste_record(ui.clone(), clip.id);
+                    }
+                },
+            );
+        }
+    });
+    let trigger = nsh_base::button()
         .element_ref(&row_ref)
         .on_press(move || {
             if let Some(clip) = current.get() {
                 choose.choose(clip);
             }
         })
-        .p_4()
+        .flex_row()
+        .items_center()
         .gap_2()
-        .border_b_1()
-        .border_color(move || theme().border)
-        .min_h(px(88.0))
-        .items_start()
-        .bg(move || {
+        .px_3()
+        .py_2()
+        .h(px(64.0))
+        .min_w_0()
+        .rounded(px(10.0))
+        .border_1()
+        .border_l(px(3.0))
+        .border_color(move || {
             if current
                 .get()
-                .is_some_and(|c| c.id == selected.selected.get())
+                .is_some_and(|clip| clip.id == selected.selected.get())
             {
-                theme().accent
+                theme().primary
             } else {
-                theme().card
+                theme().border
             }
         })
-        .hover(|s| s.bg(move || theme().muted))
-        .active(|s| s.opacity(0.7))
-        .focus(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
-        .accessibility_label(move || current.get().map(|c| SharedString::from(c.description)))
+        .bg({
+            let ui = ui.clone();
+            move || {
+                if current.get().is_some_and(|clip| clip.id == ui.copied.get()) {
+                    theme().primary.opacity(0.18)
+                } else if current
+                    .get()
+                    .is_some_and(|clip| clip.id == ui.selected.get())
+                {
+                    theme().accent
+                } else {
+                    theme().card
+                }
+            }
+        })
+        .hover(|style| style.bg(theme().muted))
+        .active(|style| style.bg(theme().accent))
+        .transition_colors()
+        .duration(move || if reduce_motion() { 0.0_f32 } else { 120.0_f32 })
+        .focus(|style| style.outline(px(3.0)).outline_color(theme().ring))
+        .accessibility_label(move || {
+            current
+                .get()
+                .map(|clip| SharedString::from(clip.description))
+        })
+        .child(clip_art(current))
         .child(
             view()
-                .flex_row()
-                .gap_2()
-                .items_center()
-                .child(when(
-                    move || is_desktop() && at.index() < 10,
-                    move || {
-                        text(format!("{}", (at.index() + 1) % 10))
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            text(move || {
+                                current
+                                    .get()
+                                    .map(|clip| compact_preview(&clip.description))
+                                    .unwrap_or_default()
+                            })
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .flex_1()
+                            .min_w_0()
+                            .truncate(),
+                        )
+                        .child(when(
+                            move || current.get().is_some_and(|clip| clip.pinned),
+                            || icon("star"),
+                        ))
+                        .child(
+                            text(move || {
+                                minute.get();
+                                current
+                                    .get()
+                                    .map(|clip| relative_time(clip.updated_at))
+                                    .unwrap_or_default()
+                            })
                             .text_xs()
-                            .text_color(move || theme().muted_foreground)
-                    },
-                ))
+                            .text_color(move || theme().muted_foreground),
+                        ),
+                )
                 .child(
                     text(move || {
                         current
                             .get()
-                            .map(|c| {
-                                format!(
-                                    "{}{}",
-                                    if c.pinned {
-                                        crate::l10n::tr("已收藏 · ")
-                                    } else {
-                                        String::new()
-                                    },
-                                    c.description
-                                )
+                            .map(|clip| {
+                                if clip.text.is_empty() {
+                                    kind_label(&clip.kind)
+                                } else {
+                                    compact_preview(&clip.text)
+                                }
                             })
                             .unwrap_or_default()
                     })
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(move || theme().foreground),
+                    .text_xs()
+                    .number_of_lines(2u32)
+                    .max_h(px(30.0))
+                    .text_color(move || theme().muted_foreground)
+                    .font_family(move || {
+                        if current
+                            .get()
+                            .is_some_and(|clip| matches!(clip.kind.as_str(), "code" | "color"))
+                        {
+                            "monospace"
+                        } else {
+                            "system-ui"
+                        }
+                    }),
                 ),
         )
+        .child(when(
+            move || is_desktop() && at.index() < 10,
+            move || {
+                keycap(format!(
+                    "{}{}",
+                    if apple_keys() { "⌘" } else { "⌃" },
+                    (at.index() + 1) % 10
+                ))
+            },
+        ));
+    let copy = ui.clone();
+    let pin = ui.clone();
+    let delete = ui.clone();
+    let menu = nsh_base::context_menu()
+        .trigger(view().child(trigger))
+        .popup_style(|style| {
+            style
+                .bg(theme().card)
+                .border_1()
+                .border_color(theme().border)
+                .rounded(px(14.0))
+                .p_2()
+                .shadow_md()
+        })
+        .child(controls::menu_command("复制", "copy", move || {
+            if let Some(clip) = current.get() {
+                copy.send(Command::CopySaved(clip.id));
+            }
+        }))
+        .child(controls::menu_command(
+            move || {
+                crate::l10n::tr(if current.get().is_some_and(|clip| clip.pinned) {
+                    "取消收藏"
+                } else {
+                    "收藏"
+                })
+            },
+            "star",
+            move || {
+                if let Some(clip) = current.get() {
+                    pin.send(Command::Pin(clip.id));
+                }
+            },
+        ))
+        .child(controls::menu_command("删除记录", "trash", move || {
+            if let Some(clip) = current.get() {
+                delete_clip(delete.clone(), clip);
+            }
+        }));
+    let copy = ui.clone();
+    let pin = ui.clone();
+    let delete = ui.clone();
+    let check = ui.clone();
+    let change = ui.clone();
+    view()
+        .relative()
+        .group()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .pb(px(6.0))
         .child(
-            text(move || {
-                current
-                    .get()
-                    .map(|c| {
-                        if c.text.is_empty() {
-                            crate::l10n::message(
-                                "{0} · {1} 个格式",
-                                &[
-                                    ("0", kind_label(&c.kind)),
-                                    ("1", (c.formats.len()).to_string()),
-                                ],
-                            )
-                        } else {
-                            c.text.chars().take(110).collect()
+            nsh_base::checkbox()
+                .checked(move || {
+                    current.get().is_some_and(|clip| {
+                        check
+                            .checked_clips
+                            .with(|checked| checked.contains(&clip.id))
+                    })
+                })
+                .accessibility_label(move || {
+                    current.get().map(|clip| {
+                        SharedString::from(format!(
+                            "{}: {}",
+                            crate::l10n::tr("选择记录"),
+                            clip.description
+                        ))
+                    })
+                })
+                .on_change(move |checked: &bool| {
+                    if let Some(clip) = current.get() {
+                        change.checked_clips.update(|selection| {
+                            if *checked {
+                                selection.insert(clip.id);
+                            } else {
+                                selection.remove(&clip.id);
+                            }
+                        });
+                    }
+                })
+                .w(px(24.0))
+                .h(px(32.0))
+                .items_center()
+                .justify_center()
+                .child(
+                    text({
+                        let ui = ui.clone();
+                        move || {
+                            if current.get().is_some_and(|clip| {
+                                ui.checked_clips.with(|checked| checked.contains(&clip.id))
+                            }) {
+                                "☑"
+                            } else {
+                                "□"
+                            }
                         }
                     })
-                    .unwrap_or_default()
-            })
-            .text_xs()
-            .text_color(move || theme().muted_foreground),
+                    .text_color(move || theme().primary),
+                ),
+        )
+        .child(view().flex_1().min_w_0().child(menu))
+        .child(
+            view()
+                .absolute()
+                .right(px(44.0))
+                .bottom(px(10.0))
+                .flex_row()
+                .gap_1()
+                .opacity(if is_desktop() { 0.0 } else { 1.0 })
+                .group_hover(|style| style.opacity(1.0))
+                .group_focus_within(|style| style.opacity(1.0))
+                .bg(move || theme().card)
+                .rounded(px(6.0))
+                .child(controls::tool("复制", "copy", move || {
+                    if let Some(clip) = current.get() {
+                        copy.send(Command::CopySaved(clip.id));
+                    }
+                }))
+                .child(controls::tool(
+                    move || {
+                        crate::l10n::tr(if current.get().is_some_and(|clip| clip.pinned) {
+                            "取消收藏"
+                        } else {
+                            "收藏"
+                        })
+                    },
+                    "star",
+                    move || {
+                        if let Some(clip) = current.get() {
+                            pin.send(Command::Pin(clip.id));
+                        }
+                    },
+                ))
+                .child(controls::tool("删除记录", "trash", move || {
+                    if let Some(clip) = current.get() {
+                        delete_clip(delete.clone(), clip);
+                    }
+                })),
         )
 }
 fn details(ui: Ui) -> impl IntoElement {
@@ -1309,100 +1896,378 @@ fn details(ui: Ui) -> impl IntoElement {
         ))
 }
 fn detail_editor(ui: Ui) -> impl IntoElement {
-    let get = ui.clone();
-    let text = ui.clone();
-    let draft = ui.clone();
-    let edit = ui.clone();
-    let collection = ui.clone();
-    let set_collection = ui.clone();
-    let collection_ready = ui.clone();
+    let minute = ui.minute;
+    let current = computed({
+        let ui = ui.clone();
+        move || ui.selected()
+    });
+    let read = ui.clone();
+    let write = ui.clone();
+    let board = ui.clone();
+    let set_board = ui.clone();
+    let editing = ui.clone();
+    let save = ui.clone();
+    let discard = ui.clone();
     let copy = ui.clone();
+    let paste = ui.clone();
     let pin = ui.clone();
     let queue = ui.clone();
-    let save = ui.clone();
-    let delete = ui.clone();
-    let ditto = ui.clone();
     let float = ui.clone();
     let preview = ui.clone();
-    let readonly = ui.clone();
-    let image_ui = ui.clone();
-    scroll().flex_1().child(
-        surface()
-            .child(title("内容详情"))
-            .child(hint(move || {
-                get.selected()
-                    .map(|c| crate::l10n::message("{0} · {1} 个格式", &[("0", kind_label(&c.kind)), ("1", (c.formats.len()).to_string())]))
-                    .unwrap_or_else(|| crate::l10n::tr("选择一条记录，查看完整内容。"))
-            }))
-            .child(
-                field(
-                    "编辑文字",
-                    move || draft.draft().map(|d| d.text).unwrap_or_default(),
-                    move |s| edit.edit_draft(|d| d.text = s.into()),
-                )
-                .multiline(true)
-                .min_h(px(170.0)).readonly(move||readonly.selected().is_none_or(|c| !text_editable(&c))),
-            )
-            .child(field(
-                "收藏板名称",
-                move || collection.draft().map(|d| d.collection).unwrap_or_default(),
-                move |s| set_collection.edit_draft(|d| d.collection = s.into()),
-            ).readonly(move || collection_ready.selected().is_none()))
-            .child(hint({let ui=ui.clone();move || crate::l10n::tr(if ui.selected().is_some_and(|c| !text_editable(&c)) { "含二进制或文件格式：仅可修改收藏板，复制使用完整已保存格式。" } else { "编辑文字后保存将以纯文本存储。" })}))
-            .child(hint(move || {
-                text.selected()
-                    .map(|c| crate::l10n::message("记录 ID：{0}", &[("0", (c.id).to_string())]))
-                    .unwrap_or_default()
-            }))
-            .child(when(move||image_ui.selected().is_some_and(|c|c.kind=="image"),{let ui=ui.clone();move||{let ui=ui.clone();image(move||{use base64::Engine;ui.selected().and_then(|c|c.formats.into_iter().find(|f|f.mime.as_deref()==Some("image/png"))).map(|f|format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(f.data))).unwrap_or_default()}).h(px(180.0))}}))
-            .child(action("Markdown / 代码预览",false,move||preview.page.set("preview".into())))
-            .child(action("悬浮为置顶卡片",false,move||{if let Some(c)=float.selected(){desktop::floating(float.clone(),c);}}))
-            .child(hint({ let ui = ui.clone(); move || crate::l10n::tr(if ui.dirty() { "未保存 · 切换记录或返回后草稿仍保留" } else { "已保存" }) }))
-            .child(when(is_desktop, { let ui = ui.clone(); move || {
-                action("粘贴到原应用", true, { let ui = ui.clone(); move || {
-                    if let Some(clip) = ui.selected() { desktop::paste_record(ui.clone(), clip.id); }
-                } })
-                    .disabled({ let ui = ui.clone(); move || ui.selected().is_none_or(|clip| clip.deleted) })
-            }}))
-            .child(icon_action("复制已保存内容", "copy", false, move || copy.copy()))
-            .child(action("复制草稿文字", false, { let ui = ui.clone(); move || {
-                if let Some(mut clip) = ui.selected().filter(text_editable)
-                    && let Some(draft) = ui.draft() {
-                    clip.text = draft.text;
-                    clip.formats = vec![ClipFormat::text(&clip.text)];
-                    ui.copy_clip(clip);
-                    ui.notice.set("已复制草稿文字；尚未保存到记录".into());
-                }
-            }}).disabled({ let ui = ui.clone(); move || !ui.selected().is_some_and(|c| text_editable(&c)) }))
-            .child(action("收藏 / 取消收藏", false, move || {
-                if let Some(c) = pin.selected() {
-                    pin.send(Command::Pin(c.id));
-                }
-            }))
-            .child(action("加入顺序复制", false, move || {
-                if let Some(c) = queue.selected() {
-                    queue.queue.update(|q| {if q.len()<1000 && !q.iter().any(|item|item.id==c.id){q.push(c);}});
-                    queue.notice.set("已加入顺序复制".into());
-                }
-            }))
-            .child(icon_action("保存编辑", "checkbox", false, move || {
-                if let Some(c) = save.selected() && let Some(draft) = save.draft() {
-                    let text = if text_editable(&c) { draft.text } else { c.text.clone() };
-                    save.send(Command::Edit(c.id, text, draft.collection));
-                }
-            }))
-            .child(action("发送到远端 Ditto", false, move || {
-                if let Some(clip) = ditto.selected() {
-                    ditto.send(Command::SendDitto(clip));
-                }
-            }).disabled({let ui = ui.clone(); move || ui.pending()}))
-            .child(form_feedback(ui.clone()))
-            .child(icon_action("删除记录", "trash", false, move || {
-                if let Some(c) = delete.selected() {
-                    let u=delete.clone();let answer=alert_dialog().title(crate::l10n::tr("删除这条记录？")).description(crate::l10n::tr("删除状态会同步到已配对设备；启用服务器存储时也会同步到服务器。请确认后删除。")).cancel("cancel",crate::l10n::tr("取消")).destructive("delete",crate::l10n::tr("删除记录")).show();spawn(async move{if answer.await.is_ok_and(|a|a.action.as_deref()==Some("delete")){u.send(Command::Delete(c.id.clone()));u.selected.set(String::new());u.drafts.update(|drafts| { drafts.remove(&c.id); });}});
-                }
-            })),
-    )
+    let delete = ui.clone();
+    let more = ui.clone();
+    let ditto = ui.clone();
+    let metadata = ui.clone();
+    view()
+        .flex_1()
+        .min_h_0()
+        .gap_2()
+        .child(
+            scroll().flex_1().min_h_0().child(
+                surface()
+                    .child(
+                        view()
+                            .flex_row()
+                            .gap_2()
+                            .items_center()
+                            .child(clip_art(current))
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        text(move || {
+                                            current
+                                                .get()
+                                                .map(|clip| compact_preview(&clip.description))
+                                                .unwrap_or_default()
+                                        })
+                                        .text_base()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .number_of_lines(2u32),
+                                    )
+                                    .child(hint(move || {
+                                        minute.get();
+                                        current
+                                            .get()
+                                            .map(|clip| {
+                                                format!(
+                                                    "{} · {}",
+                                                    kind_label(&clip.kind),
+                                                    relative_time(clip.updated_at)
+                                                )
+                                            })
+                                            .unwrap_or_default()
+                                    })),
+                            ),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .gap_2()
+                            .child(when(is_desktop, move || {
+                                let ui = paste.clone();
+                                action("粘贴到原应用", true, move || {
+                                    if let Some(clip) = ui.selected() {
+                                        desktop::paste_record(ui.clone(), clip.id);
+                                    }
+                                })
+                            }))
+                            .child(icon_action("复制", "copy", !is_desktop(), move || {
+                                copy.copy()
+                            })),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .flex_wrap()
+                            .gap_1()
+                            .child(
+                                view()
+                                    .rounded(px(6.0))
+                                    .bg(move || {
+                                        if current.get().is_some_and(|clip| clip.pinned) {
+                                            theme().accent
+                                        } else {
+                                            theme().card
+                                        }
+                                    })
+                                    .child(controls::tool(
+                                        move || {
+                                            crate::l10n::tr(
+                                                if current.get().is_some_and(|clip| clip.pinned) {
+                                                    "取消收藏"
+                                                } else {
+                                                    "收藏"
+                                                },
+                                            )
+                                        },
+                                        "star",
+                                        move || {
+                                            if let Some(clip) = pin.selected() {
+                                                pin.send(Command::Pin(clip.id));
+                                            }
+                                        },
+                                    )),
+                            )
+                            .child(controls::tool(
+                                "加入顺序复制",
+                                "list-ordered",
+                                move || {
+                                    if let Some(clip) = queue.selected() {
+                                        queue.queue.update(|items| {
+                                            if items.len() < 1000
+                                                && !items.iter().any(|item| item.id == clip.id)
+                                            {
+                                                items.push(clip);
+                                            }
+                                        });
+                                        queue.notice.set("已加入顺序复制".into());
+                                    }
+                                },
+                            ))
+                            .child(when(is_desktop, move || {
+                                let ui = float.clone();
+                                controls::tool("悬浮为置顶卡片", "monitor", move || {
+                                    if let Some(clip) = ui.selected() {
+                                        desktop::floating(ui.clone(), clip);
+                                    }
+                                })
+                            }))
+                            .child(controls::tool(
+                                "Markdown / 代码预览",
+                                "code",
+                                move || preview.page.set("preview".into()),
+                            ))
+                            .child(quiet_action("编辑", move || editing.editing.set(true)))
+                            .child(view().flex_1())
+                            .child(view().text_color(move || theme().destructive).child(
+                                controls::tool("删除记录", "trash", move || {
+                                    if let Some(clip) = delete.selected() {
+                                        delete_clip(delete.clone(), clip);
+                                    }
+                                }),
+                            ))
+                            .child(
+                                nsh_base::menu()
+                                    .trigger(quiet_action("更多", || {}))
+                                    .popup_style(|style| {
+                                        style
+                                            .bg(theme().card)
+                                            .border_1()
+                                            .border_color(theme().border)
+                                            .rounded(px(14.0))
+                                            .p_2()
+                                            .shadow_md()
+                                    })
+                                    .child(controls::menu_command(
+                                        "记录信息",
+                                        "file-text",
+                                        move || more.detail_more.update(|value| *value = !*value),
+                                    ))
+                                    .child(controls::menu_command(
+                                        "发送到远端 Ditto",
+                                        "arrow-right",
+                                        move || {
+                                            if let Some(clip) = ditto.selected() {
+                                                ditto.send(Command::SendDitto(clip));
+                                            }
+                                        },
+                                    )),
+                            ),
+                    )
+                    .child(when(
+                        move || current.get().is_some_and(|clip| clip.kind == "image"),
+                        move || {
+                            image(move || {
+                                use base64::Engine;
+                                current
+                                    .get()
+                                    .and_then(|clip| {
+                                        clip.formats.into_iter().find(|format| {
+                                            format.mime.as_deref() == Some("image/png")
+                                        })
+                                    })
+                                    .map(|format| {
+                                        format!(
+                                            "data:image/png;base64,{}",
+                                            base64::engine::general_purpose::STANDARD
+                                                .encode(format.data)
+                                        )
+                                    })
+                                    .unwrap_or_default()
+                            })
+                            .h(px(180.0))
+                        },
+                    ))
+                    .child(when(
+                        {
+                            let ui = ui.clone();
+                            move || !ui.editing.get()
+                        },
+                        move || {
+                            text(move || current.get().map(|clip| clip.text).unwrap_or_default())
+                                .text_sm()
+                                .font_family(move || {
+                                    if current.get().is_some_and(|clip| {
+                                        matches!(clip.kind.as_str(), "code" | "color" | "files")
+                                    }) {
+                                        "monospace"
+                                    } else {
+                                        "system-ui"
+                                    }
+                                })
+                        },
+                    ))
+                    .child(when(
+                        {
+                            let ui = ui.clone();
+                            move || ui.editing.get()
+                        },
+                        {
+                            let ui = ui.clone();
+                            move || {
+                                let read = read.clone();
+                                let write = write.clone();
+                                let board = board.clone();
+                                let set_board = set_board.clone();
+                                let copy = ui.clone();
+                                view()
+                                    .gap_3()
+                                    .child(
+                                        field(
+                                            "编辑文字",
+                                            move || {
+                                                read.draft()
+                                                    .map(|draft| draft.text)
+                                                    .unwrap_or_default()
+                                            },
+                                            move |value| {
+                                                write.edit_draft(|draft| draft.text = value.into())
+                                            },
+                                        )
+                                        .multiline(true)
+                                        .min_h(px(170.0))
+                                        .readonly(
+                                            move || {
+                                                current
+                                                    .get()
+                                                    .is_none_or(|clip| !text_editable(&clip))
+                                            },
+                                        ),
+                                    )
+                                    .child(field(
+                                        "收藏板名称",
+                                        move || {
+                                            board
+                                                .draft()
+                                                .map(|draft| draft.collection)
+                                                .unwrap_or_default()
+                                        },
+                                        move |value| {
+                                            set_board
+                                                .edit_draft(|draft| draft.collection = value.into())
+                                        },
+                                    ))
+                                    .child(hint("编辑文字后保存将以纯文本存储。"))
+                                    .child(when(
+                                        {
+                                            let ui = ui.clone();
+                                            move || {
+                                                ui.dirty()
+                                                    && current
+                                                        .get()
+                                                        .is_some_and(|clip| text_editable(&clip))
+                                            }
+                                        },
+                                        move || {
+                                            let ui = copy.clone();
+                                            quiet_action("复制草稿文字", move || {
+                                                if let Some(mut clip) =
+                                                    ui.selected().filter(text_editable)
+                                                    && let Some(draft) = ui.draft()
+                                                {
+                                                    clip.text = draft.text;
+                                                    clip.formats =
+                                                        vec![ClipFormat::text(&clip.text)];
+                                                    ui.copy_clip(clip);
+                                                    ui.notice.set(
+                                                        "已复制草稿文字；尚未保存到记录".into(),
+                                                    );
+                                                }
+                                            })
+                                        },
+                                    ))
+                            }
+                        },
+                    ))
+                    .child(when(
+                        move || metadata.detail_more.get(),
+                        move || {
+                            view()
+                                .gap_2()
+                                .child(
+                                    text(move || {
+                                        current.get().map(|clip| clip.id).unwrap_or_default()
+                                    })
+                                    .text_xs()
+                                    .font_family("monospace"),
+                                )
+                                .child(hint(move || {
+                                    current
+                                        .get()
+                                        .map(|clip| {
+                                            crate::l10n::message(
+                                                "{0} · {1} 个格式",
+                                                &[
+                                                    ("0", kind_label(&clip.kind)),
+                                                    ("1", clip.formats.len().to_string()),
+                                                ],
+                                            )
+                                        })
+                                        .unwrap_or_default()
+                                }))
+                        },
+                    )),
+            ),
+        )
+        .child(when(
+            {
+                let ui = ui.clone();
+                move || ui.dirty()
+            },
+            move || {
+                let save = save.clone();
+                let discard = discard.clone();
+                surface()
+                    .child(hint("未保存 · 切换记录或返回后草稿仍保留"))
+                    .child(
+                        view()
+                            .flex_row()
+                            .gap_2()
+                            .child(action("保存编辑", true, move || {
+                                if let Some(clip) = save.selected()
+                                    && let Some(draft) = save.draft()
+                                {
+                                    let content = if text_editable(&clip) {
+                                        draft.text
+                                    } else {
+                                        clip.text.clone()
+                                    };
+                                    save.send(Command::Edit(clip.id, content, draft.collection));
+                                }
+                            }))
+                            .child(quiet_action("放弃修改", move || {
+                                let selected = discard.selected.get();
+                                discard.drafts.update(|drafts| {
+                                    drafts.remove(&selected);
+                                });
+                                discard.editing.set(false);
+                            })),
+                    )
+            },
+        ))
 }
 fn queue(ui: Ui) -> impl IntoElement {
     let count = ui.clone();
@@ -1414,7 +2279,6 @@ fn queue(ui: Ui) -> impl IntoElement {
     scroll().flex_1().p_5().child(
         view()
             .gap_4()
-            .child(title("顺序复制"))
             .child(toggle("自动收集本机剪贴板", move || collecting.collecting.get(), move |enabled| {
                 set_collecting.worker.shared.collecting.store(enabled, Ordering::Relaxed);
                 set_collecting.collecting.set(enabled);
@@ -1434,21 +2298,44 @@ fn queue(ui: Ui) -> impl IntoElement {
                     });
                 }
                 if let Some(clip) = clip {
-                    next.copy_clip(clip);
+                    next.queue_undo.set(Some(clip.clone()));
+                    if is_desktop() {
+                        next.send(Command::CopySaved(clip.id));
+                    } else {
+                        next.copy_clip(clip);
+                    }
                 }
             }))
             .child(action("清空队列", false, move || {
                 clear.queue.set(Vec::new())
             }))
+            .child(when({let ui=ui.clone(); move || ui.queue_undo.get().is_some()}, {let ui=ui.clone(); move || {
+                let ui=ui.clone(); quiet_action("撤销取出", move || {
+                    if let Some(clip)=ui.queue_undo.get() {
+                        ui.queue.update(|queue| {if !queue.iter().any(|item| item.id==clip.id) && queue.len()<1000 {queue.insert(0,clip);}});
+                        ui.queue_undo.set(None);
+                    }
+                })
+            }}))
             .child(each(
                 move || list.queue.get(),
                 |c: &Clip| c.id.clone(),
-                move |c, _| surface().child(text(move || c.get().description).text_sm()),
+                move |clip, at| {
+                    let remove=ui.clone(); let up=ui.clone(); let down=ui.clone();
+                    surface().flex_row().items_center().gap_2()
+                        .bg(move || if at.get()==0 {theme().accent} else {theme().card})
+                        .child(keycap(move || (at.get()+1).to_string()))
+                        .child(text(move || clip.get().description).text_sm().flex_1().min_w_0().truncate())
+                        .child(controls::tool("上移", "arrow-up", move || {up.queue.update(|queue| {if at.get()>0 && at.get()<queue.len() {queue.swap(at.get(),at.get()-1);}});}))
+                        .child(controls::tool("下移", "arrow-down", move || {down.queue.update(|queue| {if at.get()+1<queue.len() {queue.swap(at.get(),at.get()+1);}});}))
+                        .child(controls::tool("从队列移除", "trash", move || {remove.queue.update(|queue| {if at.get()<queue.len() {queue.remove(at.get());}});}))
+                },
             )),
     )
 }
 fn devices(ui: Ui) -> impl IntoElement {
     let identity = ui.clone();
+    let copy_code = ui.clone();
     let code = ui.clone();
     let value = ui.clone();
     let pair = ui.clone();
@@ -1459,7 +2346,6 @@ fn devices(ui: Ui) -> impl IntoElement {
     scroll().flex_1().p_5().child(
         view()
             .gap_5()
-            .child(title("设备与同步"))
             .child(
                 surface()
                     .child(hint("本机设备码"))
@@ -1469,14 +2355,33 @@ fn devices(ui: Ui) -> impl IntoElement {
                                 snapshot
                                     .as_ref()
                                     .and_then(|snapshot| snapshot.identity.as_ref())
-                                    .map(|peer| peer.code.clone())
+                                    .map(|peer| {
+                                        peer.code
+                                            .as_bytes()
+                                            .chunks(4)
+                                            .map(|part| String::from_utf8_lossy(part))
+                                            .collect::<Vec<_>>()
+                                            .join("-")
+                                    })
                                     .unwrap_or_else(|| crate::l10n::tr("正在生成…"))
                             })
                         })
                         .text_2xl()
+                        .font_family("monospace")
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(move || theme().primary),
                     )
+                    .child(icon_action("复制设备码", "copy", false, move || {
+                        if let Some(code) = copy_code.snapshot.with(|snapshot| {
+                            snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.identity.as_ref())
+                                .map(|peer| peer.code.clone())
+                        }) {
+                            set_clipboard(code);
+                            copy_code.notice.set("已复制设备码".into());
+                        }
+                    }))
                     .child(hint(
                         "设备互通与账号归属相互独立。配对前需要对方确认，可以选择不关联账号。",
                     )),
@@ -1616,8 +2521,31 @@ fn devices(ui: Ui) -> impl IntoElement {
                     let u = ui.clone();
                     move |peer: ReadSignal<yank_core::Peer>, _| {
                         let u = u.clone();
+                        let status = u.clone();
                         surface()
-                            .child(text(move || peer.get().name).text_sm())
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(icon("monitor"))
+                                    .child(text(move || peer.get().name).text_sm()),
+                            )
+                            .child(hint(move || {
+                                let nearby = status.snapshot.with(|snapshot| {
+                                    snapshot.as_ref().is_some_and(|snapshot| {
+                                        snapshot
+                                            .discovered
+                                            .iter()
+                                            .any(|found| found.peer.id == peer.get().id)
+                                    })
+                                });
+                                crate::l10n::tr(if nearby {
+                                    "● 附近可发现"
+                                } else {
+                                    "○ 未在附近发现"
+                                })
+                            }))
                             .child(action("解除绑定", false, move || {
                                 u.send(Command::Unpair(peer.get().id))
                             }))
@@ -1679,7 +2607,7 @@ fn confirm_pair(ui: Ui, peer: yank_core::Peer) {
             };
             match ui.worker.shared.queue_pair(peer, account, None) {
                 Ok(()) => ui.notice.set("配对请求已发送，等待对方确认。".into()),
-                Err(error) => ui.notice.set(crate::l10n::message(
+                Err(error) => ui.alert.set(crate::l10n::message(
                     "无法发送配对请求：{error}",
                     &[("error", (error).to_string())],
                 )),
@@ -1699,7 +2627,7 @@ fn settings(ui: Ui) -> impl IntoElement {
     let guest = ui.clone();
     let upload = ui.clone();
     let set_upload = ui.clone();
-    let mut choices = nsh_base::radio_group().gap_2();
+    let mut choices = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
     for (label, mode) in [
         ("默认中继", "relay"),
         ("仅直连", "direct"),
@@ -1715,8 +2643,15 @@ fn settings(ui: Ui) -> impl IntoElement {
                     p.mode = mode.into();
                     u.save(p);
                 })
-                .min_h(px(48.0))
-                .p_3()
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .py_2()
                 .border_1()
                 .rounded(move || theme().radius)
                 .border_color(move || theme().border)
@@ -1732,20 +2667,18 @@ fn settings(ui: Ui) -> impl IntoElement {
     }
     let ditto = ui.clone();
     let set_ditto = ui.clone();
-    let theme_ui = ui.clone();
-    let theme_label = ui.clone();
     let export = ui.clone();
     let import = ui.clone();
-    scroll().test_id("settings-scroll").flex_1().p_5().child(view().gap_5().max_w(px(760.0))
-      .child(title("设置与账号"))
-      .child(language_settings(ui.clone()))
-      .child(cleanup_settings(ui.clone()))
-      .child(history_settings(ui.clone()))
+    view().flex_1().min_h_0().child(scroll().test_id("settings-scroll").flex_1().p_5().child(view().gap_4().w_full().max_w(px(720.0)).self_center()
+      .child(settings_search(ui.clone()))
+      .child(view().app_class(settings_visibility(ui.clone(), "语言 / Language")).child(language_settings(ui.clone())))
+      .child(view().app_class(settings_visibility(ui.clone(), "自动清理历史")).child(cleanup_settings(ui.clone())))
+      .child(view().app_class(settings_visibility(ui.clone(), "历史显示范围")).child(history_settings(ui.clone())))
       .child(when(is_desktop, { let ui=ui.clone(); move || desktop_settings(ui.clone()) }))
-      .child(surface().child(title("这台设备"))
+      .child(surface().app_class(settings_visibility(ui.clone(), "这台设备")).child(title("这台设备"))
         .child(pref_text(ui.clone(), "设备名称", "保存设备名称", |p|p.device_name.clone(), |p,v|p.device_name=v.into()))
-        .child(action(move||crate::l10n::message("外观：{0}（点击切换）", &[("0", crate::l10n::tr(match theme_label.prefs.get().theme.as_str(){"dark"=>"深色","light"=>"浅色",_=>"跟随系统"}))]),false,move||{let mut p=theme_ui.prefs.get();p.theme=match p.theme.as_str(){"system"=>"light","light"=>"dark",_=>"system"}.into();theme_ui.save(p);})))
-      .child(surface().child(title("账号登录（可选）"))
+        .child(appearance_choices(ui.clone())))
+      .child(surface().app_class(settings_visibility(ui.clone(), "账号登录（可选）")).child(title("账号登录（可选）"))
         .child(hint("离线记录不需要账号。登录用于发现同账号设备；服务器存储仍需单独启用。"))
         .child(field("服务器地址，例如 https://yank.example.com",move||server.server.get(),move|s|set_server.server.set(s.into())))
         .child(field("用户名",move||username.username.get(),move|s|set_username.username.set(s.into())))
@@ -1754,7 +2687,7 @@ fn settings(ui: Ui) -> impl IntoElement {
         .child(form_feedback(ui.clone()))
         .child(action("仅使用发现与中继，不关联账号",false,move||{let mut p=guest.prefs.get();p.detach_account();p.server_url=guest.server.get();guest.save(p);}))
         .child(action("退出账号，继续离线使用",false,move||logout.send(Command::Logout))))
-      .child(surface().child(title("数据存储"))
+      .child(surface().app_class(settings_visibility(ui.clone(), "数据存储")).child(title("数据存储"))
         .child(toggle("上传并保存在服务端",move||upload.prefs.get().upload,move|enabled|{
             if enabled {if set_upload.prefs.get().token.is_empty(){set_upload.notice.set("请先登录账号；本地历史仍可正常使用。".into());return;}
                 let u=set_upload.clone();let answer=alert_dialog().title(crate::l10n::tr("启用服务器存储？")).description(crate::l10n::tr("本机历史及后续修改将上传到当前账号的服务器存储。设备中继不需要此选项。关闭后，已上传内容仍保留在服务器。")).cancel("cancel",crate::l10n::tr("取消")).action("enable",crate::l10n::tr("启用存储")).show();
@@ -1762,48 +2695,52 @@ fn settings(ui: Ui) -> impl IntoElement {
             }else{let mut p=set_upload.prefs.get();p.upload=false;set_upload.save(p);}
         }))
         .child(hint("默认关闭。关闭后不再上传新数据，已发出的请求可能完成；已有远端数据请在管理页删除。")))
-      .child(surface().child(title("设备传输方式")).child(choices)
+      .child(surface().app_class(settings_visibility(ui.clone(), "设备传输方式")).child(title("设备传输方式")).child(choices)
         .child(hint("仅直连不经过中继；自动模式尝试 NAT 穿透并保留中继回退。实际链路状态显示在窗口底部。"))
         .child(pref_text(ui.clone(), "中继地址（留空使用服务器提供的地址）", "保存中继地址", |p|p.relay_url.clone(), |p,v|p.relay_url=v.into())))
-      .child(surface().child(title("Ditto 插件（rutis）"))
+      .child(surface().app_class(settings_visibility(ui.clone(), "Ditto 插件（rutis）")).child(title("Ditto 插件（rutis）"))
         .child(toggle("接收 Ditto 推送",move||ditto.prefs.get().ditto_enabled,move|enabled|{let mut p=set_ditto.prefs.get();p.ditto_enabled=enabled;set_ditto.save(p);}))
         .child(pref_text(ui.clone(), "Ditto 监听地址", "保存 Ditto 监听地址", |p|p.ditto_listen.clone(), |p,v|p.ditto_listen=v.into()))
         .child(pref_text(ui.clone(), "Ditto 共享密码", "保存 Ditto 共享密码", |p|p.ditto_password.clone(), |p,v|p.ditto_password=v.into()).masked(true))
         .child(pref_text(ui.clone(), "远端 Ditto 地址（主机:端口）", "保存远端 Ditto 地址", |p|p.ditto_remote.clone(), |p,v|p.ditto_remote=v.into()))
         .child(hint("默认关闭，监听本机 23443。接收远端推送时，请在 Ditto 中填写本机可达地址和相同共享密码。")))
-      .child(extra_preferences(ui.clone()))
-      .child(surface().child(title("隐私与备份"))
+      .child(view().app_class(settings_visibility(ui.clone(), "桌面快捷键与面板 · 剪贴板与备份设置 · 排除的应用（每行一个）")).child(extra_preferences(ui.clone())))
+      .child(surface().app_class(settings_visibility(ui.clone(), "隐私与备份")).child(title("隐私与备份"))
         .child(hint("安卓采用前台手动记录，遵循系统剪贴板访问限制。排除表达式匹配的文字不会进入历史。"))
         .child(pref_text(ui.clone(), "排除内容的正则表达式（可留空）", "保存排除正则", |p|p.exclude_pattern.clone(), |p,v|p.exclude_pattern=v.into()))
-        .child(action("导出全部本地记录",false,move||{let u=export.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_save_path(nsh_core::file_dialog::SaveDialog::new().file_name("yank-backup.json")).await;u.picking.set(false);match result {Ok(Some(path))=>u.send(Command::Export(path)),Err(error)=>u.notice.set(crate::l10n::message("无法选择导出文件：{error}", &[("error", (error).to_string())])),_=>{}}});}))
-        .child(action("导入备份",false,move||{let u=import.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_paths(nsh_core::file_dialog::OpenDialog::files()).await;u.picking.set(false);match result {Ok(Some(paths))=>{if let Some(path)=paths.into_iter().next(){u.send(Command::Import(path));}},Err(error)=>u.notice.set(crate::l10n::message("无法选择导入文件：{error}", &[("error", (error).to_string())])),_=>{}}});}).disabled({let ui=ui.clone();move||ui.pending()}))
+        .child(action("导出全部本地记录",false,move||{let u=export.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_save_path(nsh_core::file_dialog::SaveDialog::new().file_name("yank-backup.json")).await;u.picking.set(false);match result {Ok(Some(path))=>u.send(Command::Export(path)),Err(error)=>u.alert.set(crate::l10n::message("无法选择导出文件：{error}", &[("error", (error).to_string())])),_=>{}}});}))
+        .child(action("导入备份",false,move||{let u=import.clone(); if u.pending() {return;} u.picking.set(true); spawn(async move{let result=pick_paths(nsh_core::file_dialog::OpenDialog::files()).await;u.picking.set(false);match result {Ok(Some(paths))=>{if let Some(path)=paths.into_iter().next(){u.send(Command::Import(path));}},Err(error)=>u.alert.set(crate::l10n::message("无法选择导入文件：{error}", &[("error", (error).to_string())])),_=>{}}});}).disabled({let ui=ui.clone();move||ui.pending()}))
         .child(recovery_controls(ui.clone()))
-        .child(form_feedback(ui.clone()))))
+        .child(form_feedback(ui.clone()))))).child(preferences_save_bar(ui))
 }
 
 fn preview(ui: Ui) -> impl IntoElement {
     let text = ui.clone();
     let back = ui.clone();
-    scroll().flex_1().p_5().child(
-        surface()
-            .child(title("内容预览"))
-            .child(
-                safe_text_view()
-                    .markdown(move || text.selected().map(|c| SharedString::from(c.text)))
-                    .selectable(true)
-                    .text_color(move || theme().foreground),
-            )
-            .child(action("返回历史", false, move || {
-                back.page.set("history".into())
-            })),
-    )
+    view()
+        .flex_1()
+        .min_h_0()
+        .p_4()
+        .gap_3()
+        .child(quiet_action("返回历史", move || {
+            back.page.set("history".into())
+        }))
+        .child(
+            scroll().flex_1().min_h_0().child(
+                surface().child(title("内容预览")).child(
+                    safe_text_view()
+                        .markdown(move || text.selected().map(|c| SharedString::from(c.text)))
+                        .selectable(true)
+                        .text_color(move || theme().foreground),
+                ),
+            ),
+        )
 }
 
 fn smart_editor(ui: Ui) -> impl IntoElement {
     let name = ui.clone();
     let set = ui.clone();
     let save = ui.clone();
-    let days = ui.clone();
     let back = ui.clone();
     let remove = ui.clone();
     scroll().flex_1().p_5().child(
@@ -1815,36 +2752,7 @@ fn smart_editor(ui: Ui) -> impl IntoElement {
                 move || name.smart_name.get(),
                 move |s| set.smart_name.set(s.into()),
             ))
-            .child(action(
-                move || {
-                    crate::l10n::message(
-                        "时间范围：{0}",
-                        &[(
-                            "0",
-                            crate::l10n::tr(match days.smart_days.get() {
-                                0 => "不限",
-                                7 => "最近一周",
-                                30 => "最近一月",
-                                _ => "最近一年",
-                            }),
-                        )],
-                    )
-                },
-                false,
-                {
-                    let ui = ui.clone();
-                    move || {
-                        ui.smart_days.update(|days| {
-                            *days = match *days {
-                                0 => 7,
-                                7 => 30,
-                                30 => 365,
-                                _ => 0,
-                            }
-                        })
-                    }
-                },
-            ))
+            .child(smart_range_choices(ui.clone()))
             .child(action("保存智能列表", true, move || {
                 let title = save.smart_name.get();
                 if title.trim().is_empty() {
@@ -1913,8 +2821,15 @@ fn history_settings(ui: Ui) -> impl IntoElement {
                     change.limit.set(100);
                     change.save(prefs);
                 })
-                .min_h(px(48.0))
-                .p_3()
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .py_2()
                 .border_1()
                 .rounded(move || theme().radius)
                 .border_color(move || theme().border)
@@ -1931,7 +2846,10 @@ fn history_settings(ui: Ui) -> impl IntoElement {
 }
 
 fn desktop_settings(ui: Ui) -> impl IntoElement {
-    let mut panel = surface().child(title("窗口与启动")).child(hint("窗口样式"));
+    let mut panel = surface()
+        .app_class(settings_visibility(ui.clone(), "窗口与启动"))
+        .child(title("窗口与启动"))
+        .child(hint("窗口样式"));
     let mut styles = nsh_base::radio_group().flex_row().flex_wrap().gap_2();
     for (label, style) in [
         ("系统窗口按钮", yank_core::WindowStyle::System),
@@ -1947,8 +2865,15 @@ fn desktop_settings(ui: Ui) -> impl IntoElement {
                     prefs.window_style = style;
                     change.save(prefs);
                 })
-                .min_h(px(48.0))
-                .p_3()
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .py_2()
                 .border_1()
                 .rounded(move || theme().radius)
                 .border_color(move || theme().border)
@@ -1975,8 +2900,15 @@ fn desktop_settings(ui: Ui) -> impl IntoElement {
                     prefs.close_behavior = behavior;
                     change.save(prefs);
                 })
-                .min_h(px(48.0))
-                .p_3()
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .py_2()
                 .border_1()
                 .rounded(move || theme().radius)
                 .border_color(move || theme().border)
@@ -2083,16 +3015,23 @@ fn lists(ui: Ui) -> impl IntoElement {
     )
 }
 
+#[derive(Clone, Copy)]
+struct PreferenceBinding {
+    get: fn(&Preferences) -> String,
+    set: fn(&mut Preferences, &str),
+}
+
 fn pref_text(
     ui: Ui,
     label: &'static str,
-    save_label: &'static str,
+    _save_label: &'static str,
     get: fn(&Preferences) -> String,
     set: fn(&mut Preferences, &str),
 ) -> controls::Field {
+    ui.preference_fields
+        .borrow_mut()
+        .insert(label, PreferenceBinding { get, set });
     let read = ui.clone();
-    let edit = ui.clone();
-    let enabled = ui.clone();
     field(
         label,
         move || {
@@ -2101,30 +3040,143 @@ fn pref_text(
                 .unwrap_or_else(|| get(&read.prefs.get()))
         },
         move |value| {
-            edit.preference_drafts.update(|drafts| {
+            ui.preference_drafts.update(|drafts| {
                 drafts.insert(label, value.into());
             });
         },
     )
-    .action(
-        action(save_label, false, move || {
-            if let Some(value) = ui
-                .preference_drafts
-                .with(|drafts| drafts.get(label).cloned())
-            {
-                let mut prefs = ui.prefs.get();
-                set(&mut prefs, &value);
-                ui.save(prefs);
-            }
-        })
-        .disabled(move || {
-            let saved = get(&enabled.prefs.get());
-            enabled.pending()
-                || enabled
-                    .preference_drafts
-                    .with(|drafts| drafts.get(label).is_none_or(|draft| draft == &saved))
-        }),
+}
+
+fn changed_preferences(ui: &Ui) -> Vec<(&'static str, String, PreferenceBinding)> {
+    let prefs = ui
+        .snapshot
+        .with(|snapshot| snapshot.as_ref().map(|snapshot| snapshot.prefs.clone()))
+        .unwrap_or_else(|| ui.prefs.get());
+    let fields = ui.preference_fields.borrow();
+    let mut changed = ui.preference_drafts.with(|drafts| {
+        drafts
+            .iter()
+            .filter_map(|(label, value)| {
+                fields
+                    .get(label)
+                    .filter(|binding| (binding.get)(&prefs) != *value)
+                    .map(|binding| (*label, value.clone(), *binding))
+            })
+            .collect::<Vec<_>>()
+    });
+    changed.sort_by_key(|(label, _, _)| *label);
+    changed
+}
+
+fn preferences_save_bar(ui: Ui) -> impl IntoElement {
+    let visible = ui.clone();
+    let labels = ui.clone();
+    let save = ui.clone();
+    let discard = ui.clone();
+    when(
+        move || !changed_preferences(&visible).is_empty(),
+        move || {
+            let labels = labels.clone();
+            let save = save.clone();
+            let discard = discard.clone();
+            surface()
+                .child(hint(move || {
+                    changed_preferences(&labels)
+                        .iter()
+                        .map(|(label, _, _)| crate::l10n::tr(label))
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                }))
+                .child(
+                    view()
+                        .flex_row()
+                        .gap_2()
+                        .child(action("保存设置修改", true, move || {
+                            let mut prefs = save.prefs.get();
+                            for (_, value, binding) in changed_preferences(&save) {
+                                (binding.set)(&mut prefs, &value);
+                            }
+                            save.save(prefs);
+                        }))
+                        .child(quiet_action("放弃修改", move || {
+                            discard.preference_drafts.set(HashMap::new())
+                        })),
+                )
+        },
     )
+}
+
+fn settings_visibility(ui: Ui, keywords: &'static str) -> impl Fn() -> Option<SharedString> {
+    let keywords = match keywords {
+        "窗口与启动" => {
+            "窗口与启动 · 登录系统时启动 · 自动检查并下载更新 · 关闭窗口时 · 窗口样式"
+        }
+        "这台设备" => "这台设备 · 设备名称 · 外观",
+        "隐私与备份" => {
+            "隐私与备份 · 排除内容的正则表达式（可留空） · 导出全部本地记录 · 导入备份"
+        }
+        "数据存储" => "数据存储 · 上传并保存在服务端",
+        "设备传输方式" => {
+            "设备传输方式 · 默认中继 · 仅直连 · 自动 NAT / 中继保底 · 中继地址（留空使用服务器提供的地址）"
+        }
+        "Ditto 插件（rutis）" => {
+            "Ditto 插件（rutis） · Ditto 监听地址 · Ditto 共享密码 · 远端 Ditto 地址（主机:端口）"
+        }
+        "桌面快捷键与面板 · 剪贴板与备份设置 · 排除的应用（每行一个）" => {
+            "桌面快捷键与面板 · 剪贴板与备份设置 · 排除的应用（每行一个） · 隐私与备份 · 每日自动备份 · 显示面板快捷键 · 顺序复制快捷键 · 暂停记录快捷键 · 悬浮卡片快捷键"
+        }
+        _ => keywords,
+    };
+    move || {
+        let query = ui.settings_query.get().trim().to_lowercase();
+        let translated = keywords
+            .split('·')
+            .map(|word| crate::l10n::tr(word.trim()))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        Some(SharedString::from(
+            if query.is_empty() || translated.contains(&query) || keywords.contains(&query) {
+                "flex flex-col"
+            } else {
+                "hidden"
+            },
+        ))
+    }
+}
+
+fn settings_search(ui: Ui) -> impl IntoElement {
+    let read = ui.clone();
+    let write = ui.clone();
+    let mut navigation = view().flex_row().flex_wrap().gap_1();
+    for label in [
+        "全部设置",
+        "语言 / Language",
+        "自动清理历史",
+        "账号登录（可选）",
+        "桌面快捷键与面板",
+        "隐私与备份",
+    ] {
+        let ui = ui.clone();
+        navigation = navigation.child(quiet_action(label, move || {
+            ui.settings_query.set(if label == "全部设置" {
+                String::new()
+            } else {
+                crate::l10n::tr(label)
+            })
+        }));
+    }
+    view()
+        .gap_2()
+        .child(
+            field(
+                "搜索设置",
+                move || read.settings_query.get(),
+                move |value| write.settings_query.set(value.into()),
+            )
+            .hide_label(),
+        )
+        .child(navigation)
 }
 fn pref_toggle(
     ui: Ui,
@@ -2159,23 +3211,36 @@ fn extra_preferences(ui: Ui) -> impl IntoElement {
                 |p| p.silent_start,
                 |p, v| p.silent_start = v,
             ));
-        let size = ui.clone();
-        let set_size = ui.clone();
-        panel = panel.child(action(
-            move || {
-                crate::l10n::message(
-                    "面板大小：{0} / 5（点击调整）",
-                    &[("0", (size.prefs.get().panel_size).to_string())],
-                )
-            },
-            false,
-            move || {
-                let mut p = set_size.prefs.get();
-                p.panel_size = (p.panel_size + 1) % 6;
-                set_size.save(p);
-            },
-        ));
-        let mut positions = nsh_base::radio_group().gap_2();
+        let mut sizes = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
+        for value in 0..=5 {
+            let read = ui.clone();
+            let write = ui.clone();
+            sizes = sizes.child(
+                nsh_base::radio()
+                    .checked(move || read.prefs.get().panel_size == value)
+                    .on_change(move |checked: &bool| {
+                        if *checked {
+                            let mut prefs = write.prefs.get();
+                            prefs.panel_size = value;
+                            write.save(prefs);
+                        }
+                    })
+                    .min_h(move || {
+                        px(if is_desktop() && window().width.0 >= 850.0 {
+                            36.0
+                        } else {
+                            48.0
+                        })
+                    })
+                    .px_3()
+                    .rounded(px(6.0))
+                    .bg(move || theme().card)
+                    .checked_style(|style| style.bg(theme().accent))
+                    .child(text(value.to_string()).text_sm()),
+            );
+        }
+        panel = panel.child(hint("面板大小")).child(sizes);
+        let mut positions = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
         for (label, position) in [
             ("居中", "center"),
             ("顶部", "top"),
@@ -2236,6 +3301,57 @@ fn extra_preferences(ui: Ui) -> impl IntoElement {
 }
 
 fn shortcut_preferences(ui: Ui) -> impl IntoElement {
+    let recorder = ui.clone();
+    effect(move || {
+        let Some(label) = recorder.recording_hotkey.get() else {
+            return;
+        };
+        let cancel = recorder.clone();
+        on_key_with(
+            "escape",
+            KeyOptions {
+                when: nsh_core::keymap::When::Always,
+                ..Default::default()
+            },
+            move |_| cancel.recording_hotkey.set(None),
+        );
+        let keys = (b'a'..=b'z')
+            .map(|key| char::from(key).to_string())
+            .chain((0..=9).map(|key| key.to_string()))
+            .chain((1..=12).map(|key| format!("f{key}")));
+        for key in keys {
+            for modifiers in [
+                "mod",
+                "alt",
+                "mod+shift",
+                "mod+alt",
+                "alt+shift",
+                "mod+alt+shift",
+            ] {
+                let shortcut = format!("{modifiers}+{key}");
+                if !nsh_core::keymap::Keystroke::parse(&shortcut, os())
+                    .is_ok_and(|key| key.reserved(os()).is_none())
+                {
+                    continue;
+                }
+                let ui = recorder.clone();
+                let value = shortcut.clone();
+                on_key_with(
+                    &shortcut,
+                    KeyOptions {
+                        when: nsh_core::keymap::When::Always,
+                        ..Default::default()
+                    },
+                    move |_| {
+                        ui.preference_drafts.update(|drafts| {
+                            drafts.insert(label, value.clone());
+                        });
+                        ui.recording_hotkey.set(None);
+                    },
+                );
+            }
+        }
+    });
     let mut fields = view().gap_3();
     for (label, save_label, get, set) in [
         (
@@ -2264,11 +3380,45 @@ fn shortcut_preferences(ui: Ui) -> impl IntoElement {
             |p: &mut Preferences, value: &str| p.hotkey_float = value.into(),
         ),
     ] {
-        fields = fields.child(pref_text(ui.clone(), label, save_label, get, set));
+        let _ = save_label;
+        ui.preference_fields
+            .borrow_mut()
+            .insert(label, PreferenceBinding { get, set });
+        let read = ui.clone();
+        let record = ui.clone();
+        let clear = ui.clone();
+        fields = fields.child(
+            view().gap_1().child(hint(label)).child(
+                view()
+                    .flex_row()
+                    .gap_2()
+                    .child(action(
+                        move || {
+                            if read.recording_hotkey.get() == Some(label) {
+                                return crate::l10n::tr("请按组合键，Esc 取消");
+                            }
+                            let value = read
+                                .preference_drafts
+                                .with(|drafts| drafts.get(label).cloned())
+                                .unwrap_or_else(|| get(&read.prefs.get()));
+                            if value.is_empty() {
+                                crate::l10n::tr("点击录入快捷键")
+                            } else {
+                                platform_shortcut(&value)
+                            }
+                        },
+                        false,
+                        move || record.recording_hotkey.set(Some(label)),
+                    ))
+                    .child(quiet_action("清除快捷键", move || {
+                        clear.preference_drafts.update(|drafts| {
+                            drafts.insert(label, String::new());
+                        })
+                    })),
+            ),
+        );
     }
-    fields.child(hint(
-        "快捷键可留空以关闭；例如 mod+shift+v。各项修改后点击对应保存按钮。",
-    ))
+    fields.child(hint("点击快捷键后按下组合键；清除可关闭。修改后统一保存。"))
 }
 
 fn recovery_controls(ui: Ui) -> impl IntoElement {
@@ -2337,8 +3487,13 @@ fn saved_view_label(view: &yank_core::SavedView) -> String {
 }
 
 fn language_settings(ui: Ui) -> impl IntoElement {
-    let mut group = nsh_base::radio_group().gap_2();
-    for (label, language) in [("中文", "zh"), ("English", "en")] {
+    let mut group = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
+    let languages = [("中文", "zh"), ("English", "en")];
+    #[cfg(debug_assertions)]
+    let languages = languages
+        .into_iter()
+        .chain([("伪语言（布局测试）", "en-XA")]);
+    for (label, language) in languages {
         let read = ui.clone();
         let write = ui.clone();
         group = group.child(
@@ -2351,8 +3506,15 @@ fn language_settings(ui: Ui) -> impl IntoElement {
                         write.save(p);
                     }
                 })
-                .min_h(px(48.0))
-                .p_3()
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .py_2()
                 .border_1()
                 .rounded(move || theme().radius)
                 .border_color(move || theme().border)
@@ -2367,6 +3529,72 @@ fn language_settings(ui: Ui) -> impl IntoElement {
         );
     }
     surface().child(title("语言 / Language")).child(group)
+}
+
+fn appearance_choices(ui: Ui) -> impl IntoElement {
+    let mut choices = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
+    for (label, value) in [("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")] {
+        let read = ui.clone();
+        let write = ui.clone();
+        choices = choices.child(
+            nsh_base::radio()
+                .checked(move || read.prefs.get().theme == value)
+                .on_change(move |checked: &bool| {
+                    if *checked {
+                        let mut prefs = write.prefs.get();
+                        prefs.theme = value.into();
+                        write.save(prefs);
+                    }
+                })
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .rounded(px(6.0))
+                .bg(move || theme().card)
+                .checked_style(|style| style.bg(theme().accent))
+                .child(text(crate::l10n::label(label)).text_sm()),
+        );
+    }
+    choices
+}
+
+fn smart_range_choices(ui: Ui) -> impl IntoElement {
+    let mut choices = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
+    for (label, value) in [
+        ("不限", 0),
+        ("最近一周", 7),
+        ("最近一月", 30),
+        ("最近一年", 365),
+    ] {
+        let ui = ui.clone();
+        choices = choices.child(
+            nsh_base::radio()
+                .checked(move || ui.smart_days.get() == value)
+                .on_change(move |checked: &bool| {
+                    if *checked {
+                        ui.smart_days.set(value);
+                    }
+                })
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .rounded(px(6.0))
+                .bg(move || theme().card)
+                .checked_style(|style| style.bg(theme().accent))
+                .child(text(crate::l10n::label(label)).text_sm()),
+        );
+    }
+    choices
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2449,7 +3677,7 @@ fn cleanup_settings(ui: Ui) -> impl IntoElement {
                 draft.update(|d| d.enabled = enabled);
             },
         ));
-    let mut modes = nsh_base::radio_group().gap_2();
+    let mut modes = nsh_base::radio_group().flex_row().flex_wrap().gap_1();
     for (label, mode) in [
         ("按总数保留", yank_core::CleanupMode::Total),
         ("按类型分别保留", yank_core::CleanupMode::PerType),
@@ -2463,8 +3691,15 @@ fn cleanup_settings(ui: Ui) -> impl IntoElement {
                         draft.update(|d| d.mode = mode);
                     }
                 })
-                .min_h(px(48.0))
-                .p_3()
+                .min_h(move || {
+                    px(if is_desktop() && window().width.0 >= 850.0 {
+                        36.0
+                    } else {
+                        48.0
+                    })
+                })
+                .px_3()
+                .py_2()
                 .border_1()
                 .rounded(move || theme().radius)
                 .border_color(move || theme().border)
@@ -2595,6 +3830,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         ui.snapshot.set(Some(Snapshot {
+            feedback: None,
             network_status: String::new(),
             identity: None,
             discovered: Vec::new(),
@@ -2718,7 +3954,7 @@ mod tests {
     fn saved_detail_can_paste_after_it_leaves_the_current_result_set() -> Result<(), String> {
         let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::Linux);
         app.press("列表外详情")?;
-        app.wait_for("内容详情")?;
+        app.wait_for("粘贴到原应用")?;
         app.press("粘贴到原应用")?;
         assert!(matches!(commands.try_recv().unwrap(), Command::Paste(id) if id == "record-1"));
         assert!(commands.try_recv().is_err());
@@ -2732,23 +3968,28 @@ mod tests {
         app.press_key("enter")?;
         assert!(
             commands.try_recv().is_err(),
-            "Enter on a toolbar button must not paste"
+            "Enter on the already checked type filter must not paste"
         );
-        assert!(
-            app.shows("Page: smart"),
-            "Enter must activate the focused save-filter button"
-        );
+        assert!(commands.try_recv().is_err());
+        assert!(app.shows("Page: history"));
         Ok(())
     }
 
     #[test]
     fn enter_on_a_history_row_pastes_the_focused_record() -> Result<(), String> {
         let (mut app, commands, _directory) = quick_paste_app(nsh_core::platform::Os::MacOs);
-        app.press_key("tab")?; // Save-filter toolbar button.
-        app.press_key("tab")?; // First history row.
-        assert!(matches!(commands.try_recv().unwrap(), Command::Select(id) if id == "record-1"));
-        app.press_key("tab")?; // Second history row.
-        assert!(matches!(commands.try_recv().unwrap(), Command::Select(id) if id == "record-2"));
+        let mut reached = false;
+        for _ in 0..24 {
+            app.press_key("tab")?;
+            if commands
+                .try_iter()
+                .any(|command| matches!(command, Command::Select(id) if id=="record-2"))
+            {
+                reached = true;
+                break;
+            }
+        }
+        assert!(reached, "keyboard can reach the second history row");
         app.press_key("enter")?;
         assert!(matches!(commands.try_recv().unwrap(), Command::Paste(id) if id == "record-2"));
         assert!(commands.try_recv().is_err());

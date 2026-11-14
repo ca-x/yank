@@ -11,7 +11,14 @@ use std::{
 };
 use yank_core::{Clip, ClipFormat, Peer, Preferences, Stats, Store};
 #[derive(Clone, Debug, PartialEq)]
+pub struct Feedback {
+    pub sequence: u64,
+    pub message: String,
+    pub copied_id: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
+    pub feedback: Option<Feedback>,
     pub network_status: String,
     pub identity: Option<Peer>,
     pub discovered: Vec<network::Discovered>,
@@ -44,6 +51,7 @@ pub enum Command {
     Capture(Clip, CaptureSource),
     Pin(String),
     Delete(String),
+    DeleteMany(Vec<String>),
     Edit(String, String, String),
     Save(Preferences, u64),
     Login(String, String, String, u64),
@@ -53,6 +61,7 @@ pub enum Command {
     Export(PathBuf),
     Import(PathBuf),
     Copy(Clip, bool),
+    CopySaved(String),
     Paste(String),
     SaveView(yank_core::SavedView),
     RemoveView(String),
@@ -222,6 +231,8 @@ fn run(
     let mut error = String::new();
     let mut dirty = true;
     let mut last_snapshot = Instant::now();
+    let mut thumbnails = std::collections::HashMap::new();
+    let mut feedback: Option<Feedback> = None;
     let mut last_capture = Instant::now();
     while !state.stop.load(Ordering::Relaxed) {
         let cmd = rx.recv_timeout(Duration::from_millis(80));
@@ -233,6 +244,8 @@ fn run(
                     | Command::Import(..)
                     | Command::SendDitto(..)
             );
+            let mut completed_notice = None;
+            let mut copied_id = None;
             let result: anyhow::Result<()> = (|| {
                 match command {
                     Command::PairCode(code, invite, epoch) => {
@@ -343,6 +356,37 @@ fn run(
                     }
                     Command::Pin(id) => {
                         store.mutate(&id, &device, |c| c.pinned = !c.pinned)?;
+                    }
+                    Command::DeleteMany(ids) => {
+                        anyhow::ensure!(ids.len() <= 1000, crate::l10n::tr("选择的记录过多"));
+                        let mut removed = 0;
+                        for id in ids {
+                            match store.get(&id) {
+                                Ok(Some(clip)) if !clip.deleted => {
+                                    store
+                                        .mutate(&id, &device, |clip| clip.deleted = true)
+                                        .map_err(|error| {
+                                            anyhow::anyhow!(crate::l10n::message(
+                                                "已删除 {0} 条，其余未处理：{error}",
+                                                &[
+                                                    ("0", removed.to_string()),
+                                                    ("error", error.to_string())
+                                                ]
+                                            ))
+                                        })?;
+                                    removed += 1;
+                                }
+                                Ok(_) => {}
+                                Err(error) => anyhow::bail!(crate::l10n::message(
+                                    "已删除 {0} 条，其余未处理：{error}",
+                                    &[("0", removed.to_string()), ("error", error.to_string())]
+                                )),
+                            }
+                        }
+                        completed_notice = Some(crate::l10n::message(
+                            "已删除 {0} 条记录",
+                            &[("0", removed.to_string())],
+                        ));
                     }
                     Command::Delete(id) => {
                         store.mutate(&id, &device, |c| c.deleted = true)?;
@@ -536,6 +580,27 @@ fn run(
                         paste()?;
                         store.mark_used(&clip.id)?;
                         state.status("已发送粘贴按键");
+                        completed_notice = Some("已发送粘贴按键".to_owned());
+                        copied_id = Some(clip.id.clone());
+                    }
+                    Command::CopySaved(id) => {
+                        let clip = store
+                            .get(&id)?
+                            .filter(|clip| !clip.deleted)
+                            .ok_or_else(|| anyhow::anyhow!("记录已不存在"))?;
+                        anyhow::ensure!(
+                            !clip.formats.iter().any(ClipFormat::is_file_list)
+                                || store.can_copy_local_files(&clip)?,
+                            "文件历史仅能复制本机捕获的路径；请在本机重新复制源文件"
+                        );
+                        clipboard
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("系统剪贴板不可用"))?
+                            .write(&clip, false)?;
+                        store.mark_used(&clip.id)?;
+                        state.status("已复制，可以接着使用了");
+                        completed_notice = Some("已复制，可以接着使用了".to_owned());
+                        copied_id = Some(clip.id.clone());
                     }
                     Command::Copy(clip, plain) => {
                         anyhow::ensure!(
@@ -550,12 +615,25 @@ fn run(
                             .write(&clip, plain)?;
                         store.mark_used(&clip.id)?;
                         state.status("已复制，可以接着使用了");
+                        completed_notice = Some("已复制，可以接着使用了".to_owned());
+                        copied_id = Some(clip.id.clone());
                     }
                 }
                 Ok(())
             })();
             if long_task && let Ok(mut busy) = state.busy.lock() {
                 *busy = None;
+            }
+            if result.is_ok()
+                && let Some(message) = completed_notice
+            {
+                feedback = Some(Feedback {
+                    sequence: feedback
+                        .as_ref()
+                        .map_or(1, |feedback| feedback.sequence.wrapping_add(1)),
+                    message,
+                    copied_id,
+                });
             }
             error = result.err().map(|e| e.to_string()).unwrap_or_default();
             dirty = true;
@@ -658,7 +736,8 @@ fn run(
                     )
                 };
                 let window = store.history_window(search, kind, cutoff, limit)?;
-                let clips = window.clips;
+                let mut clips = window.clips;
+                attach_thumbnails(&store, &mut clips, &mut thumbnails);
                 let has_more = window.has_more;
                 let has_earlier = saved.is_none() && window.has_earlier;
                 let network_status = state.status.lock().map(|s| s.clone()).unwrap_or_default();
@@ -676,6 +755,7 @@ fn run(
                     .unwrap_or_default();
                 servers.sort_by(|a, b| a.url.cmp(&b.url));
                 Ok(Snapshot {
+                    feedback: feedback.clone(),
                     network_status,
                     identity,
                     discovered,
@@ -705,6 +785,65 @@ fn run(
         }
     }
 }
+fn png_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(data), image::ImageFormat::Png);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(32 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().ok()?.thumbnail(48, 48);
+    let mut output = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut output, image::ImageFormat::Png).ok()?;
+    Some(output.into_inner())
+}
+
+fn attach_thumbnails(
+    store: &Store,
+    clips: &mut [Clip],
+    cache: &mut std::collections::HashMap<String, Option<Vec<u8>>>,
+) {
+    let key_of = |clip: &Clip| format!("{}:{}:{:?}", clip.id, clip.version_id, clip.clock);
+    let keys = clips
+        .iter()
+        .take(128)
+        .map(key_of)
+        .collect::<std::collections::HashSet<_>>();
+    cache.retain(|key, _| keys.contains(key));
+    let mut budget = 4;
+    for clip in clips
+        .iter_mut()
+        .take(128)
+        .filter(|clip| clip.kind == "image")
+    {
+        let Some(index) = clip
+            .formats
+            .iter()
+            .position(|format| format.mime.as_deref() == Some("image/png"))
+        else {
+            continue;
+        };
+        let key = key_of(clip);
+        if !cache.contains_key(&key) && budget > 0 {
+            budget -= 1;
+            let thumbnail = store.get(&clip.id).ok().flatten().and_then(|record| {
+                record
+                    .formats
+                    .get(index)
+                    .and_then(|format| png_thumbnail(&format.data))
+            });
+            cache.insert(key.clone(), thumbnail);
+        }
+        if let Some(Some(data)) = cache.get(&key) {
+            clip.formats[index].data = data.clone();
+        }
+    }
+}
+
 fn maintain(store: &Store, state: &Shared, device: &str) -> anyhow::Result<usize> {
     if state.recovery_pending.load(Ordering::Relaxed) {
         return Ok(0);
@@ -806,6 +945,38 @@ mod tests {
     use axum::{Router, body::Bytes, extract::State, routing::post};
     use tokio::sync::Notify;
     use yank_core::{decode, encode, protocol as pb};
+
+    #[test]
+    fn thumbnails_are_bounded_and_do_not_replace_saved_payloads() {
+        let image = image::RgbaImage::new(160, 80);
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let original = encoded.into_inner();
+        let thumbnail = png_thumbnail(&original).unwrap();
+        let decoded = image::load_from_memory(&thumbnail).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (48, 24));
+        assert!(png_thumbnail(b"not a PNG").is_none());
+        assert!(png_thumbnail(&vec![0; 8 * 1024 * 1024 + 1]).is_none());
+        let store = Store::memory().unwrap();
+        let mut clip = Clip::text("test", "image");
+        clip.kind = "image".into();
+        clip.formats = vec![ClipFormat {
+            format: "PNG".into(),
+            mime: Some("image/png".into()),
+            data: original.clone(),
+        }];
+        let saved = store.capture(clip, "test").unwrap();
+        let mut summaries = vec![saved.clone()];
+        let mut cache = std::collections::HashMap::new();
+        attach_thumbnails(&store, &mut summaries, &mut cache);
+        assert_eq!(summaries[0].formats[0].data, thumbnail);
+        assert_eq!(
+            saved_paste_clip(&store, &saved.id).unwrap().formats[0].data,
+            original
+        );
+    }
     #[test]
     fn paste_loads_current_complete_payload_and_rejects_tombstones() {
         let store = Store::memory().unwrap();

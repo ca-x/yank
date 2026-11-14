@@ -8873,7 +8873,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "yank-client"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "active-win-pos-rs",
  "anyhow",
@@ -8884,6 +8884,7 @@ dependencies = [
  "directories",
  "enigo",
  "hex",
+ "image",
  "iroh",
  "iroh-relay",
  "mdns-sd",
@@ -8910,7 +8911,7 @@ dependencies = [
 
 [[package]]
 name = "yank-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "hex",
@@ -8927,7 +8928,7 @@ dependencies = [
 
 [[package]]
 name = "yank-ditto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -8941,14 +8942,14 @@ dependencies = [
 
 [[package]]
 name = "yank-proto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "prost",
 ]
 
 [[package]]
 name = "yank-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argon2",

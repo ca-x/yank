@@ -283,6 +283,7 @@ fn router(state: AppState) -> Router {
         .route("/api/clips", get(list))
         .route("/api/clips/{id}", delete(remove))
         .route("/api/clips/{id}/pin", post(pin))
+        .route("/api/export", get(export_library))
         .route("/api/sync/pull", get(pull))
         .route("/api/sync/push", post(push))
         .route("/api/devices", get(devices).post(announce))
@@ -627,6 +628,25 @@ async fn health(State(s): State<AppState>) -> ApiResult<Json<Health>> {
 async fn stats(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<yank_core::Stats>> {
     let u = auth(&h, &s)?;
     Ok(Json(s.library(&u, Store::stats)?))
+}
+async fn export_library(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let user = auth(&headers, &state)?;
+    let backup = tokio::task::spawn_blocking(move || state.library(&user, Store::export))
+        .await
+        .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Export failed".into()))??;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"yank-backup.json\"",
+            ),
+        ],
+        backup,
+    ))
 }
 async fn list(
     State(s): State<AppState>,
@@ -1387,6 +1407,48 @@ mod tests {
             StatusCode::FORBIDDEN
         );
     }
+    #[tokio::test]
+    async fn full_export_is_authenticated_tenant_scoped_and_requires_storage() {
+        let (_temp, mut state) = state();
+        let admin = login(&state, "admin", "test-password-42");
+        let other = other(&state);
+        let user = state
+            .accounts
+            .lock()
+            .unwrap()
+            .verify(&admin.token)
+            .unwrap()
+            .unwrap();
+        state
+            .library(&user, |store| {
+                for index in 0..105 {
+                    store.capture(Clip::text("test", &format!("private {index}")), "test")?;
+                }
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("library setup failed: {}", error.1));
+        assert_eq!(
+            call(state.clone(), "GET", "/api/export", None, Vec::new())
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        for (token, count) in [(&admin.token, 105), (&other.token, 0)] {
+            let (status, body) =
+                call(state.clone(), "GET", "/api/export", Some(token), Vec::new()).await;
+            assert_eq!(status, StatusCode::OK);
+            let backup: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(backup["clips"].as_array().unwrap().len(), count);
+        }
+        state.storage = false;
+        assert_eq!(
+            call(state, "GET", "/api/export", Some(&admin.token), Vec::new())
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
     #[tokio::test]
     async fn storage_disabled_preserves_discovery_but_rejects_data() {
         let (_temp, mut s) = state();

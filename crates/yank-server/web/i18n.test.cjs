@@ -67,6 +67,7 @@ class Element {
   close() {this.open = false;}
   setCustomValidity(message) {this.validationMessage = message;}
   scrollIntoView() {}
+  click() {return this.onclick?.();}
   reset() {this.querySelectorAll("input").forEach(input => {input.value = "";input.checked = false;});}
 }
 function documentFixture() {
@@ -95,12 +96,66 @@ function setup({saved, languages = ["en-US"], document = documentFixture(), fetc
   const context = vm.createContext({document, navigator:{languages}, localStorage:storage, sessionStorage:storage,
     TextEncoder, AbortController, URL, Blob, CSS:{escape: value => value},
     matchMedia: () => ({matches:false, addEventListener(){}}),
-    setTimeout: () => 1, clearTimeout(){}, confirm: () => false,
+    setTimeout: () => 1, clearTimeout(){}, setInterval: () => 1, confirm: () => false,
     fetch: fetch || (async () => ({ok:false,status:401}))});
   vm.runInContext(source, context);
   return {context, document, values, i18n:context.YankI18n, run: code => vm.runInContext(code, context)};
 }
 const placeholders = value => [...value.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort();
+
+test("appearance exposes three explicit accessible choices", () => {
+  const {run,document,values}=setup();run(app);
+  for(const choice of ["dark","light","system"]) {
+    document.querySelector(`[data-theme-choice="${choice}"]`).onclick();
+    assert.equal(values.get("yank.appearance"),choice);
+    assert.equal(document.documentElement.dataset.theme,choice==="system"?"light":choice);
+    for(const button of document.querySelectorAll("[data-theme-choice]")) {
+      assert.equal(button.getAttribute("aria-pressed"),String(button.dataset.themeChoice===choice));
+    }
+  }
+});
+
+test("relative dates and calendar groups follow locale", () => {
+  const {i18n}=setup();const now=Math.floor(Date.now()/1000);
+  assert.match(i18n.t("relativeDate",{timestamp:now-180}),/3 minutes ago/);
+  assert.equal(i18n.t("dayGroup",{timestamp:now}),"Today");
+  i18n.setLanguage("zh");
+  assert.match(i18n.t("relativeDate",{timestamp:now-180}),/3分钟前/);
+  assert.equal(i18n.t("dayGroup",{timestamp:now}),"今天");
+});
+
+test("batch deletion stops at failure and clears selection on logout", async () => {
+  const deleted=[];
+  const {run,context,document}=setup({fetch:async(path,options={})=>{
+    if(options.method==="DELETE") {
+      deleted.push(path);return {ok:deleted.length<2,status:deleted.length<2?200:500,json:async()=>({})};
+    }
+    return {ok:false,status:401};
+  }});
+  run(app);await new Promise(resolve=>setImmediate(resolve));
+  context.confirm=()=>true;
+  run('currentUser={id:"owner"};token="session";checkedClips.add("a");checkedClips.add("b");checkedClips.add("c");refresh=async()=>{};');
+  await document.querySelector("#delete-selected").onclick();
+  assert.deepEqual(deleted,["/api/clips/a","/api/clips/b"]);
+  assert.equal(run('checkedClips.has("a")'),false);
+  assert.equal(run('checkedClips.has("b")&&checkedClips.has("c")'),true);
+  assert.match(document.querySelector("#toast").textContent,/1/);
+  run("clearSession()");assert.equal(run("checkedClips.size"),0);
+});
+
+test("export all requests the authenticated snapshot rather than the loaded page", async () => {
+  const calls=[];
+  const {run,document}=setup({fetch:async(path)=>{
+    calls.push(path);
+    if(path==="/api/export")return {ok:true,json:async()=>({clips:Array.from({length:105},(_,index)=>({id:String(index)}))})};
+    return {ok:false,status:401};
+  }});
+  run(app);await new Promise(resolve=>setImmediate(resolve));
+  run('currentUser={id:"owner"};token="session";clips=[];');
+  await document.querySelector("#export-all").onclick();
+  assert.ok(calls.includes("/api/export"));
+  assert.equal(document.querySelector("#export-all").disabled,false);
+});
 
 test("zh/en dictionaries have matching nonempty keys and interpolation placeholders", () => {
   const {i18n} = setup();
@@ -114,7 +169,7 @@ test("zh/en dictionaries have matching nonempty keys and interpolation placehold
 
 test("all static text and accessible attributes have dictionary bindings", () => {
   const {document,i18n} = setup();
-  const neutral = /^(?:yank|Yank|T|↗|▧|▤|—|\/|↻|Enter|Esc)$/;
+  const neutral = /^(?:yank|Yank|T|↗|▧|▤|—|\/|↻|◐|☀|☾|Enter|Esc)$/;
   function walk(el, bound = false) {
     bound ||= !!el.dataset.i18n;
     if (el.tagName === "#text" && el.textContent.trim() && !bound) assert.match(el.textContent.trim(), neutral, `Unbound text: ${el.textContent}`);
@@ -146,7 +201,9 @@ test("dynamic strings use known keys and have no untranslated prose", () => {
   // Audit every quoted literal, including single-word labels. The explicit
   // exceptions are protocol names, CSS selectors/classes, tags, keys and glyphs.
   const structural = new Set([
-    "", " selected", " · ", "—", "↗", "▤", "▧", "T", "use strict",
+    "closing", ".clip-time[data-timestamp]",
+    "[data-theme-choice]", "[data-record-title]", "day-heading", "selectable-row", "input", "checkbox", "type", "yank-backup.json", "pinned",
+    "", " ", " selected", " · ", "—", "↗", "▤", "▧", "T", "use strict",
     "(max-width:900px)", "(prefers-color-scheme: dark)", ".clip-row", "[data-view]",
     "button,a,[role=button]", "input,textarea,select", "/", "AbortError", "ArrowDown", "ArrowUp",
     "Content-Type", "DELETE", "Enter", "Escape", "POST", "application/json",
@@ -218,7 +275,8 @@ test("live switching retains DOM identity, draft values, focus, selection, dialo
   assert.match(document.querySelector("#password-error").textContent,/current password is incorrect/);
   assert.equal(document.querySelector("#breadcrumb").textContent,"Pinned");
   assert.equal(document.querySelector("#detail-content").textContent,i18n.t("binary.hint"));
-  assert.equal(document.querySelector("#theme").textContent,"Appearance · System");
+  assert.equal(document.querySelector("#theme-system").getAttribute("aria-pressed"),"true");
+  assert.equal(document.querySelector("#theme-light").getAttribute("aria-label"),"Light");
   assert.equal(document.activeElement,focused);assert.equal(document.querySelector(".clip-row"),row);
   assert.equal(document.documentElement.lang,"en");
   for (const id of fields) assert.equal(document.querySelector("#"+id).value,"draft-"+id);

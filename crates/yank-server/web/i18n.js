@@ -145,7 +145,13 @@ const dictionaries = {
     "export.done": "已导出当前加载的 {count} 条记录",
     "accounts.deleteConfirm": "删除 {username} 的账号并撤销登录？",
     "password.resetTitle": "重置 {username} 的密码",
-    "date": "{value}"
+    "date": "{value}",
+    "relativeDate": "{value}", "dayGroup": "{value}", "day.today": "今天", "day.yesterday": "昨天",
+    "export.all": "导出全部", "export.allDone": "已导出全部记录", "export.loading": "正在导出…",
+    "bulk.selectAll": "选择已加载记录", "bulk.delete": "删除所选", "bulk.clear": "取消选择",
+    "bulk.count": "已选 {count} 条", "bulk.confirm": "删除选中的 {count} 条记录？删除状态会同步到其他设备。",
+    "bulk.done": "已删除 {count} 条", "bulk.partial": "已删除 {count} 条，其余记录未删除，请重试。",
+    "bulk.record": "选择记录：{title}"
   },
   "en": {
     "page.title": "Yank · Clipboard workspace",
@@ -291,7 +297,13 @@ const dictionaries = {
     "export.done": "Exported {count} currently loaded records",
     "accounts.deleteConfirm": "Delete {username}’s account and revoke their sessions?",
     "password.resetTitle": "Reset password for {username}",
-    "date": "{value}"
+    "date": "{value}",
+    "relativeDate": "{value}", "dayGroup": "{value}", "day.today": "Today", "day.yesterday": "Yesterday",
+    "export.all": "Export all", "export.allDone": "Exported all records", "export.loading": "Exporting…",
+    "bulk.selectAll": "Select loaded records", "bulk.delete": "Delete selected", "bulk.clear": "Clear selection",
+    "bulk.count": "{count} selected", "bulk.confirm": "Delete {count} selected records? Deletions sync to other devices.",
+    "bulk.done": "Deleted {count} records", "bulk.partial": "Deleted {count} records. Remaining records were not deleted; try again.",
+    "bulk.record": "Select record: {title}"
   }
 };
 const supported = value => value === "zh" || value === "en";
@@ -314,6 +326,16 @@ const listeners = new Set();
 function t(key, params = {}) {
   if (!Object.hasOwn(dictionaries[language], key)) throw new Error(`Unknown translation key: ${key}`);
   if (key === "date") params = {value: new Date(params.timestamp * 1000).toLocaleString(language === "zh" ? "zh-CN" : "en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})};
+  if (key === "relativeDate") {
+    const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - params.timestamp);
+    const [unit, divisor] = elapsed < 60 ? ["second",1] : elapsed < 3600 ? ["minute",60] : elapsed < 86400 ? ["hour",3600] : ["day",86400];
+    params = {value: new Intl.RelativeTimeFormat(language === "zh" ? "zh-CN" : "en-US", {numeric:"auto"}).format(-Math.floor(elapsed / divisor), unit)};
+  }
+  if (key === "dayGroup") {
+    const date = new Date(params.timestamp * 1000), today = new Date(), yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    params = {value: date.toDateString() === today.toDateString() ? t("day.today") : date.toDateString() === yesterday.toDateString() ? t("day.yesterday") : date.toLocaleDateString(language === "zh" ? "zh-CN" : "en-US", {year:"numeric",month:"short",day:"numeric"})};
+  }
   return dictionaries[language][key].replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? ""));
 }
 function msg(key, params = {}) { return {key, params, toString: () => t(key, params)}; }

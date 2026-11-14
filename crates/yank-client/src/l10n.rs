@@ -26,6 +26,13 @@ pub fn language() -> Language {
     })
 }
 pub fn tr(source: &str) -> String {
+    if LANGUAGE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|language| language.get() == "en-XA")
+    }) {
+        return i18n::pseudo_source_text(source);
+    }
     i18n::source_text(language(), source)
 }
 pub fn message(source: &str, values: &[(&str, String)]) -> String {

@@ -8,14 +8,24 @@ let token = "", currentUser = null;
 try { localStorage.removeItem("yank.token"); } catch {}
 try { sessionStorage.removeItem("yank.token"); } catch {}
 let view = "all", clips = [], selected = null, generation = 0, currentAbort, more = false, busy = false;
+const checkedClips = new Set();
 let theme;
 try { theme = localStorage.getItem("yank.appearance"); } catch {}
 if (!["system", "light", "dark"].includes(theme)) theme="system";
-let toastTimer;
-function notify(message) { setText($("#toast"),message);$("#toast").hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$("#toast").hidden=true,3500); }
-function applyTheme() { document.documentElement.dataset.theme=theme==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):theme;setText($("#theme"),msg("theme.value",{name:t("theme."+theme)})); }
+let toastTimer, toastHideTimer;
+function notify(message) {
+  const toast=$("#toast");setText(toast,message);toast.classList.remove("closing");toast.hidden=false;
+  clearTimeout(toastTimer);clearTimeout(toastHideTimer);
+  toastTimer=setTimeout(()=>{toast.classList.add("closing");toastHideTimer=setTimeout(()=>toast.hidden=true,180);},3500);
+}
+function applyTheme() {
+  document.documentElement.dataset.theme=theme==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):theme;
+  document.querySelectorAll("[data-theme-choice]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.themeChoice===theme)));
+}
 applyTheme();matchMedia("(prefers-color-scheme: dark)").addEventListener("change",applyTheme);
-$("#theme").onclick=()=>{theme={system:"light",light:"dark",dark:"system"}[theme];try { localStorage.setItem("yank.appearance",theme); } catch {}applyTheme();};
+document.querySelectorAll("[data-theme-choice]").forEach(button=>button.onclick=()=>{
+  theme=button.dataset.themeChoice;try {localStorage.setItem("yank.appearance",theme);} catch {}applyTheme();
+});
 function uiError(key, params={}) { const error=new Error(t(key,params));error.localized=msg(key,params);return error; }
 function errorMessage(error) { return error.localized || msg("request.network"); }
 async function api(path, options={}) {
@@ -35,6 +45,7 @@ function openSettings(){ $("#token").value="";$("#username").value=currentUser?.
 $("#close-settings").onclick=()=>$("#settings").close();
 $("#settings-form").onsubmit=async e=>{e.preventDefault();const submit=e.submitter;submit.disabled=true;try{const response=await api("/api/login",{method:"POST",body:JSON.stringify({username:$("#username").value,password:$("#token").value,remember:$("#remember").checked})});currentUser=response.user;token="session";$("#token").value="";$("#accounts-nav").hidden=!currentUser.admin;$("#settings").close();await refresh();}catch(err){setText($("#settings-error"),errorMessage(err));}finally{submit.disabled=false;}};
 function clearSession() {
+  checkedClips.clear();
   currentAbort?.abort(); generation++;
   currentUser=null; token=""; clips=[]; selected=null; more=false; view="all";
   $("#library-view").hidden=false; $("#accounts-view").hidden=true; $("#devices-view").hidden=true;
@@ -49,10 +60,42 @@ function clearSession() {
 $("#logout").onclick=async()=>{try{await api("/api/logout",{method:"POST"});clearSession();$("#settings").close();notify(msg("logout.done"));}catch(e){notify(errorMessage(e));}};
 function node(tag,cls,text){const el=document.createElement(tag);if(cls)el.className=cls;if(text!==undefined)setText(el,text);return el;}
 function date(ts){return msg("date",{timestamp:ts});}
+setInterval(()=>{
+  document.querySelectorAll(".clip-time[data-timestamp]").forEach(element=>{
+    setText(element,msg("relativeDate",{timestamp:Number(element.dataset.timestamp)}));
+  });
+},60000);
 function select(id){selected=clips.find(c=>c.id===id)||null;document.querySelectorAll(".clip-row").forEach(el=>{el.classList.toggle("selected",el.dataset.id===id);el.setAttribute("aria-pressed",String(el.dataset.id===id));});renderDetail();if(matchMedia("(max-width:900px)").matches&&selected){$("#detail-title").focus();$("#inspector").scrollIntoView({block:"start"});}}
-function renderDetail(){const c=selected;$("#detail").hidden=!c;$("#detail-empty").hidden=!!c;$("#inspector").classList.toggle("open",!!c);if(!c)return;setText($("#detail-kind"),labels[c.kind]||c.kind);setText($("#detail-title"),c.description);setText($("#detail-content"),c.text||msg("binary.hint"));setText($("#pin"),c.pinned?msg("unpin"):msg("pin"));$("#copy").disabled=!c.text;$("#detail-meta").replaceChildren();for(const [k,v]of [[msg("meta.source"),c.device_id],[msg("meta.time"),date(c.updated_at)],[msg("meta.formats"),c.formats.map(f=>f.mime||f.format).join(" · ")],[msg("meta.collection"),c.collection||msg("meta.unfiled")]]){$("#detail-meta").append(node("dt","",k),node("dd","",v));}}
-function render(){const wrap=$("#clips");wrap.replaceChildren();for(const c of clips){const item=node("button","clip-row"+(selected?.id===c.id?" selected":""));item.dataset.id=c.id;item.setAttribute("aria-pressed",String(selected?.id===c.id));if(c.description)item.setAttribute("aria-label",c.description);else {item.dataset.i18nAriaLabel="record.label";item.setAttribute("aria-label",t("record.label"));}const body=node("div","clip-body"),title=node("div","clip-title");title.append(node("span","",c.description||msg("record.untitled")));if(c.pinned)title.append(node("span","pin-marker",msg("record.pinned")));body.append(title,node("div","clip-snippet",c.text||msg("record.formats",{count:c.formats.length})));item.append(kindIcon(c.kind),body,node("div","clip-time",date(c.updated_at)));item.onclick=()=>select(c.id);const row=node("div");row.setAttribute("role","listitem");row.append(item);wrap.append(row);}setText($("#result-count"),msg(more?"records.countMore":"records.count",{count:clips.length}));$("#empty").hidden=clips.length>0;$("#more").hidden=!more;if(!token){setText($("#empty h2"),msg("empty.connect.title"));setText($("#empty p"),msg("empty.connected"));$("#empty-connect").hidden=false;setText($("#result-count"),msg("records.connect"));}if(!clips.length&&token){setText($("#empty h2"),$("#search").value?msg("empty.search.title"):msg("empty.library.title"));setText($("#empty p"),$("#search").value?msg("empty.search.description"):msg("empty.library.description"));$("#empty-connect").hidden=true;}renderDetail();}
-async function refresh(append=false){if(!token){openSettings();return;}const gen=++generation;currentAbort?.abort();currentAbort=new AbortController();const signal=currentAbort.signal;$("#refresh").disabled=true;try{if(view==="accounts"){await loadAccounts(signal,gen);if(gen!==generation||!currentUser)return;}else if(view==="devices"){const peers=await api("/api/devices",{signal});if(gen!==generation)return;$("#devices").replaceChildren();for(const peer of peers){const card=node("article","device-card");card.append(node("span","tag",msg("devices.waiting")),node("h3","",peer.name),node("code","",peer.code),node("p","",msg("devices.identity")));$("#devices").append(card);}if(!peers.length)$("#devices").append(node("p","muted",msg("devices.empty")));}else{const data=await api(`/api/clips?q=${encodeURIComponent($("#search").value)}&filter=${encodeURIComponent(view)}&offset=${append?clips.length:0}`,{signal});if(gen!==generation)return;more=data.length===100;clips=append?[...clips,...data]:data;if(selected)selected=clips.find(c=>c.id===selected.id)||null;render();const stats=await api("/api/stats",{signal});if(gen!==generation)return;setText($("#nav-count"),stats.clips);setText($("#pin-count"),stats.pinned);}if(gen!==generation||!currentUser)return;setText($("#connection-status"),msg("status.signedIn",{username:currentUser?.username||""}));$("#connection-dot").classList.add("online");setText($("#connect-top"),msg("settings.connected"));}catch(err){if(gen===generation&&err.name!=="AbortError"){notify(errorMessage(err));setText($("#connection-status"),msg("status.failed"));$("#connection-dot").classList.remove("online");}}finally{if(gen===generation)$("#refresh").disabled=false;}}
+function renderDetail(){const c=selected;$("#detail").hidden=!c;$("#detail-empty").hidden=!!c;$("#inspector").classList.toggle("open",!!c);if(!c)return;setText($("#detail-kind"),labels[c.kind]||c.kind);setText($("#detail-title"),c.description);setText($("#detail-content"),c.text||msg("binary.hint"));setText($("#pin span"),c.pinned?msg("unpin"):msg("pin"));$("#copy").disabled=!c.text;$("#detail-meta").replaceChildren();for(const [k,v]of [[msg("meta.source"),c.device_id],[msg("meta.time"),date(c.updated_at)],[msg("meta.formats"),c.formats.map(f=>f.mime||f.format).join(" · ")],[msg("meta.collection"),c.collection||msg("meta.unfiled")]]){$("#detail-meta").append(node("dt","",k),node("dd","",v));}}
+function renderSelection() {
+  setText($("#selection-count"),checkedClips.size?msg("bulk.count",{count:checkedClips.size}):"");
+  $("#delete-selected").hidden=!checkedClips.size;$("#clear-selection").hidden=!checkedClips.size;
+}
+function render(){
+  const wrap=$("#clips");wrap.replaceChildren();let previousGroup;
+  for(const clip of clips){
+    const group=clip.pinned?"pinned":new Date(clip.updated_at*1000).toDateString();
+    if(group!==previousGroup){wrap.append(node("div","day-heading",clip.pinned?msg("nav.pinned"):msg("dayGroup",{timestamp:clip.updated_at})));previousGroup=group;}
+    const item=node("button","clip-row"+(selected?.id===clip.id?" selected":""));
+    item.dataset.id=clip.id;item.setAttribute("aria-pressed",String(selected?.id===clip.id));
+    if(clip.description)item.setAttribute("aria-label",clip.description);else{item.dataset.i18nAriaLabel="record.label";item.setAttribute("aria-label",t("record.label"));}
+    const body=node("div","clip-body"),title=node("div","clip-title");
+    title.append(node("span","",clip.description||msg("record.untitled")));
+    if(clip.pinned)title.append(node("span","pin-marker",msg("record.pinned")));
+    body.append(title,node("div","clip-snippet",clip.text.replace(/\s+/g," ").trim()||msg("record.formats",{count:clip.formats.length})));
+    const time=node("div","clip-time",msg("relativeDate",{timestamp:clip.updated_at}));
+    time.dataset.timestamp=clip.updated_at;
+    item.append(kindIcon(clip.kind),body,time);item.onclick=()=>select(clip.id);
+    const row=node("div","selectable-row");row.setAttribute("role","listitem");
+    const checkbox=node("input");checkbox.setAttribute("type","checkbox");checkbox.checked=checkedClips.has(clip.id);
+    checkbox.dataset.i18nAriaLabel="bulk.record";checkbox.setAttribute("aria-label",t("bulk.record",{title:clip.description}));
+    checkbox.dataset.recordTitle=clip.description;
+    checkbox.onchange=()=>{if(checkbox.checked)checkedClips.add(clip.id);else checkedClips.delete(clip.id);renderSelection();};
+    row.append(checkbox,item);wrap.append(row);
+  }
+  renderSelection();
+setText($("#result-count"),msg(more?"records.countMore":"records.count",{count:clips.length}));$("#empty").hidden=clips.length>0;$("#more").hidden=!more;if(!token){setText($("#empty h2"),msg("empty.connect.title"));setText($("#empty p"),msg("empty.connected"));$("#empty-connect").hidden=false;setText($("#result-count"),msg("records.connect"));}if(!clips.length&&token){setText($("#empty h2"),$("#search").value?msg("empty.search.title"):msg("empty.library.title"));setText($("#empty p"),$("#search").value?msg("empty.search.description"):msg("empty.library.description"));$("#empty-connect").hidden=true;}renderDetail();}
+async function refresh(append=false){if(!token){openSettings();return;}const gen=++generation;currentAbort?.abort();currentAbort=new AbortController();const signal=currentAbort.signal;$("#refresh").disabled=true;try{if(view==="accounts"){await loadAccounts(signal,gen);if(gen!==generation||!currentUser)return;}else if(view==="devices"){const peers=await api("/api/devices",{signal});if(gen!==generation)return;$("#devices").replaceChildren();for(const peer of peers){const card=node("article","device-card");card.append(node("span","tag",msg("devices.waiting")),node("h3","",peer.name),node("code","",peer.code),node("p","",msg("devices.identity")));$("#devices").append(card);}if(!peers.length)$("#devices").append(node("p","muted",msg("devices.empty")));}else{const data=await api(`/api/clips?q=${encodeURIComponent($("#search").value)}&filter=${encodeURIComponent(view)}&offset=${append?clips.length:0}`,{signal});if(gen!==generation)return;more=data.length===100;clips=append?[...clips,...data]:data;for(const id of checkedClips)if(!clips.some(clip=>clip.id===id))checkedClips.delete(id);if(selected)selected=clips.find(c=>c.id===selected.id)||null;render();const stats=await api("/api/stats",{signal});if(gen!==generation)return;setText($("#nav-count"),stats.clips);setText($("#pin-count"),stats.pinned);}if(gen!==generation||!currentUser)return;setText($("#connection-status"),msg("status.signedIn",{username:currentUser?.username||""}));$("#connection-dot").classList.add("online");setText($("#connect-top"),msg("settings.connected"));}catch(err){if(gen===generation&&err.name!=="AbortError"){notify(errorMessage(err));setText($("#connection-status"),msg("status.failed"));$("#connection-dot").classList.remove("online");}}finally{if(gen===generation)$("#refresh").disabled=false;}}
 $("#refresh").onclick=()=>refresh();$("#more").onclick=()=>refresh(true);$("#search").oninput=()=>refresh();
 document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>{view=b.dataset.view;selected=null;document.querySelectorAll("[data-view]").forEach(n=>{n.classList.toggle("selected",n===b);if(n===b)n.setAttribute("aria-current","page");else n.removeAttribute("aria-current");});setText($("#breadcrumb"),labels[view]);setText($("#page-title"),view==="all"?msg("library.title"):labels[view]);$("#accounts-view").hidden=true;$("#library-view").hidden=view==="devices";$("#devices-view").hidden=view!=="devices";refresh();});
 function closeDetail() {
@@ -66,6 +109,31 @@ $("#copy").onclick=copy;
 async function mutation(path,method){if(!selected||busy)return;busy=true;try{await api(`/api/clips/${encodeURIComponent(selected.id)}${path}`,{method});if(method==="DELETE"){selected=null;notify(msg("delete.done"));}await refresh();}catch(err){notify(errorMessage(err));}finally{busy=false;}}
 $("#pin").onclick=()=>mutation("/pin","POST");$("#delete").onclick=()=>{if(confirm(msg("delete.confirm")))mutation("","DELETE");};
 $("#export").onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(clips,null,2)],{type:"application/json"}));const a=node("a");a.href=url;a.download="yank-page.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);notify(msg("export.done",{count:clips.length}));};
+$("#export-all").onclick=async()=>{
+  const button=$("#export-all"),owner=currentUser?.id;if(!owner)return;
+  button.disabled=true;
+  try{
+    const backup=await api("/api/export");if(owner!==currentUser?.id)return;
+    const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:"application/json"}));
+    const anchor=node("a");anchor.href=url;anchor.download="yank-backup.json";anchor.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);notify(msg("export.allDone"));
+  }catch(error){notify(errorMessage(error));}finally{button.disabled=false;}
+};
+$("#select-all").onclick=()=>{clips.forEach(clip=>checkedClips.add(clip.id));render();};
+$("#clear-selection").onclick=()=>{checkedClips.clear();render();};
+$("#delete-selected").onclick=async()=>{
+  if(busy||!checkedClips.size||!confirm(t("bulk.confirm",{count:checkedClips.size})))return;
+  const owner=currentUser?.id;if(!owner)return;busy=true;let removed=0;
+  try{
+    for(const id of [...checkedClips]){
+      if(currentUser?.id!==owner)break;
+      await api(`/api/clips/${encodeURIComponent(id)}`,{method:"DELETE"});
+      checkedClips.delete(id);removed++;
+    }
+    if(currentUser?.id===owner)notify(msg("bulk.done",{count:removed}));
+  }catch(error){notify(msg("bulk.partial",{count:removed}));}
+  finally{busy=false;if(currentUser?.id===owner)await refresh();}
+};
 document.addEventListener("keydown",e=>{if($("#settings").open||$("#password-dialog").open)return;if(e.key==="Escape"){closeDetail();return;}if(e.target.closest("input,textarea,select"))return;const interactive=e.target.closest("button,a,[role=button]");if(interactive&&!interactive.classList.contains("clip-row"))return;if(e.key==="/"){e.preventDefault();$("#search").focus();}if(e.key==="Enter"&&selected&&interactive?.classList.contains("clip-row")){e.preventDefault();select(interactive.dataset.id);copy();}if(["ArrowDown","ArrowUp"].includes(e.key)&&clips.length){e.preventDefault();let i=clips.findIndex(c=>c.id===selected?.id);i=Math.max(0,Math.min(clips.length-1,i+(e.key==="ArrowDown"?1:-1)));select(clips[i].id);document.querySelector(`.clip-row[data-id="${CSS.escape(clips[i].id)}"]`)?.focus();}});
 $("#accounts-nav").onclick=()=>{view="accounts";$("#library-view").hidden=true;$("#devices-view").hidden=true;$("#accounts-view").hidden=false;setText($("#breadcrumb"),msg("nav.accounts"));setText($("#page-title"),msg("accounts.title"));refresh();};
 async function loadAccounts(signal,gen=generation){const owner=currentUser?.id;const users=await api("/api/accounts",{signal});if(gen!==generation||!owner||currentUser?.id!==owner)return;$("#accounts").replaceChildren();for(const user of users){const card=node("article","device-card");card.append(node("span","tag",user.admin?msg("accounts.admin"):msg("accounts.user")),node("h3","",user.username));if(user.id!==currentUser?.id){const button=node("button","button danger",msg("accounts.delete"));button.onclick=async()=>{if(!confirm(msg("accounts.deleteConfirm",{username:user.username})))return;try{await api(`/api/accounts/${encodeURIComponent(user.id)}`,{method:"DELETE"});await loadAccounts();}catch(e){notify(errorMessage(e));}};const reset=node("button","button secondary",msg("accounts.reset"));reset.onclick=()=>openPassword(user);card.append(reset,button);}$("#accounts").append(card);}}
@@ -116,5 +184,6 @@ for (const id of ["#replacement-password", "#new-password"]) {
 // Locale changes only update text and attributes. No refresh, dialog reset or DOM replacement.
 YankI18n.subscribe(() => {
   applyTheme();
+  document.querySelectorAll("[data-record-title]").forEach(checkbox=>checkbox.setAttribute("aria-label",t("bulk.record",{title:checkbox.dataset.recordTitle})));
   for (const id of ["#replacement-password", "#new-password"]) $(id).oninput();
 });

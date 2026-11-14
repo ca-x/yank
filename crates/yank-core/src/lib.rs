@@ -902,16 +902,20 @@ impl Store {
         Ok(())
     }
     pub fn export(&self) -> Result<String> {
+        let snapshot = self.conn.unchecked_transaction()?;
         let mut stmt = self
             .conn
             .prepare("SELECT body FROM clips WHERE deleted=0 ORDER BY id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let clips: Result<Vec<Clip>> = rows.map(|r| self.load(&r?)).collect();
-        Ok(serde_json::to_string_pretty(&Backup {
+        let backup = serde_json::to_string_pretty(&Backup {
             version: 1,
             clips: clips?,
             views: self.views()?,
-        })?)
+        })?;
+        drop(stmt);
+        snapshot.commit()?;
+        Ok(backup)
     }
     pub fn import(&self, json: &str, device: &str) -> Result<usize> {
         #[derive(Deserialize)]

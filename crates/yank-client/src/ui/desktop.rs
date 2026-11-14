@@ -243,7 +243,7 @@ pub(super) fn title_bar(ui: Ui) -> impl IntoElement {
                         .justify_center()
                         .rounded(px(8.0))
                         .hover(|style| style.bg(theme().accent))
-                        .active(|style| style.opacity(0.6))
+                        .active(|style| style.bg(theme().muted))
                         .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
                         .child(
                             view()
@@ -279,6 +279,27 @@ pub(super) fn title_bar(ui: Ui) -> impl IntoElement {
         },
     )
 }
+
+pub(super) fn brand(ui: Ui) -> impl IntoElement {
+    let lights = ui.clone();
+    let system = ui.clone();
+    view()
+        .gap_2()
+        .window_drag(true)
+        .child(when(
+            move || lights.prefs.get().window_style == WindowStyle::TrafficLights,
+            move || title_bar(ui.clone()),
+        ))
+        .child(when(
+            move || system.prefs.get().window_style != WindowStyle::TrafficLights,
+            || {
+                super::text("yank")
+                    .text_2xl()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(move || theme().primary)
+            },
+        ))
+}
 fn bind(key: &str, run: impl Fn() + 'static, ui: Ui) {
     if key.trim().is_empty() {
         return;
@@ -287,9 +308,9 @@ fn bind(key: &str, run: impl Fn() + 'static, ui: Ui) {
     let name = key.to_owned();
     spawn(async move {
         if !answer.await {
-            ui.notice.set(crate::l10n::message(
+            ui.alert.set(crate::l10n::message(
                 "全局快捷键 {name} 未获系统授权或已被占用，请在设置中更改。",
-                &[("name", (name).to_string())],
+                &[("name", super::platform_shortcut(&name))],
             ));
         }
     });
@@ -403,6 +424,7 @@ fn paste_target(clips: &[Clip], selected: &str, index: Option<usize>) -> Option<
 pub(super) fn next(ui: Ui) {
     let clip = ui.queue.with(|q| q.first().cloned());
     if let Some(clip) = clip {
+        ui.queue_undo.set(Some(clip.clone()));
         ui.queue.update(|q| {
             q.remove(0);
         });

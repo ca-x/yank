@@ -10,6 +10,8 @@
 - 中英文界面、Kubai 图标；最近历史可选当天、近 1–5 天、本周或本月，按需加载更早内容，复制/粘贴成功后提前。
 - 默认关闭的自动清理：总条数或按类型限额，可结合天数；收藏不删。清理产生同步删除，规则只属于本机。
 - 顺序复制与桌面粘贴队列、自动收集、最多八张置顶悬浮卡片。
+- 紧凑历史卡片、悬停操作、右键菜单与多选删除；详情先阅读，再按需编辑，草稿显式保存或放弃。
+- 设置支持分组搜索、组合键录入和合并草稿保存；队列支持调整顺序、移除及撤销取出。
 - 设备码或局域网发现配对，首次需要对端确认；可选择仅互通，或自行登录关联账号。
 - 默认中继、仅直连、自动 NAT/中继回退；设备间走加密 QUIC + Protobuf。
 - 默认关闭服务端上传；支持脱离服务器离线使用、隐私标记过滤、应用/内容排除、历史保留、每日备份和导入恢复。
@@ -28,11 +30,13 @@ Android 采用前台手动捕获和复制，不承诺后台读取其他应用剪
 
 以下为 Linux 原生客户端和服务端管理页的真实运行截图，使用隔离的演示数据库；中英文界面不会翻译用户自己的剪贴板内容。
 
-![原生客户端：最近历史与可选红绿灯窗口按钮](docs/screenshots/native-history-light.png)
+![原生客户端：紧凑历史、类型筛选与只读详情](docs/screenshots/native-history-light.png)
 ![原生客户端：多语言与自动清理设置](docs/screenshots/native-cleanup-light.png)
 ![服务端管理页：剪贴板历史与内容详情](docs/screenshots/server-history-light.png)
 
 深色与窄屏示例：[原生客户端](docs/screenshots/native-history-dark.png) · [管理页](docs/screenshots/server-history-dark.png) · [手机宽度](docs/screenshots/server-mobile-dark.png)。
+
+管理页支持批量选择/删除，导出当前加载页或全部账号记录。全量导出使用一致读快照，包含有效记录、完整格式内容与智能列表；不是包含删除日志的数据库镜像。验收范围及未实现的小项见 [0.4.0 验收记录](docs/reviews/v0.4.0-local-verification.md)。
 
 ## 自托管
 
@@ -54,7 +58,7 @@ docker run --rm \
   -e YANK_PUBLIC_URL=https://yank.example.com \
   -e YANK_RELAY_URL=https://relay.example.com \
   -e YANK_COOKIE_SECURE=true \
-  -v yank-data:/data ghcr.io/ca-x/yank:0.3.0
+  -v yank-data:/data ghcr.io/ca-x/yank:0.4.0
 ```
 
 公网部署为 API 和中继配置反向代理/TLS，`YANK_RELAY_URL` 必须是客户端可达的地址。API 默认 7219/tcp，中继默认 7220/tcp。自动 NAT 地址发现可配置 `YANK_TLS_CERT`、`YANK_TLS_KEY`、`YANK_QUIC_BIND`（默认 7842/udp），并按需发布该 UDP 端口。`YANK_STORAGE_DISABLED=true` 只禁用持久化 API，不影响账号发现与中继。

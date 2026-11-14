@@ -4,7 +4,7 @@ use nsh_testing::Headless;
 fn offline_client_exposes_history_and_settings_without_login() -> Result<(), String> {
     let mut app = Headless::start(EngineConfig::new(Root::of::<yank_client::App>()))
         .map_err(|e| e.to_string())?;
-    app.wait_for("我的剪贴板")?;
+    app.wait_for("全部记录")?;
     app.wait_for("复制过的内容，会留在这里")?;
     app.press("设置")?;
     app.wait_for("账号登录（可选）")?;
@@ -17,7 +17,7 @@ fn offline_client_exposes_history_and_settings_without_login() -> Result<(), Str
 fn mobile_navigation_keeps_pairing_independent_of_accounts() -> Result<(), String> {
     let mut app = Headless::start(EngineConfig::new(Root::of::<yank_client::App>()))
         .map_err(|e| e.to_string())?;
-    app.wait_for("我的剪贴板")?;
+    app.wait_for("全部记录")?;
     app.wait_for("前台手动记录 · 无需账号")?;
     assert!(!app.shows("暂停记录"));
     assert!(!app.shows("继续记录"));
@@ -85,7 +85,7 @@ impl Fixture {
         config.viewport = size(px(width), px(900.0));
         config.environment.os = if desktop { Os::Linux } else { Os::Ios };
         let mut app = Headless::start(config).map_err(|e| e.to_string())?;
-        app.wait_for("我的剪贴板")?;
+        app.wait_for("全部记录")?;
         wait_screen(&mut app, "seeded history", |screen| {
             screen.matches("Alpha clip").unwrap_or(false)
         })?;
@@ -104,7 +104,126 @@ fn clips() -> Vec<Clip> {
     beta.description = "Beta clip".into();
     vec![alpha, beta]
 }
+
+#[test]
+fn detail_opens_read_only_and_discard_restores_saved_content() -> Result<(), String> {
+    let mut fixture = Fixture::start(1120.0, true, clips())?;
+    let app = &mut fixture.app;
+    app.press("Alpha clip")?;
+    app.wait_for("粘贴到原应用")?;
+    assert!(!app.shows("编辑文字"));
+    assert!(!app.shows("复制草稿文字"));
+    app.press("编辑")?;
+    wait_input(app, "编辑文字", "alpha saved")?;
+    replace_input(app, "编辑文字", "unsaved draft")?;
+    app.wait_for("保存编辑")?;
+    app.wait_for("复制草稿文字")?;
+    app.press("放弃修改")?;
+    wait_screen(app, "reading mode after discard", |screen| {
+        !screen.matches("编辑文字").unwrap_or(false)
+    })?;
+    app.press("编辑")?;
+    wait_input(app, "编辑文字", "alpha saved")?;
+    assert_eq!(
+        fixture.store.list("alpha", "all", 10, 0).unwrap()[0].text,
+        "alpha saved"
+    );
+    Ok(())
+}
+
+#[test]
+fn queue_removal_and_copy_undo_keep_the_item_addressable() -> Result<(), String> {
+    let mut fixture = Fixture::start(390.0, false, clips())?;
+    let app = &mut fixture.app;
+    app.press("Alpha clip")?;
+    app.wait_for("加入顺序复制")?;
+    app.press("加入顺序复制")?;
+    app.press("队列")?;
+    app.wait_for("队列中还有 1 条")?;
+    app.press("复制下一条")?;
+    app.wait_for("队列中还有 0 条")?;
+    app.press("撤销取出")?;
+    app.wait_for("队列中还有 1 条")?;
+    app.press("从队列移除")?;
+    app.wait_for("队列中还有 0 条")?;
+    assert_eq!(fixture.store.list("alpha", "all", 10, 0).unwrap().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn settings_inputs_and_switches_fit_the_viewport() -> Result<(), String> {
+    let mut fixture = Fixture::start(1180.0, true, clips())?;
+    let app = &mut fixture.app;
+    app.press("设置与账号")?;
+    app.wait_for("启用自动清理")?;
+    for width in [1180.0, 390.0] {
+        app.set_viewport(size(px(width), px(900.0)))?;
+        let switch = app
+            .screen()
+            .press_target("启用自动清理")?
+            .ok_or("missing cleanup switch")?;
+        let nodes = app.screen().layout_nodes();
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.kind == nsh_core::ViewKind::Input)
+        );
+        for node in nodes.iter().filter(|node| {
+            !node.hidden && (node.id == switch || node.kind == nsh_core::ViewKind::Input)
+        }) {
+            assert!(node.bounds.origin.x.0 >= 0.0, "settings control left edge");
+            assert!(
+                node.bounds.origin.x.0 + node.bounds.size.width.0 <= width + 0.1,
+                "settings control {:?} overflows {width}: {:?}",
+                node.id,
+                node.bounds
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn pseudo_language_keeps_settings_controls_in_bounds_and_user_titles_unchanged()
+-> Result<(), String> {
+    let mut fixture = Fixture::start(1180.0, true, clips())?;
+    let app = &mut fixture.app;
+    app.press("设置与账号")?;
+    app.wait_for("伪语言（布局测试）")?;
+    app.press("伪语言（布局测试）")?;
+    let settings = yank_core::i18n::pseudo_source_text("设置与账号");
+    app.wait_for(&settings)?;
+    for width in [1180.0, 390.0] {
+        app.set_viewport(size(px(width), px(900.0)))?;
+        for node in app
+            .screen()
+            .layout_nodes()
+            .iter()
+            .filter(|node| !node.hidden && node.kind == nsh_core::ViewKind::Input)
+        {
+            assert!(node.bounds.origin.x.0 >= 0.0);
+            assert!(node.bounds.origin.x.0 + node.bounds.size.width.0 <= width + 0.1);
+        }
+    }
+    app.set_viewport(size(px(1180.0), px(900.0)))?;
+    app.press(&yank_core::i18n::pseudo_source_text("全部记录"))?;
+    app.wait_for("Alpha clip")?;
+    assert!(!app.shows("⟦Alpha clip⟧"));
+    Ok(())
+}
 fn wait_input(app: &mut Headless, label: &str, value: &str) -> Result<(), String> {
+    if matches!(label, "编辑文字" | "Edit text") && !app.shows(label) {
+        app.wait_for(if label == "Edit text" {
+            "Edit"
+        } else {
+            "编辑"
+        })?;
+        app.press(if label == "Edit text" {
+            "Edit"
+        } else {
+            "编辑"
+        })?;
+    }
     app.wait_until("hydrated editor value", Duration::from_secs(3), |screen| {
         screen.input_text(label).ok().flatten() == Some(value)
     })
@@ -267,14 +386,14 @@ fn quick_paste_keys_leave_settings_alone_and_escape_hides_history() -> Result<()
 fn headless_desktop_849_850_switches_navigation_and_detail_behavior() -> Result<(), String> {
     let mut fixture = Fixture::start(849.0, true, clips())?;
     let app = &mut fixture.app;
-    assert!(!app.shows("内容类型"));
+    assert!(!app.shows("yank"));
     app.press("Alpha clip")?;
     wait_input(app, "编辑文字", "alpha saved")?;
     assert!(!app.shows("Beta clip"), "849 uses a dedicated detail page");
     app.back()?;
     app.wait_for("Beta clip")?;
     app.set_viewport(size(px(850.0), px(900.0)))?;
-    app.wait_for("内容类型")?;
+    app.wait_for("yank")?;
     app.press("Beta clip")?;
     wait_input(app, "编辑文字", "beta saved")?;
     assert!(
@@ -282,7 +401,7 @@ fn headless_desktop_849_850_switches_navigation_and_detail_behavior() -> Result<
         "850 keeps history beside the editor"
     );
     app.set_viewport(size(px(849.0), px(900.0)))?;
-    assert!(!app.shows("内容类型"));
+    assert!(!app.shows("yank"));
     Ok(())
 }
 
@@ -295,7 +414,7 @@ fn headless_phone_keeps_each_draft_across_back_selection_and_copy() -> Result<()
     app.clear("编辑文字")?;
     app.type_text("编辑文字", "alpha draft")?;
     app.wait_for("未保存 · 切换记录或返回后草稿仍保留")?;
-    app.press("复制已保存内容")?;
+    app.press("复制")?;
     assert_eq!(app.screen().clipboard(), Some("alpha saved"));
     app.press("复制草稿文字")?;
     assert_eq!(app.screen().clipboard(), Some("alpha draft"));
@@ -319,7 +438,9 @@ fn headless_phone_keeps_each_draft_across_back_selection_and_copy() -> Result<()
     app.press("Alpha clip")?;
     wait_input(app, "编辑文字", "alpha draft")?;
     app.press("保存编辑")?;
-    app.wait_for("已保存")?;
+    wait_screen(app, "draft saved", |screen| {
+        screen.press_target("保存编辑").ok().flatten().is_none()
+    })?;
     app.back()?;
     app.press("Beta clip")?;
     wait_input(app, "收藏板名称", "Beta draft board")?;
@@ -419,7 +540,7 @@ fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
     app.press("设置")?;
     app.wait_for("账号登录（可选）")?;
     app.wait_for(label)?;
-    assert!(!app.screen().enabled("保存排除正则")?);
+    assert!(app.screen().press_target("保存设置修改")?.is_none());
     app.type_text(label, "[")?;
     wait_settings_snapshot(app)?;
     let backup_daily = fixture.store.preferences().unwrap().backup_daily;
@@ -437,14 +558,14 @@ fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
             .any(|s| s.contains("regex parse error")),
         "typing an unfinished expression must not submit it"
     );
-    app.press("保存排除正则")?;
+    app.press("保存设置修改")?;
     app.wait_until("invalid regex rejected", Duration::from_secs(3), |s| {
         s.texts().iter().any(|s| s.contains("regex parse error"))
     })?;
     assert_eq!(fixture.store.preferences().unwrap().exclude_pattern, "");
     assert_eq!(app.screen().input_text(label)?, Some("["));
     assert!(
-        app.screen().enabled("保存排除正则")?,
+        app.screen().enabled("保存设置修改")?,
         "a rejected draft must remain available to retry"
     );
     app.back()?;
@@ -454,16 +575,15 @@ fn headless_settings_regex_draft_survives_slow_typing_rejection_and_navigation()
     app.type_text(label, "ab]")?;
     wait_settings_snapshot(app)?;
     assert_eq!(fixture.store.preferences().unwrap().exclude_pattern, "");
-    app.press("保存排除正则")?;
+    app.press("保存设置修改")?;
     wait_store(app, "complete regex saved", || {
         fixture.store.preferences().unwrap().exclude_pattern == "[ab]"
     })?;
     wait_settings_snapshot(app)?;
     assert_eq!(app.screen().input_text(label)?, Some("[ab]"));
-    assert!(
-        !app.screen().enabled("保存排除正则")?,
-        "a saved draft must disable its save button"
-    );
+    wait_screen(app, "saved settings bar disappears", |screen| {
+        screen.press_target("保存设置修改").ok().flatten().is_none()
+    })?;
     Ok(())
 }
 
@@ -475,15 +595,14 @@ fn headless_settings_text_drafts_do_not_leak_into_toggle_saves() -> Result<(), S
     app.wait_for("账号登录（可选）")?;
     app.wait_for("显示面板快捷键")?;
     let original = fixture.store.preferences().unwrap();
-    app.clear("显示面板快捷键")?;
-    for part in ["m", "od+", "shift+k"] {
-        app.type_text("显示面板快捷键", part)?;
-        wait_settings_snapshot(app)?;
-        assert_eq!(
-            fixture.store.preferences().unwrap().hotkey_show,
-            original.hotkey_show
-        );
-    }
+    app.press("Ctrl+Shift+V")?;
+    app.wait_for("请按组合键，Esc 取消")?;
+    app.press_key("mod+shift+k")?;
+    wait_settings_snapshot(app)?;
+    assert_eq!(
+        fixture.store.preferences().unwrap().hotkey_show,
+        original.hotkey_show
+    );
     let fields = [
         (
             "中继地址（留空使用服务器提供的地址）",
@@ -546,17 +665,13 @@ fn headless_settings_text_drafts_do_not_leak_into_toggle_saves() -> Result<(), S
         fixture.store.preferences().unwrap().hotkey_show,
         original.hotkey_show
     );
-    assert_eq!(
-        app.screen().input_text("显示面板快捷键")?,
-        Some("mod+shift+k")
-    );
-    for (_, save, value, get) in fields {
-        app.press(save)?;
-        wait_store(app, "complete text preference saved", || {
+    assert!(app.shows("Ctrl+Shift+K"));
+    app.press("保存设置修改")?;
+    for (_, _, value, get) in fields {
+        wait_store(app, "grouped text preference saved", || {
             get(&fixture.store.preferences().unwrap()) == value
         })?;
     }
-    app.press("保存显示面板快捷键")?;
     wait_store(app, "complete shortcut saved", || {
         fixture.store.preferences().unwrap().hotkey_show == "mod+shift+k"
     })?;
@@ -618,12 +733,7 @@ fn headless_markdown_blocks_remote_images_and_renders_html_as_text() -> Result<(
     let mut fixture = Fixture::start(390.0, false, records)?;
     let app = &mut fixture.app;
     app.press("Alpha clip")?;
-    app.wait_until("hydrated preview", Duration::from_secs(3), |s| {
-        s.input_text("编辑文字")
-            .ok()
-            .flatten()
-            .is_some_and(|s| s.contains("tracking"))
-    })?;
+    app.wait_for("Markdown / 代码预览")?;
     app.press("Markdown / 代码预览")?;
     app.wait_for("图片已阻止加载 · 预览不会请求远端图片")?;
     assert!(app.shows("<img src=\"https://example.invalid/html.png\">"));
@@ -922,7 +1032,7 @@ fn headless_language_switch_rebinds_controls_and_preserves_user_content() -> Res
     app.press("English")?;
     app.wait_for("Settings and account")?;
     app.wait_for("Enable automatic cleanup")?;
-    app.wait_for("Save device name")?;
+    app.wait_for("Device name")?;
     wait_input(app, "Keep latest unpinned records (total)", "4321")?;
     wait_store(app, "language persisted", || {
         fixture.store.preferences().unwrap().language == "en"
@@ -930,6 +1040,7 @@ fn headless_language_switch_rebinds_controls_and_preserves_user_content() -> Res
     app.press("All history")?;
     app.wait_for("Alpha clip")?;
     app.press("Alpha clip")?;
+    app.wait_for("Copy")?;
     wait_input(app, "Edit text", "图片")?;
     wait_input(app, "Board name", "文字")?;
     assert!(app.shows("设置"), "renamed seeded list must stay unchanged");
