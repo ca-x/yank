@@ -36,7 +36,7 @@ Android 采用前台手动捕获和复制，不承诺后台读取其他应用剪
 
 深色与窄屏示例：[原生客户端](docs/screenshots/native-history-dark.png) · [管理页](docs/screenshots/server-history-dark.png) · [手机宽度](docs/screenshots/server-mobile-dark.png)。
 
-管理页支持批量选择/删除，导出当前加载页或全部账号记录。全量导出使用一致读快照，包含有效记录、完整格式内容与智能列表；不是包含删除日志的数据库镜像。验收范围及未实现的小项见 [0.4.0 验收记录](docs/reviews/v0.4.0-local-verification.md)。
+管理页支持批量选择/删除，导出当前加载页或全部账号记录。全量导出使用一致读快照，包含有效记录、完整格式内容与智能列表；不是包含删除日志的数据库镜像。验收范围及未实现的小项见 [0.3.1 验收记录](docs/reviews/v0.3.1-local-verification.md)。
 
 ## 自托管
 
@@ -58,7 +58,7 @@ docker run --rm \
   -e YANK_PUBLIC_URL=https://yank.example.com \
   -e YANK_RELAY_URL=https://relay.example.com \
   -e YANK_COOKIE_SECURE=true \
-  -v yank-data:/data ghcr.io/ca-x/yank:0.4.0
+  -v yank-data:/data ghcr.io/ca-x/yank:0.3.1
 ```
 
 公网部署为 API 和中继配置反向代理/TLS，`YANK_RELAY_URL` 必须是客户端可达的地址。API 默认 7219/tcp，中继默认 7220/tcp。自动 NAT 地址发现可配置 `YANK_TLS_CERT`、`YANK_TLS_KEY`、`YANK_QUIC_BIND`（默认 7842/udp），并按需发布该 UDP 端口。`YANK_STORAGE_DISABLED=true` 只禁用持久化 API，不影响账号发现与中继。
