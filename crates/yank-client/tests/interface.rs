@@ -866,7 +866,9 @@ fn headless_failed_recovery_preserves_backup_and_offers_retry() -> Result<(), St
     })?;
     app.press("设置")?;
     app.wait_for("账号登录（可选）")?;
-    app.wait_for("重试恢复自动备份")?;
+    wait_screen(&mut app, "retry enabled after failed recovery", |screen| {
+        screen.enabled("重试恢复自动备份").unwrap_or(false)
+    })?;
     assert_eq!(
         std::fs::read_to_string(&backup).map_err(|e| e.to_string())?,
         "invalid backup"
