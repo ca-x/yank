@@ -201,6 +201,7 @@ test("dynamic strings use known keys and have no untranslated prose", () => {
   // Audit every quoted literal, including single-word labels. The explicit
   // exceptions are protocol names, CSS selectors/classes, tags, keys and glyphs.
   const structural = new Set([
+    "nearest", "label", "clip-origin", "clip-source", "row-check", "empty-library", "account-actions", "pointerdown",
     "closing", ".clip-time[data-timestamp]",
     "[data-theme-choice]", "[data-record-title]", "day-heading", "selectable-row", "input", "checkbox", "type", "yank-backup.json", "pinned",
     "", " ", " selected", " · ", "—", "↗", "▤", "▧", "T", "use strict",
@@ -346,4 +347,45 @@ test("code and color details translate their kind without changing clipboard tex
       assert.equal(run("selected.text"),content);
     }
   }
+});
+
+test("selection reflects none, some and all loaded records and follows the active view", () => {
+  const {run, document}=setup();run(app);
+  run(`token="session";currentUser={id:"owner",admin:true};
+    clips=["a","b"].map(id=>({id,kind:"text",description:id,text:id,updated_at:0,formats:[]}));
+    render();refresh=async()=>{};`);
+  const master=document.querySelector("#select-all"), first=document.querySelector(".selectable-row input");
+  first.checked=true;first.onchange();
+  assert.equal(master.indeterminate,true);
+  master.onchange({target:{checked:true}});
+  assert.equal(master.checked,true);assert.equal(master.indeterminate,false);
+  document.querySelector("#clear-selection").onclick();
+  assert.equal(master.checked,false);assert.equal(document.activeElement,master);
+  document.querySelector("#accounts-nav").onclick();
+  assert.equal(document.querySelector("#accounts-view").hidden,false);
+  assert.equal(document.querySelector("#accounts-nav").getAttribute("aria-current"),"page");
+  assert.equal(document.querySelector('[data-view="all"]').getAttribute("aria-current"),null);
+  document.querySelector("#mobile-view").onchange({target:{value:"code"}});
+  assert.equal(document.querySelector('[data-view="code"]').getAttribute("aria-current"),"page");
+  assert.equal(document.querySelector("#accounts-nav").getAttribute("aria-current"),null);
+  assert.equal(document.querySelector("#page-title").textContent,"Code");
+});
+
+test("a late library response cannot replace a newer filter or its selection", async () => {
+  let finishOld;
+  const clip=id=>({id,kind:"text",description:id,text:id,updated_at:0,formats:[]});
+  const {run,document}=setup({fetch:async path=>{
+    if(path.includes("/api/clips?q=old"))return new Promise(resolve=>{finishOld=resolve;});
+    if(path.startsWith("/api/clips?"))return {ok:true,json:async()=>[clip("new")]};
+    if(path==="/api/stats")return {ok:true,json:async()=>({clips:2,pinned:0})};
+    return {ok:false,status:401};
+  }});
+  run(app);run('currentUser={id:"owner"};token="session";');
+  const search=document.querySelector("#search");
+  search.value="old";const pending=run("refresh(false,false)");
+  search.value="new";await run("refresh(false,false)");
+  finishOld({ok:true,json:async()=>[clip("old")]});await pending;
+  assert.equal(document.querySelector(".clip-row").dataset.id,"new");
+  assert.equal(document.querySelector("#result-count").textContent,"1 record");
+  assert.equal(document.querySelector("#library-layout").inert,false);
 });

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# The flags below are from NSH 0.5.0 f4d68f7 package --help.
 # This lane deliberately produces a debug-signed, directly installable APK only.
 set -euo pipefail
 nsh_cli=${1:?Usage: bash scripts/package-android.sh /absolute/path/to/nsh}

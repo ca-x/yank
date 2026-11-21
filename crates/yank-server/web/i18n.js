@@ -2,6 +2,13 @@
 (() => {
 const dictionaries = {
   "zh": {
+    "records.loading": "正在加载记录…",
+    "records.single": "1 条记录",
+    "search.clear": "清除搜索",
+    "settings.switch": "切换账号",
+    "search.filtered.title": "此分类暂无记录",
+    "search.filtered.description": "查看全部记录，或选择其他内容类型。",
+    "search.resetView": "查看全部记录",
     "page.title": "Yank · 剪贴板空间",
     "brand.tagline": "连接你的剪贴板",
     "workspace.name": "我的剪贴板空间",
@@ -154,6 +161,13 @@ const dictionaries = {
     "bulk.record": "选择记录：{title}"
   },
   "en": {
+    "records.loading": "Loading records…",
+    "records.single": "1 record",
+    "search.clear": "Clear search",
+    "settings.switch": "Switch account",
+    "search.filtered.title": "No records in this view",
+    "search.filtered.description": "View all records or choose another content type.",
+    "search.resetView": "View all records",
     "page.title": "Yank · Clipboard workspace",
     "brand.tagline": "YOUR CLIPBOARD, CONNECTED",
     "workspace.name": "My clipboard workspace",
@@ -306,6 +320,11 @@ const dictionaries = {
     "bulk.record": "Select record: {title}"
   }
 };
+// Reuse formatters while rendering or relocalizing long histories.
+const relativeFormat = {
+  zh: new Intl.RelativeTimeFormat("zh-CN", {numeric:"auto"}),
+  en: new Intl.RelativeTimeFormat("en-US", {numeric:"auto"})
+};
 const supported = value => value === "zh" || value === "en";
 const browserLanguage = languages => {
   for (const value of languages || []) {
@@ -329,7 +348,7 @@ function t(key, params = {}) {
   if (key === "relativeDate") {
     const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - params.timestamp);
     const [unit, divisor] = elapsed < 60 ? ["second",1] : elapsed < 3600 ? ["minute",60] : elapsed < 86400 ? ["hour",3600] : ["day",86400];
-    params = {value: new Intl.RelativeTimeFormat(language === "zh" ? "zh-CN" : "en-US", {numeric:"auto"}).format(-Math.floor(elapsed / divisor), unit)};
+    params = {value: relativeFormat[language].format(-Math.floor(elapsed / divisor), unit)};
   }
   if (key === "dayGroup") {
     const date = new Date(params.timestamp * 1000), today = new Date(), yesterday = new Date();

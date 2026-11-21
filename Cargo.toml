@@ -9,17 +9,15 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
-arboard = "3.6.1"
 axum = "0.8.7"
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4.5.51", features = ["derive", "env"] }
-directories = "6.0.0"
 hex = "0.4.3"
 regex = "1.12.2"
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -34,11 +32,11 @@ tower-http = { version = "0.6.8", features = ["trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
-nsh-core = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-base = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-platform-linux = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-updater = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1" }
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350", default-features = false }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350", default-features = false }
+nsh-platform-linux = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350", default-features = false }
+nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350", default-features = false }
+nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350", default-features = false }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350", default-features = false }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350", default-features = false }
+nsh-updater = { git = "https://github.com/longbridge/nsh", rev = "2f51d8611677c8a6bbad937b39756e8d0cc45350" }

@@ -24,8 +24,13 @@ fn mobile_navigation_keeps_pairing_independent_of_accounts() -> Result<(), Strin
     app.press("设备")?;
     app.wait_for("使用设备码配对")?;
     app.wait_for("已绑定设备")?;
+    assert!(!app.screen().enabled("请求配对")?);
+    app.type_text("输入对方的设备码", "abcd-1234-ef01")?;
+    assert!(app.screen().enabled("请求配对")?);
     app.press("队列")?;
     app.wait_for("复制下一条")?;
+    assert!(!app.screen().enabled("复制下一条")?);
+    assert!(!app.screen().enabled("清空队列")?);
     Ok(())
 }
 
@@ -53,9 +58,8 @@ impl Fixture {
         manual_clock: bool,
     ) -> Result<Self, String> {
         let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
-        let app_dir = directory.path().join("default");
-        std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
-        let store = Store::open(app_dir.join("yank-v2.sqlite3")).map_err(|e| e.to_string())?;
+        let store =
+            Store::open(directory.path().join("yank-v2.sqlite3")).map_err(|e| e.to_string())?;
         // Disable OS capture and account sync in seeded headless fixtures.
         store
             .save_preferences(&Preferences {
@@ -696,6 +700,23 @@ fn headless_phone_opens_existing_smart_lists_and_boards() -> Result<(), String> 
 }
 
 #[test]
+fn changing_search_clears_hidden_bulk_selection() -> Result<(), String> {
+    let mut fixture = Fixture::start(390.0, false, clips())?;
+    let app = &mut fixture.app;
+    app.press("选择已加载记录")?;
+    app.wait_for("已选 2 条")?;
+    app.type_text("搜索文字、标题或收藏板", "missing")?;
+    app.wait_for("没有匹配的记录")?;
+    assert!(!app.shows("删除所选"));
+    assert!(!app.shows("选择已加载记录"));
+    app.press("清除搜索")?;
+    app.wait_for("Alpha clip")?;
+    app.wait_for("Beta clip")?;
+    assert!(app.screen().enabled("选择已加载记录")?);
+    Ok(())
+}
+
+#[test]
 fn headless_binary_fallback_can_change_collection_without_changing_formats() -> Result<(), String> {
     let mut records = clips();
     records[0].formats.push(ClipFormat {
@@ -744,8 +765,9 @@ fn headless_markdown_blocks_remote_images_and_renders_html_as_text() -> Result<(
             .any(|node| node.kind == nsh_core::ViewKind::Image),
         "untrusted preview must create no image views"
     );
-    app.back()?;
+    app.press("返回详情")?;
     app.wait_for("内容详情")?;
+    app.wait_for("Alpha clip")?;
     Ok(())
 }
 
@@ -822,7 +844,7 @@ fn headless_pending_login_disables_duplicate_login_import_and_ditto() -> Result<
 
 fn recovery_fixture() -> Result<(tempfile::TempDir, std::path::PathBuf, EngineConfig), String> {
     let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let backups = directory.path().join("default/backups");
+    let backups = directory.path().join("backups");
     std::fs::create_dir_all(&backups).map_err(|e| e.to_string())?;
     let backup = backups.join("yank-20000.json");
     std::fs::write(&backup, "invalid backup").map_err(|e| e.to_string())?;

@@ -9,7 +9,7 @@
       "muted": "#f2f5f3", "muted-foreground": "#54675d", "text-tertiary": "#62776b",
       "accent": "#dceee4", "accent-foreground": "#176b54",
       "border": "#cdd8d0", "border-subtle": "#e3eae5", "input": "#cdd8d0",
-      "ring": "#176b5440", "success": "#176b54", "warning": "#93600d",
+      "ring": "#24775e", "success": "#176b54", "warning": "#93600d",
       "destructive": "#ae3434", "window-close": "#ed6a5e", "window-minimize": "#f4bf4f",
       "window-maximize": "#61c554", "window-symbol": "#27352b"
     },
@@ -21,7 +21,7 @@
       "muted": "#293a2f", "muted-foreground": "#b0c1b5", "text-tertiary": "#9cb3a4",
       "accent": "#304d3b", "accent-foreground": "#b1ebce",
       "border": "#3c5143", "border-subtle": "#2b3e31", "input": "#3c5143",
-      "ring": "#8dd9b840", "success": "#8dd9b8", "warning": "#edc878",
+      "ring": "#91dcbd", "success": "#8dd9b8", "warning": "#edc878",
       "destructive": "#ffaaaa", "window-close": "#ed6a5e", "window-minimize": "#f4bf4f",
       "window-maximize": "#61c554", "window-symbol": "#27352b"
     }

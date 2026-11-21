@@ -472,34 +472,40 @@ impl Store {
           CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,ack TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS conflicts(id TEXT PRIMARY KEY,clip_id TEXT NOT NULL,body TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS peers(id TEXT PRIMARY KEY,body TEXT NOT NULL);
-          CREATE INDEX IF NOT EXISTS clips_search ON clips(deleted,pinned DESC,updated DESC,id);
           CREATE INDEX IF NOT EXISTS clips_hash ON clips(hash);
           CREATE INDEX IF NOT EXISTS clips_cleanup ON clips(deleted,pinned,kind,updated DESC,id DESC);")?;
-        conn.execute(
-            "INSERT OR IGNORE INTO metadata VALUES('epoch',?1)",
-            [new_id()],
-        )?;
         history::init(&conn)?;
         let store = Self { conn };
+        if store.value("epoch")?.is_none() {
+            store.conn.execute(
+                "INSERT OR IGNORE INTO metadata VALUES('epoch',?1)",
+                [new_id()],
+            )?;
+        }
         if store.value("default_views_initialized")?.is_none() {
             let tx = write_transaction(&store.conn)?;
-            for (id, name, filter, icon) in [
-                ("images", "图片", "image", "image"),
-                ("links", "链接", "link", "link"),
-                ("code", "代码", "code", "code"),
-                ("files", "文件", "files", "file"),
-                ("colors", "颜色", "color", "palette"),
-            ] {
-                store.save_view(SavedView {
-                    id: format!("default-{id}"),
-                    name: name.into(),
-                    query: String::new(),
-                    filter: filter.into(),
-                    days: 0,
-                    icon: icon.into(),
-                })?;
+            if store.conn.execute(
+                "INSERT OR IGNORE INTO metadata VALUES('default_views_initialized','1')",
+                [],
+            )? == 1
+            {
+                for (id, name, filter, icon) in [
+                    ("images", "图片", "image", "image"),
+                    ("links", "链接", "link", "link"),
+                    ("code", "代码", "code", "code"),
+                    ("files", "文件", "files", "file"),
+                    ("colors", "颜色", "color", "palette"),
+                ] {
+                    store.save_view(SavedView {
+                        id: format!("default-{id}"),
+                        name: name.into(),
+                        query: String::new(),
+                        filter: filter.into(),
+                        days: 0,
+                        icon: icon.into(),
+                    })?;
+                }
             }
-            store.set_value("default_views_initialized", "1")?;
             tx.commit()?;
         }
         Ok(store)
@@ -527,7 +533,17 @@ impl Store {
         } else {
             now_ts() - i64::from(days) * 86400
         };
-        let mut stmt = self.conn.prepare("SELECT body FROM clips WHERE deleted=0 AND updated>=?5 AND instr(lower(search),lower(?1))>0 AND (?2='all' OR (?2='pinned' AND pinned=1) OR kind=?2 OR collection=?2) ORDER BY pinned DESC,updated DESC,id DESC LIMIT ?3 OFFSET ?4")?;
+        let search = history::search_clause(query);
+        let category = if filter == "all" {
+            ""
+        } else {
+            " AND ((?2='pinned' AND pinned=1) OR kind=?2 OR collection=?2)"
+        };
+        let sql = format!(
+            "SELECT body FROM clips WHERE deleted=0 AND updated>=?5{search}{category}
+             ORDER BY pinned DESC,updated DESC,id DESC LIMIT ?3 OFFSET ?4"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(
             params![query, filter, limit.min(500), offset, cutoff],
             |r| r.get::<_, String>(0),
@@ -565,13 +581,19 @@ impl Store {
     fn load(&self, raw: &str) -> Result<Clip> {
         self.expand(serde_json::from_str(raw)?)
     }
-    fn write(&self, clip: &Clip) -> Result<()> {
+    fn write(&self, clip: &Clip, content_hash: Option<String>) -> Result<()> {
         let body = self.pack(clip)?;
-        self.conn.execute("INSERT INTO clips(id,body,deleted,pinned,kind,collection,search,updated,hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET body=excluded.body,deleted=excluded.deleted,pinned=excluded.pinned,kind=excluded.kind,collection=excluded.collection,search=excluded.search,updated=excluded.updated,hash=excluded.hash", params![clip.id,body,clip.deleted,clip.pinned,clip.kind,clip.collection,format!("{} {} {}",clip.description,clip.text,clip.collection),clip.updated_at,clip.content_hash()])?;
         let rank = self.next_history_rank()?;
         self.conn.execute(
-            "UPDATE clips SET recency=?2,activity_at=MAX(activity_at,updated) WHERE id=?1",
-            params![clip.id, rank],
+            "INSERT INTO clips(id,body,deleted,pinned,kind,collection,search,updated,hash,recency,activity_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,MAX(0,?8))
+             ON CONFLICT(id) DO UPDATE SET body=excluded.body,deleted=excluded.deleted,
+                pinned=excluded.pinned,kind=excluded.kind,collection=excluded.collection,
+                search=excluded.search,updated=excluded.updated,hash=excluded.hash,
+                recency=excluded.recency,activity_at=MAX(clips.activity_at,excluded.updated)",
+            params![clip.id,body,clip.deleted,clip.pinned,clip.kind,clip.collection,
+                format!("{} {} {}",clip.description,clip.text,clip.collection),
+                clip.updated_at,content_hash.unwrap_or_else(|| clip.content_hash()),rank],
         )?;
         self.conn.execute(
             "INSERT INTO changes(clip_id,body) VALUES(?1,?2)",
@@ -581,11 +603,16 @@ impl Store {
     }
     pub fn save_local(&self, clip: Clip, device: &str) -> Result<Clip> {
         let tx = write_transaction(&self.conn)?;
-        let clip = self.save_local_record(clip, device)?;
+        let clip = self.save_local_record(clip, device, None)?;
         tx.commit()?;
         Ok(clip)
     }
-    fn save_local_record(&self, mut clip: Clip, device: &str) -> Result<Clip> {
+    fn save_local_record(
+        &self,
+        mut clip: Clip,
+        device: &str,
+        content_hash: Option<String>,
+    ) -> Result<Clip> {
         let previous = self.get(&clip.id)?;
         if let Some(previous) = &previous {
             let observed = previous.clock.get(device).copied().unwrap_or(0);
@@ -607,24 +634,32 @@ impl Store {
         clip.write_actor = device.into();
         clip.device_id = device.into();
         clip.updated_at = now_ts();
-        validate(&clip)?;
-        let clip = self.merge(&clip)?;
-        self.conn.execute("INSERT INTO outbox VALUES(?1,?2,?3) ON CONFLICT(clip_id) DO UPDATE SET operation=excluded.operation,body=excluded.body",params![clip.id,new_id(),self.pack(&clip)?])?;
+        let clip = self.merge_with_current(&clip, previous, content_hash)?;
+        self.conn.execute(
+            "INSERT INTO outbox(clip_id,operation,body)
+             SELECT id,?2,body FROM clips WHERE id=?1
+             ON CONFLICT(clip_id) DO UPDATE SET operation=excluded.operation,body=excluded.body",
+            params![clip.id, new_id()],
+        )?;
         Ok(clip)
     }
     pub fn capture(&self, clip: Clip, device: &str) -> Result<Clip> {
+        let hash = clip.content_hash();
+        let tx = write_transaction(&self.conn)?;
         let existing: Option<String> = self
             .conn
             .query_row(
                 "SELECT body FROM clips WHERE hash=?1 AND deleted=0 LIMIT 1",
-                [clip.content_hash()],
+                [&hash],
                 |r| r.get(0),
             )
             .optional()?;
-        if let Some(raw) = existing {
-            return self.load(&raw);
-        }
-        self.save_local(clip, device)
+        let captured = match existing {
+            Some(raw) => self.load(&raw)?,
+            None => self.save_local_record(clip, device, Some(hash))?,
+        };
+        tx.commit()?;
+        Ok(captured)
     }
     /// Authorize recalling a file list observed through this machine's OS clipboard.
     /// This local capability is never replicated or included in backups.
@@ -644,12 +679,21 @@ impl Store {
             .get(id)?
             .ok_or_else(|| Error::Invalid("Clip no longer exists".into()))?;
         apply(&mut clip);
-        let clip = self.save_local_record(clip, device)?;
+        let clip = self.save_local_record(clip, device, None)?;
         tx.commit()?;
         Ok(clip)
     }
     /// Merge a remote record. Concurrent content is retained for explicit recovery.
     fn merge(&self, remote: &Clip) -> Result<Clip> {
+        self.merge_with_current(remote, self.get(&remote.id)?, None)
+    }
+
+    fn merge_with_current(
+        &self,
+        remote: &Clip,
+        local: Option<Clip>,
+        remote_hash: Option<String>,
+    ) -> Result<Clip> {
         validate(remote)?;
         let observed = self
             .value("lamport")?
@@ -658,21 +702,21 @@ impl Store {
         if remote.write_order > observed {
             self.set_value("lamport", &remote.write_order.to_string())?;
         }
-        let Some(local) = self.get(&remote.id)? else {
-            self.write(remote)?;
+        let Some(local) = local else {
+            self.write(remote, remote_hash)?;
             return Ok(remote.clone());
         };
-        if local == *remote {
-            return Ok(local);
-        }
         let remote_newer = dominates(&remote.clock, &local.clock);
         let local_newer = dominates(&local.clock, &remote.clock);
         if local_newer && !remote_newer {
             return Ok(local);
         }
         if remote_newer && !local_newer {
-            self.write(remote)?;
+            self.write(remote, remote_hash)?;
             return Ok(remote.clone());
+        }
+        if local == *remote {
+            return Ok(local);
         }
         // Stable choice makes every replica converge; both payloads remain recoverable.
         let l = resolution_key(&local)?;
@@ -689,7 +733,7 @@ impl Store {
             params![key, loser.id, raw],
         )?;
         merge_clock(&mut winner.clock, &loser.clock);
-        self.write(&winner)?;
+        self.write(&winner, None)?;
         Ok(winner)
     }
     pub fn receive(&self, clips: &[Clip]) -> Result<()> {
@@ -701,8 +745,8 @@ impl Store {
         Ok(())
     }
     pub fn accept(&self, mutation: &Mutation) -> Result<Ack> {
-        let tx = write_transaction(&self.conn)?;
         let fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(mutation)?));
+        let tx = write_transaction(&self.conn)?;
         let previous: Option<(String, String)> = self
             .conn
             .query_row(
@@ -726,15 +770,9 @@ impl Store {
             clip: self.merge(&mutation.clip)?,
         };
         self.conn.execute(
-            "INSERT INTO operations VALUES(?1,?2,?3)",
-            params![
-                mutation.operation,
-                fingerprint,
-                serde_json::to_string(&Ack {
-                    operation: ack.operation.clone(),
-                    clip: serde_json::from_str(&self.pack(&ack.clip)?)?
-                })?
-            ],
+            "INSERT INTO operations(id,fingerprint,ack)
+             SELECT ?1,?2,json_object('operation',?1,'clip',json(body)) FROM clips WHERE id=?3",
+            params![mutation.operation, fingerprint, ack.clip.id],
         )?;
         tx.commit()?;
         Ok(ack)
@@ -848,29 +886,24 @@ impl Store {
         Ok(())
     }
     pub fn stats(&self) -> Result<Stats> {
-        Ok(Stats {
-            clips: self
-                .conn
-                .query_row("SELECT count(*) FROM clips WHERE deleted=0", [], |r| {
-                    r.get(0)
-                })?,
-            pinned: self.conn.query_row(
-                "SELECT count(*) FROM clips WHERE pinned=1 AND deleted=0",
-                [],
-                |r| r.get(0),
-            )?,
-            deleted: self.conn.query_row(
-                "SELECT count(*) FROM clips WHERE deleted=1",
-                [],
-                |r| r.get(0),
-            )?,
-            pending: self
-                .conn
-                .query_row("SELECT count(*) FROM outbox", [], |r| r.get(0))?,
-            conflicts: self
-                .conn
-                .query_row("SELECT count(*) FROM conflicts", [], |r| r.get(0))?,
-        })
+        let mut statement = self.conn.prepare_cached(
+            "SELECT (SELECT count(*) FROM clips),
+                    (SELECT count(*) FROM clips WHERE deleted=1),
+                    (SELECT count(*) FROM clips WHERE deleted=0 AND pinned=1),
+                    (SELECT count(*) FROM outbox),
+                    (SELECT count(*) FROM conflicts)",
+        )?;
+        Ok(statement.query_row([], |row| {
+            let total: u64 = row.get(0)?;
+            let deleted: u64 = row.get(1)?;
+            Ok(Stats {
+                clips: total - deleted,
+                pinned: row.get(2)?,
+                deleted,
+                pending: row.get(3)?,
+                conflicts: row.get(4)?,
+            })
+        })?)
     }
     pub fn conflicts(&self) -> Result<Vec<(String, Clip)>> {
         let mut stmt = self
@@ -882,6 +915,18 @@ impl Store {
             Ok((id, self.load(&body)?))
         })
         .collect()
+    }
+    /// Return the newest conflict IDs and descriptions for the recovery list.
+    ///
+    /// # Errors
+    /// Returns an error if the stored metadata cannot be read.
+    pub fn conflict_summaries(&self) -> Result<Vec<(String, String)>> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT id,json_extract(body,'$.description') FROM conflicts ORDER BY rowid DESC LIMIT 100",
+        )?;
+        Ok(statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
     }
     pub fn restore_conflict(&self, conflict: &str, device: &str) -> Result<()> {
         let tx = write_transaction(&self.conn)?;
@@ -895,7 +940,7 @@ impl Store {
             merge_clock(&mut clip.clock, &current.clock);
         }
         clip.deleted = false;
-        self.save_local_record(clip, device)?;
+        self.save_local_record(clip, device, None)?;
         self.conn
             .execute("DELETE FROM conflicts WHERE id=?1", [conflict])?;
         tx.commit()?;
@@ -944,7 +989,7 @@ impl Store {
         for mut clip in clips {
             clip.id = new_id();
             clip.clock.clear();
-            self.save_local_record(clip, device)?;
+            self.save_local_record(clip, device, None)?;
         }
         for view in views {
             self.save_view(view)?;
@@ -1018,7 +1063,10 @@ impl Store {
         self.set_value("saved_views", &serde_json::to_string(&views)?)
     }
     pub fn collections(&self) -> Result<Vec<String>> {
-        let mut stmt=self.conn.prepare("SELECT DISTINCT collection FROM clips WHERE deleted=0 AND collection!='' ORDER BY collection")?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT collection FROM clips INDEXED BY clips_history_board
+             WHERE deleted=0 AND collection!='' ORDER BY collection",
+        )?;
         Ok(stmt
             .query_map([], |r| r.get(0))?
             .collect::<std::result::Result<_, _>>()?)
@@ -1097,7 +1145,7 @@ impl Store {
                 .get(id)?
                 .ok_or_else(|| Error::Invalid("Cleanup candidate disappeared".into()))?;
             clip.deleted = true;
-            self.save_local_record(clip, device)?;
+            self.save_local_record(clip, device, None)?;
         }
         tx.commit()?;
         Ok(ids.len())

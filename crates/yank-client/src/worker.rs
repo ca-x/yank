@@ -27,7 +27,7 @@ pub struct Snapshot {
     pub stats: Stats,
     pub prefs: Preferences,
     pub peers: Vec<Peer>,
-    pub conflicts: Vec<(String, Clip)>,
+    pub conflicts: Vec<(String, String)>,
     pub query: String,
     pub filter: String,
     pub error: String,
@@ -709,12 +709,12 @@ fn run(
         }
         if dirty || last_snapshot.elapsed() > Duration::from_millis(700) {
             let snapshot = (|| -> yank_core::Result<Snapshot> {
-                let saved = store
-                    .views()?
-                    .into_iter()
-                    .find(|view| format!("smart:{}", view.id) == filter);
+                let views = store.views()?;
+                let saved = filter
+                    .strip_prefix("smart:")
+                    .and_then(|id| views.iter().find(|view| view.id == id));
                 let prefs = store.preferences()?;
-                let (search, kind, cutoff) = if let Some(view) = &saved {
+                let (search, kind, cutoff) = if let Some(view) = saved {
                     (
                         view.query.as_str(),
                         view.filter.as_str(),
@@ -762,17 +762,21 @@ fn run(
                     servers,
                     clips,
                     stats: store.stats()?,
-                    prefs: store.preferences()?,
+                    prefs,
                     peers: store.peers()?,
-                    conflicts: store.conflicts()?,
+                    conflicts: store.conflict_summaries()?,
                     query: query.clone(),
                     filter: filter.clone(),
                     error: error.clone(),
                     has_more,
                     has_earlier,
-                    views: store.views()?,
+                    views,
                     boards: store.collections()?,
-                    selected: store.get(&selected)?,
+                    selected: if selected.is_empty() {
+                        None
+                    } else {
+                        store.get(&selected)?
+                    },
                 })
             })();
             if let Ok(snapshot) = snapshot

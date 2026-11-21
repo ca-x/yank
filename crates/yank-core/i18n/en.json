@@ -436,6 +436,12 @@
     "client.device.nearby": "● Discoverable nearby",
     "client.device.absent": "○ Not discovered nearby",
     "client.record.missing": "Record no longer exists",
+    "client.history.clear_search": "Clear search",
+    "client.preview.back_to_details": "Back to details",
+    "client.device.code_format": "Enter the 12-digit hexadecimal code. Spaces and hyphens are accepted.",
+    "client.device.no_nearby": "No nearby devices found",
+    "client.device.no_servers": "No servers found on this network",
+    "client.device.no_paired": "No paired devices yet",
     "client.settings.pseudo": "Pseudo locale (layout test)"
   }
 }

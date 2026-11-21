@@ -436,6 +436,12 @@
     "client.device.nearby": "● 附近可发现",
     "client.device.absent": "○ 未在附近发现",
     "client.record.missing": "记录已不存在",
+    "client.history.clear_search": "清除搜索",
+    "client.preview.back_to_details": "返回详情",
+    "client.device.code_format": "设备码由 12 位十六进制字符组成，可以粘贴带连字符的设备码。",
+    "client.device.no_nearby": "尚未发现附近设备",
+    "client.device.no_servers": "尚未发现局域网服务",
+    "client.device.no_paired": "还没有已绑定设备",
     "client.settings.pseudo": "伪语言（布局测试）"
   }
 }

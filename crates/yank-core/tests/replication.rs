@@ -63,10 +63,39 @@ fn concurrent_edits_converge_without_losing_either_payload() {
     assert_eq!(a.conflicts().unwrap().len(), 1);
     assert_eq!(b.conflicts().unwrap().len(), 1);
     let loser = a.conflicts().unwrap().remove(0);
+    assert_eq!(
+        a.conflict_summaries().unwrap(),
+        [(loser.0.clone(), loser.1.description.clone())]
+    );
     assert_ne!(left.text, loser.1.text);
     a.restore_conflict(&loser.0, "a").unwrap();
     b.receive(&[a.get(&root.id).unwrap().unwrap()]).unwrap();
     assert_eq!(b.get(&root.id).unwrap().unwrap().text, loser.1.text);
+}
+
+#[test]
+fn simultaneous_captures_deduplicate_contents_across_connections() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("captures.sqlite3");
+    let first = Store::open(&path).unwrap();
+    let second = Store::open(&path).unwrap();
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        let capture_all = |store: Store| {
+            start.wait();
+            for index in 0..20 {
+                let clip = Clip::text("capture", &format!("note {index}"));
+                store.capture(clip, "capture").unwrap();
+            }
+        };
+        let worker = scope.spawn(move || capture_all(first));
+        capture_all(second);
+        worker.join().unwrap();
+    });
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.stats().unwrap().clips, 20);
+    assert_eq!(store.pending().unwrap().len(), 20);
+    assert_eq!(store.page(0, 100).unwrap().clips.len(), 20);
 }
 #[test]
 fn clock_skew_cannot_resurrect_a_deleted_record() {

@@ -22,7 +22,10 @@ use yank_core::{
     Clip, MAX_WIRE_BYTES, Mutation, Peer, Store, Wire, decode, encode, protocol as pb,
 };
 mod auth;
+mod libraries;
 use auth::User;
+use libraries::Libraries;
+use tokio::sync::Mutex as AsyncMutex;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -56,14 +59,13 @@ type Devices = Arc<Mutex<HashMap<String, (String, Peer, Instant)>>>;
 struct DeviceAccess(Devices);
 impl AccessControl for DeviceAccess {
     async fn on_connect(&self, request: &ClientRequest) -> Access {
+        let endpoint = request.endpoint_id().to_string();
         let allowed = self
             .0
             .lock()
             .map(|d| {
-                d.values().any(|(_, p, t)| {
-                    p.id == request.endpoint_id().to_string()
-                        && t.elapsed() < Duration::from_secs(90)
-                })
+                d.values()
+                    .any(|(_, p, t)| p.id == endpoint && t.elapsed() < Duration::from_secs(90))
             })
             .unwrap_or(false);
         if allowed {
@@ -75,8 +77,8 @@ impl AccessControl for DeviceAccess {
 }
 #[derive(Clone)]
 struct AppState {
-    accounts: Arc<Mutex<auth::Accounts>>,
-    data: Arc<PathBuf>,
+    accounts: Arc<AsyncMutex<auth::Accounts>>,
+    libraries: Arc<Libraries>,
     devices: Devices,
     relay_url: Arc<str>,
     storage: bool,
@@ -84,14 +86,23 @@ struct AppState {
     attempts: Arc<Mutex<HashMap<SocketAddr, (u32, Instant)>>>,
 }
 impl AppState {
-    fn library<T>(
+    async fn library<T: Send + 'static>(
         &self,
         user: &User,
-        run: impl FnOnce(&Store) -> yank_core::Result<T>,
+        run: impl FnOnce(&Store) -> yank_core::Result<T> + Send + 'static,
     ) -> ApiResult<T> {
         storage(self)?;
-        let store = Store::open(self.data.join(format!("{}.sqlite3", user.id)))?;
-        Ok(run(&store)?)
+        self.libraries.run(user.id.clone(), run).await
+    }
+
+    async fn with_accounts<T: Send + 'static>(
+        &self,
+        run: impl FnOnce(&mut auth::Accounts) -> ApiResult<T> + Send + 'static,
+    ) -> ApiResult<T> {
+        let mut accounts = self.accounts.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || run(&mut accounts))
+            .await
+            .map_err(|_| internal())?
     }
 }
 #[derive(Debug, Deserialize)]
@@ -132,8 +143,8 @@ async fn main() -> anyhow::Result<()> {
     let data = args.db.with_extension("users");
     std::fs::create_dir_all(&data)?;
     let state = AppState {
-        accounts: Arc::new(Mutex::new(accounts)),
-        data: Arc::new(data),
+        accounts: Arc::new(AsyncMutex::new(accounts)),
+        libraries: Arc::new(Libraries::new(data)),
         devices: Arc::default(),
         relay_url: args.relay_url.into(),
         storage: !args.storage_disabled,
@@ -339,10 +350,14 @@ fn token(headers: &HeaderMap) -> Option<String> {
                 })
         })
 }
-fn auth(headers: &HeaderMap, state: &AppState) -> ApiResult<User> {
-    let user =
-        token(headers).and_then(|token| state.accounts.lock().ok()?.verify(&token).ok().flatten());
-    user.ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))
+fn required_token(headers: &HeaderMap) -> ApiResult<String> {
+    token(headers).ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))
+}
+async fn auth(headers: &HeaderMap, state: &AppState) -> ApiResult<User> {
+    let token = required_token(headers)?;
+    state
+        .with_accounts(move |accounts| verified_account(accounts, &token))
+        .await
 }
 fn storage(state: &AppState) -> ApiResult<()> {
     if state.storage {
@@ -374,6 +389,18 @@ fn rate_limit(s: &AppState, addr: SocketAddr) -> ApiResult<()> {
     entry.0 += 1;
     Ok(())
 }
+async fn authenticate(state: &AppState, input: auth::Credentials) -> ApiResult<auth::Login> {
+    state
+        .with_accounts(move |accounts| {
+            accounts.login(&input).map_err(|_| {
+                ApiError(
+                    StatusCode::UNAUTHORIZED,
+                    "Incorrect username or password".into(),
+                )
+            })
+        })
+        .await
+}
 async fn login(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
@@ -381,21 +408,7 @@ async fn login(
 ) -> ApiResult<impl IntoResponse> {
     rate_limit(&s, addr)?;
     let remember = input.remember;
-    let account = s.accounts.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        account
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Account service unavailable"))?
-            .login(&input)
-    })
-    .await
-    .map_err(|_| internal())?
-    .map_err(|_| {
-        ApiError(
-            StatusCode::UNAUTHORIZED,
-            "Incorrect username or password".into(),
-        )
-    })?;
+    let result = authenticate(&s, input).await?;
     let cookie = format!(
         "yank.session={}; HttpOnly; SameSite=Strict; Path=/{}{}",
         result.token,
@@ -405,14 +418,12 @@ async fn login(
     Ok(([("set-cookie", cookie)], Json(result)))
 }
 async fn logout(State(s): State<AppState>, h: HeaderMap) -> ApiResult<impl IntoResponse> {
-    auth(&h, &s)?;
-    if let Some(t) = token(&h) {
-        s.accounts
-            .lock()
-            .map_err(|_| internal())?
-            .logout(&t)
-            .map_err(|_| internal())?;
-    }
+    let token = required_token(&h)?;
+    s.with_accounts(move |accounts| {
+        verified_account(accounts, &token)?;
+        accounts.logout(&token).map_err(|_| internal())
+    })
+    .await?;
     Ok((
         [(
             "set-cookie",
@@ -436,35 +447,38 @@ fn verified_account(accounts: &auth::Accounts, token: &str) -> ApiResult<User> {
         .map_err(|_| internal())?
         .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))
 }
+fn verified_admin(accounts: &auth::Accounts, token: &str) -> ApiResult<User> {
+    let user = verified_account(accounts, token)?;
+    if user.admin {
+        Ok(user)
+    } else {
+        Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrator required".into(),
+        ))
+    }
+}
 async fn change_password(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
     h: HeaderMap,
     Json(input): Json<PasswordChange>,
 ) -> ApiResult<StatusCode> {
-    auth(&h, &s)?;
-    rate_limit(&s, addr)?;
-    let token =
-        token(&h).ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))?;
-    let accounts = s.accounts.clone();
-    let id = tokio::task::spawn_blocking(move || {
-        let mut accounts = accounts.lock().map_err(|_| internal())?;
-        // Recheck while holding the same lock as the update, so a revoked request
-        // cannot change a password after a concurrent reset or logout.
-        let user = verified_account(&accounts, &token)?;
-        accounts
-            .change_password(&user.id, &input.old_password, &input.new_password)
-            .map_err(|_| {
-                ApiError(
+    let state = s.clone();
+    let token = required_token(&h)?;
+    let id = s
+        .with_accounts(move |accounts| {
+            let user = verified_account(accounts, &token)?;
+            rate_limit(&state, addr)?;
+            accounts
+                .change_password(&user.id, &input.old_password, &input.new_password)
+                .map_err(|_| ApiError(
                     StatusCode::BAD_REQUEST,
-                    "Incorrect current password or invalid new password (8–1024 bytes required)"
-                        .into(),
-                )
-            })?;
-        Ok::<_, ApiError>(user.id)
-    })
-    .await
-    .map_err(|_| internal())??;
+                    "Incorrect current password or invalid new password (8–1024 bytes required)".into(),
+                ))?;
+            Ok(user.id)
+        })
+        .await?;
     s.devices
         .lock()
         .map_err(|_| internal())?
@@ -478,47 +492,32 @@ async fn reset_password(
     Path(id): Path<String>,
     Json(input): Json<PasswordReset>,
 ) -> ApiResult<StatusCode> {
-    let user = auth(&h, &s)?;
-    if !user.admin {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Administrator required".into(),
-        ));
-    }
-    rate_limit(&s, addr)?;
-    let token =
-        token(&h).ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Please sign in".into()))?;
-    let accounts = s.accounts.clone();
-    let id = tokio::task::spawn_blocking(move || {
-        let mut accounts = accounts.lock().map_err(|_| internal())?;
-        let user = verified_account(&accounts, &token)?;
-        if !user.admin {
-            return Err(ApiError(
-                StatusCode::FORBIDDEN,
-                "Administrator required".into(),
-            ));
-        }
-        if user.id == id {
-            return Err(ApiError(
-                StatusCode::BAD_REQUEST,
-                "Use password change with your current password".into(),
-            ));
-        }
-        let updated = accounts
-            .reset_password(&id, &input.new_password)
-            .map_err(|_| {
-                ApiError(
+    let state = s.clone();
+    let token = required_token(&h)?;
+    let id = s
+        .with_accounts(move |accounts| {
+            let user = verified_admin(accounts, &token)?;
+            rate_limit(&state, addr)?;
+            if user.id == id {
+                return Err(ApiError(
                     StatusCode::BAD_REQUEST,
-                    "Invalid new password (8–1024 bytes required)".into(),
-                )
-            })?;
-        if !updated {
-            return Err(ApiError(StatusCode::NOT_FOUND, "Account not found".into()));
-        }
-        Ok(id)
-    })
-    .await
-    .map_err(|_| internal())??;
+                    "Use password change with your current password".into(),
+                ));
+            }
+            let updated = accounts
+                .reset_password(&id, &input.new_password)
+                .map_err(|_| {
+                    ApiError(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid new password (8–1024 bytes required)".into(),
+                    )
+                })?;
+            if !updated {
+                return Err(ApiError(StatusCode::NOT_FOUND, "Account not found".into()));
+            }
+            Ok(id)
+        })
+        .await?;
     s.devices
         .lock()
         .map_err(|_| internal())?
@@ -535,29 +534,26 @@ async fn rpc_logout(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Bearer token required".into()))?;
-    let accounts = s.accounts.lock().map_err(|_| internal())?;
-    verified_account(&accounts, token)?;
-    decode::<()>(&body)?;
-    accounts.logout(token).map_err(|_| internal())?;
+    let token = token.to_owned();
+    s.with_accounts(move |accounts| {
+        verified_account(accounts, &token)?;
+        decode::<()>(&body)?;
+        accounts.logout(&token).map_err(|_| internal())
+    })
+    .await?;
     binary(&())
 }
 async fn session(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<User>> {
-    Ok(Json(auth(&h, &s)?))
+    Ok(Json(auth(&h, &s).await?))
 }
 async fn accounts(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Vec<User>>> {
-    let user = auth(&h, &s)?;
-    if !user.admin {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Administrator required".into(),
-        ));
-    }
+    let token = required_token(&h)?;
     Ok(Json(
-        s.accounts
-            .lock()
-            .map_err(|_| internal())?
-            .users()
-            .map_err(|_| internal())?,
+        s.with_accounts(move |accounts| {
+            verified_admin(accounts, &token)?;
+            accounts.users().map_err(|_| internal())
+        })
+        .await?,
     ))
 }
 async fn create_account(
@@ -565,28 +561,18 @@ async fn create_account(
     h: HeaderMap,
     Json(input): Json<auth::NewUser>,
 ) -> ApiResult<Json<User>> {
-    let user = auth(&h, &s)?;
-    if !user.admin {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Administrator required".into(),
-        ));
-    }
-    let account = s.accounts.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        account
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Unavailable"))?
-            .create(input)
-    })
-    .await
-    .map_err(|_| internal())?
-    .map_err(|_| {
-        ApiError(
-            StatusCode::BAD_REQUEST,
-            "Username already used or password shorter than 8 bytes".into(),
-        )
-    })?;
+    let token = required_token(&h)?;
+    let result = s
+        .with_accounts(move |accounts| {
+            verified_admin(accounts, &token)?;
+            accounts.create(input).map_err(|_| {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "Username already used or password shorter than 8 bytes".into(),
+                )
+            })
+        })
+        .await?;
     Ok(Json(result))
 }
 async fn remove_account(
@@ -594,23 +580,19 @@ async fn remove_account(
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let user = auth(&h, &s)?;
-    if !user.admin {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Administrator required".into(),
-        ));
-    }
-    s.accounts
-        .lock()
-        .map_err(|_| internal())?
-        .remove(&id, &user.id)
-        .map_err(|_| {
-            ApiError(
-                StatusCode::BAD_REQUEST,
-                "Cannot delete your own account".into(),
-            )
-        })?;
+    let token = required_token(&h)?;
+    let id = s
+        .with_accounts(move |accounts| {
+            let user = verified_admin(accounts, &token)?;
+            accounts.remove(&id, &user.id).map_err(|_| {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "Cannot delete your own account".into(),
+                )
+            })?;
+            Ok(id)
+        })
+        .await?;
     s.devices
         .lock()
         .map_err(|_| internal())?
@@ -626,17 +608,15 @@ async fn health(State(s): State<AppState>) -> ApiResult<Json<Health>> {
     }))
 }
 async fn stats(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<yank_core::Stats>> {
-    let u = auth(&h, &s)?;
-    Ok(Json(s.library(&u, Store::stats)?))
+    let u = auth(&h, &s).await?;
+    Ok(Json(s.library(&u, Store::stats).await?))
 }
 async fn export_library(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    let user = auth(&headers, &state)?;
-    let backup = tokio::task::spawn_blocking(move || state.library(&user, Store::export))
-        .await
-        .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Export failed".into()))??;
+    let user = auth(&headers, &state).await?;
+    let backup = state.library(&user, Store::export).await?;
     Ok((
         [
             (axum::http::header::CONTENT_TYPE, "application/json"),
@@ -653,34 +633,36 @@ async fn list(
     h: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Clip>>> {
-    let u = auth(&h, &s)?;
-    Ok(Json(s.library(&u, |db| {
-        db.list(&q.q, &q.filter, 100, q.offset)
-    })?))
+    let u = auth(&h, &s).await?;
+    Ok(Json(
+        s.library(&u, move |db| db.list(&q.q, &q.filter, 100, q.offset))
+            .await?,
+    ))
 }
 async fn pull(
     State(s): State<AppState>,
     h: HeaderMap,
     Query(q): Query<PullQuery>,
 ) -> ApiResult<Json<yank_core::Page>> {
-    let u = auth(&h, &s)?;
-    Ok(Json(s.library(&u, |db| db.page(q.since, 50))?))
+    let u = auth(&h, &s).await?;
+    Ok(Json(s.library(&u, move |db| db.page(q.since, 50)).await?))
 }
 async fn push(
     State(s): State<AppState>,
     h: HeaderMap,
     Json(m): Json<Mutation>,
 ) -> ApiResult<Json<yank_core::Ack>> {
-    let u = auth(&h, &s)?;
-    Ok(Json(s.library(&u, |db| db.accept(&m))?))
+    let u = auth(&h, &s).await?;
+    Ok(Json(s.library(&u, move |db| db.accept(&m)).await?))
 }
 async fn remove(
     State(s): State<AppState>,
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let u = auth(&h, &s)?;
-    s.library(&u, |db| db.mutate(&id, "server", |c| c.deleted = true))?;
+    let u = auth(&h, &s).await?;
+    s.library(&u, move |db| db.mutate(&id, "server", |c| c.deleted = true))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 async fn pin(
@@ -688,13 +670,16 @@ async fn pin(
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Clip>> {
-    let u = auth(&h, &s)?;
-    Ok(Json(s.library(&u, |db| {
-        db.mutate(&id, "server", |c| c.pinned = !c.pinned)
-    })?))
+    let u = auth(&h, &s).await?;
+    Ok(Json(
+        s.library(&u, move |db| {
+            db.mutate(&id, "server", |c| c.pinned = !c.pinned)
+        })
+        .await?,
+    ))
 }
 async fn devices(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Vec<Peer>>> {
-    let u = auth(&h, &s)?;
+    let u = auth(&h, &s).await?;
     let mut d = s.devices.lock().map_err(|_| internal())?;
     d.retain(|_, (_, _, t)| t.elapsed() < Duration::from_secs(90));
     Ok(Json(
@@ -709,7 +694,7 @@ async fn announce(
     h: HeaderMap,
     Json(peer): Json<Peer>,
 ) -> ApiResult<StatusCode> {
-    let u = auth(&h, &s)?;
+    let u = auth(&h, &s).await?;
     use sha2::{Digest, Sha256};
     let id: iroh_base::EndpointId = peer
         .id
@@ -745,7 +730,7 @@ async fn find_device(
     h: HeaderMap,
     Path(code): Path<String>,
 ) -> ApiResult<Json<Peer>> {
-    let u = auth(&h, &s)?;
+    let u = auth(&h, &s).await?;
     let d = s.devices.lock().map_err(|_| internal())?;
     d.get(&format!("{}:{}", u.id, code.to_uppercase()))
         .filter(|(_, _, t)| t.elapsed() < Duration::from_secs(90))
@@ -782,25 +767,15 @@ async fn rpc_login(
     }
     let input: pb::Credentials = decode(&body)?;
     rate_limit(&s, addr)?;
-    let accounts = s.accounts.clone();
-    let login = tokio::task::spawn_blocking(move || {
-        accounts
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Unavailable"))?
-            .login(&auth::Credentials {
-                username: input.username,
-                password: input.password,
-                remember: false,
-            })
-    })
-    .await
-    .map_err(|_| internal())?
-    .map_err(|_| {
-        ApiError(
-            StatusCode::UNAUTHORIZED,
-            "Incorrect username or password".into(),
-        )
-    })?;
+    let login = authenticate(
+        &s,
+        auth::Credentials {
+            username: input.username,
+            password: input.password,
+            remember: false,
+        },
+    )
+    .await?;
     binary(&pb::Login {
         token: login.token,
         user: Some(pb::User {
@@ -815,7 +790,7 @@ async fn rpc_devices(
     State(s): State<AppState>,
     h: HeaderMap,
 ) -> ApiResult<axum::response::Response> {
-    let user = auth(&h, &s)?;
+    let user = auth(&h, &s).await?;
     let d = s.devices.lock().map_err(|_| internal())?;
     let peers: Vec<Peer> = d
         .values()
@@ -880,7 +855,7 @@ async fn rpc_register(
         ));
     }
     let owner = if token(&h).is_some() {
-        auth(&h, &s)?.id
+        auth(&h, &s).await?.id
     } else {
         "guest".into()
     };
@@ -900,17 +875,17 @@ async fn rpc_pull(
     h: HeaderMap,
     Query(q): Query<PullQuery>,
 ) -> ApiResult<axum::response::Response> {
-    let u = auth(&h, &s)?;
-    binary(&s.library(&u, |db| db.page(q.since, 20))?)
+    let u = auth(&h, &s).await?;
+    binary(&s.library(&u, move |db| db.page(q.since, 20)).await?)
 }
 async fn rpc_push(
     State(s): State<AppState>,
     h: HeaderMap,
     body: axum::body::Bytes,
 ) -> ApiResult<axum::response::Response> {
-    let u = auth(&h, &s)?;
+    let u = auth(&h, &s).await?;
     let mutation: Mutation = decode(&body)?;
-    binary(&s.library(&u, |db| db.accept(&mutation))?)
+    binary(&s.library(&u, move |db| db.accept(&mutation)).await?)
 }
 
 #[cfg(test)]
@@ -926,8 +901,8 @@ mod tests {
             .bootstrap(Some("admin"), Some("test-password-42"))
             .unwrap();
         let state = AppState {
-            accounts: Arc::new(Mutex::new(accounts)),
-            data: Arc::new(temp.path().to_path_buf()),
+            accounts: Arc::new(AsyncMutex::new(accounts)),
+            libraries: Arc::new(Libraries::new(temp.path().to_path_buf())),
             devices: Arc::default(),
             relay_url: "http://localhost:7220".into(),
             storage: true,
@@ -938,7 +913,7 @@ mod tests {
     }
     fn login(s: &AppState, name: &str, password: &str) -> auth::Login {
         s.accounts
-            .lock()
+            .try_lock()
             .unwrap()
             .login(&auth::Credentials {
                 username: name.into(),
@@ -1004,7 +979,7 @@ mod tests {
     }
     fn other(s: &AppState) -> auth::Login {
         s.accounts
-            .lock()
+            .try_lock()
             .unwrap()
             .create(auth::NewUser {
                 username: "other".into(),
@@ -1122,7 +1097,7 @@ mod tests {
             );
             assert!(
                 s.accounts
-                    .lock()
+                    .try_lock()
                     .unwrap()
                     .verify(&second.token)
                     .unwrap()
@@ -1192,12 +1167,13 @@ mod tests {
         let target = other(&s);
         let sibling = login(&s, "other", "other-password-42");
         let private = Clip::text("admin-device", "admin private");
-        s.library(&admin.user, |db| {
+        s.library(&admin.user, move |db| {
             db.accept(&Mutation {
                 operation: "private".into(),
                 clip: private,
             })
         })
+        .await
         .unwrap_or_else(|_| panic!("store private clip"));
         let path = format!("/api/accounts/{}/password", target.user.id);
         assert_eq!(
@@ -1252,7 +1228,7 @@ mod tests {
         assert_eq!(decode::<yank_core::Page>(&body).unwrap().clips.len(), 1);
         // Bootstrap remains startup-only and cannot reset either existing account.
         s.accounts
-            .lock()
+            .try_lock()
             .unwrap()
             .bootstrap(Some("other"), Some("bootstrap-password"))
             .unwrap();
@@ -1339,7 +1315,7 @@ mod tests {
         assert_eq!(call_json(s.clone(), "/api/password", Some(&admin.token), serde_json::json!({"old_password":"test-password-42", "new_password":"changed-password"})).await.0, StatusCode::TOO_MANY_REQUESTS);
         assert!(
             s.accounts
-                .lock()
+                .try_lock()
                 .unwrap()
                 .verify(&admin.token)
                 .unwrap()
@@ -1350,7 +1326,7 @@ mod tests {
     async fn binary_login_and_user_storage_are_isolated() {
         let (_temp, s) = state();
         s.accounts
-            .lock()
+            .try_lock()
             .unwrap()
             .create(auth::NewUser {
                 username: "other".into(),
@@ -1414,7 +1390,7 @@ mod tests {
         let other = other(&state);
         let user = state
             .accounts
-            .lock()
+            .try_lock()
             .unwrap()
             .verify(&admin.token)
             .unwrap()
@@ -1426,6 +1402,7 @@ mod tests {
                 }
                 Ok(())
             })
+            .await
             .unwrap_or_else(|error| panic!("library setup failed: {}", error.1));
         assert_eq!(
             call(state.clone(), "GET", "/api/export", None, Vec::new())
@@ -1500,11 +1477,11 @@ mod tests {
     fn bootstrap_never_overwrites_an_existing_password() {
         let (_temp, s) = state();
         s.accounts
-            .lock()
+            .try_lock()
             .unwrap()
             .bootstrap(Some("replacement"), Some("new-password-42"))
             .unwrap();
-        assert_eq!(s.accounts.lock().unwrap().users().unwrap().len(), 1);
+        assert_eq!(s.accounts.try_lock().unwrap().users().unwrap().len(), 1);
         assert_eq!(
             login(&s, "admin", "test-password-42").user.username,
             "admin"

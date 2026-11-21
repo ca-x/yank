@@ -40,7 +40,9 @@ impl Accounts {
         conn.busy_timeout(std::time::Duration::from_secs(3))?;
         conn.execute_batch("PRAGMA foreign_keys=ON;PRAGMA journal_mode=WAL;
          CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,username TEXT UNIQUE NOT NULL,password TEXT NOT NULL,admin INTEGER NOT NULL);
-         CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires INTEGER NOT NULL);")?;
+         CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires INTEGER NOT NULL);
+         CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires);
+         CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);")?;
         Ok(Self { conn })
     }
     pub fn bootstrap(&self, username: Option<&str>, password: Option<&str>) -> anyhow::Result<()> {

@@ -40,15 +40,25 @@ fn styled_action(primary: bool, run: impl Fn() + 'static) -> ButtonElement {
             })
         })
         .active(move |style| {
-            style.bg(if primary {
+            let pressed = style.shadow_none().bg(if primary {
                 theme().primary.opacity(0.8)
             } else {
                 theme().accent
-            })
+            });
+            if is_desktop() {
+                pressed
+            } else {
+                pressed.scale(move || if reduce_motion() { 1.0_f32 } else { 0.97_f32 })
+            }
         })
-        .transition_colors()
-        .duration(move || if reduce_motion() { 0.0_f32 } else { 120.0_f32 })
-        .focus(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+        .when(primary, |s| s.shadow_sm())
+        .when(!is_desktop(), |button| {
+            button
+                .transition_transform()
+                .ease_bezier(0.23, 1.0, 0.32, 1.0)
+                .duration(move || if reduce_motion() { 0.0_f32 } else { 120.0_f32 })
+        })
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .disabled_style(|s| s.opacity(0.4))
         .flex_row()
         .gap_2()
@@ -97,7 +107,7 @@ pub fn icon_action(
 }
 
 pub fn nav_action(
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     name: &str,
     selected: impl Fn() -> bool + 'static,
     run: impl Fn() + 'static,
@@ -123,7 +133,7 @@ pub fn nav_action(
         })
         .hover(|style| style.bg(theme().muted))
         .active(|style| style.bg(theme().accent))
-        .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
+        .focus_visible(|style| style.outline(px(2.0)).outline_color(theme().ring))
         .child(icon(name))
         .child(action_label(label, false).flex_1().min_w_0().truncate())
         .min_w_0()
@@ -158,7 +168,8 @@ pub fn quiet_action(label: &'static str, run: impl Fn() + 'static) -> ButtonElem
         .rounded(move || theme().radius)
         .hover(|style| style.bg(theme().accent))
         .active(|style| style.bg(theme().accent))
-        .focus(|style| style.outline(px(2.0)).outline_color(theme().ring))
+        .focus_visible(|style| style.outline(px(2.0)).outline_color(theme().ring))
+        .disabled_style(|style| style.opacity(0.45))
         .child(action_label(label, false))
 }
 
@@ -176,6 +187,7 @@ pub fn tool(
                 .px_2()
                 .py_1()
                 .rounded(px(6.0))
+                .shadow_md()
                 .bg(move || theme().foreground)
                 .child(text(label).text_xs().text_color(move || theme().card)),
         )
@@ -203,7 +215,7 @@ pub fn tool(
                     })
                 })
                 .active(|style| style.bg(theme().accent))
-                .focus(|style| style.outline(px(3.0)).outline_color(theme().ring))
+                .focus_visible(|style| style.outline(px(3.0)).outline_color(theme().ring))
                 .child(icon(name)),
         )
 }
@@ -228,7 +240,7 @@ pub fn menu_command(
             .items_center()
             .rounded(px(6.0))
             .hover(|style| style.bg(theme().accent))
-            .focus(|style| style.bg(theme().accent))
+            .focus_visible(|style| style.bg(theme().accent))
             .child(icon(&name))
             .child(action_label(label.clone(), false).text_color(move || {
                 if destructive {
@@ -257,7 +269,7 @@ pub fn field(
         .border_1()
         .border_color(move || theme().input)
         .text_color(move || theme().foreground)
-        .focus(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .min_w_0();
     Field {
         label,
@@ -295,9 +307,9 @@ pub fn toggle(
                 .flex_row()
                 .items_center()
                 .min_h(px(44.0))
-                .track_class("w-11 rounded-full bg-muted p-0.5 checked:bg-primary")
-                .thumb_class("size-5 rounded-full bg-card checked:translate-x-5")
-                .focus(|s| s.outline(px(2.0)).outline_color(move || theme().ring)),
+                .track_class("w-11 rounded-full border border-input bg-muted p-0.5 checked:border-primary checked:bg-primary")
+                .thumb_class("size-5 rounded-full bg-muted-foreground checked:bg-primary-foreground checked:translate-x-5")
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring)),
         )
 }
 pub fn surface() -> nsh_core::element::View {
@@ -311,6 +323,16 @@ pub fn surface() -> nsh_core::element::View {
         .border_color(move || theme().border)
         .bg(move || theme().card)
 }
+/// Shared reading width and gutters for single-column destinations.
+pub fn page_column() -> nsh_core::element::View {
+    view()
+        .w_full()
+        .min_w_0()
+        .max_w(px(720.0))
+        .self_center()
+        .gap_4()
+}
+
 pub fn title(label: &'static str) -> impl IntoElement {
     text(crate::l10n::label(label))
         .text_lg()

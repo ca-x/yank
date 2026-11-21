@@ -208,3 +208,103 @@ fn upgrading_an_old_database_backfills_history_atomically() {
         1
     );
 }
+
+#[test]
+fn upgrading_a_ranked_database_preserves_board_order_and_sync_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ranked.sqlite3");
+    let store = Store::open(&path).unwrap();
+    let mut first = Clip::text("a", "first");
+    first.collection = "work".into();
+    let first = store.save_local(first, "a").unwrap();
+    let mut second = Clip::text("a", "second");
+    second.collection = "work".into();
+    store.save_local(second, "a").unwrap();
+    store.mark_used(&first.id).unwrap();
+    let before = store
+        .history_window("", "work", i64::MIN, 10)
+        .unwrap()
+        .clips;
+    assert_eq!(before[0].id, first.id);
+    let feed = store.page(0, 100).unwrap();
+    let pending = store.pending().unwrap();
+    drop(store);
+
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP INDEX clips_history_board;
+         DROP INDEX clips_search;
+         CREATE INDEX clips_search ON clips(deleted,pinned DESC,updated DESC,id);
+         UPDATE metadata SET value='1' WHERE key='history_schema';
+         CREATE TABLE migrations(version TEXT);
+         CREATE TRIGGER log_migration AFTER INSERT ON metadata WHEN NEW.key='history_schema'
+         BEGIN INSERT INTO migrations VALUES(NEW.value); END;",
+    )
+    .unwrap();
+    let start = std::sync::Barrier::new(4);
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                start.wait();
+                Store::open(&path).unwrap();
+            });
+        }
+    });
+    let runs: i64 = conn
+        .query_row("SELECT count(*) FROM migrations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(runs, 1, "concurrent opens should apply the migration once");
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.collections().unwrap(), ["work"]);
+    assert_eq!(
+        upgraded
+            .history_window("", "work", i64::MIN, 10)
+            .unwrap()
+            .clips,
+        before
+    );
+    assert_eq!(upgraded.page(0, 100).unwrap(), feed);
+    assert_eq!(upgraded.pending().unwrap(), pending);
+}
+
+#[test]
+fn earlier_history_uses_the_same_reserved_filters_as_the_visible_page() {
+    let store = Store::memory().unwrap();
+    let mut clip = Clip::text("a", "old text");
+    clip.collection = "image".into();
+    clip.updated_at = 1;
+    store.receive(&[clip]).unwrap();
+    assert!(
+        !store
+            .history_window("", "image", 100, 10)
+            .unwrap()
+            .has_earlier
+    );
+    assert!(
+        store
+            .history_window("OLD", "text", 100, 10)
+            .unwrap()
+            .has_earlier
+    );
+    assert!(
+        !store
+            .history_window("unmatched", "text", 100, 10)
+            .unwrap()
+            .has_earlier
+    );
+}
+
+#[test]
+fn opening_an_initialized_store_can_read_while_a_writer_is_active() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("wal.sqlite3");
+    let store = Store::open(&path).unwrap();
+    store.capture(Clip::text("a", "committed"), "a").unwrap();
+    let writer = rusqlite::Connection::open(&path).unwrap();
+    writer
+        .execute_batch("BEGIN IMMEDIATE; UPDATE clips SET deleted=1;")
+        .unwrap();
+    let reader = Store::open(&path).unwrap();
+    assert_eq!(reader.stats().unwrap().clips, 1);
+    assert_eq!(reader.list("", "all", 10, 0).unwrap()[0].text, "committed");
+}

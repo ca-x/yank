@@ -64,19 +64,24 @@ pub struct HistoryWindow {
 }
 
 pub(crate) fn init(connection: &Connection) -> Result<()> {
-    if connection
-        .query_row(
-            "SELECT value FROM metadata WHERE key='history_schema'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .as_deref()
-        == Some("1")
-    {
+    let already_migrated = || {
+        connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key='history_schema'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map(|version| version.as_deref() == Some("2"))
+    };
+    if already_migrated()? {
         return Ok(());
     }
     let transaction = write_transaction(connection)?;
+    // A concurrent opener may have rebuilt the indexes while we waited for the write lock.
+    if already_migrated()? {
+        return Ok(());
+    }
     let columns = connection
         .prepare("PRAGMA table_info(clips)")?
         .query_map([], |row| row.get::<_, String>(1))?
@@ -90,13 +95,39 @@ pub(crate) fn init(connection: &Connection) -> Result<()> {
     connection.execute_batch("INSERT OR IGNORE INTO metadata(key,value) SELECT 'history_clock',CAST(COALESCE(MAX(recency),0) AS TEXT) FROM clips;
         CREATE INDEX IF NOT EXISTS clips_history ON clips(deleted,pinned DESC,recency DESC,id DESC);
         CREATE INDEX IF NOT EXISTS clips_history_kind ON clips(deleted,kind,pinned DESC,recency DESC,id DESC);
-        CREATE INDEX IF NOT EXISTS clips_history_time ON clips(deleted,activity_at);")?;
+        CREATE INDEX IF NOT EXISTS clips_history_time ON clips(deleted,activity_at);
+        CREATE INDEX IF NOT EXISTS clips_history_board ON clips(collection,pinned DESC,recency DESC,id DESC)
+            WHERE deleted=0 AND collection!='';
+        DROP INDEX IF EXISTS clips_search;
+        CREATE INDEX clips_search ON clips(deleted,pinned DESC,updated DESC,id DESC);")?;
     connection.execute(
-        "INSERT OR REPLACE INTO metadata(key,value) VALUES('history_schema','1')",
+        "INSERT OR REPLACE INTO metadata(key,value) VALUES('history_schema','2')",
         [],
     )?;
     transaction.commit()?;
     Ok(())
+}
+
+// The list and the "load earlier" affordance must resolve reserved filter names identically.
+fn history_filter(filter: &str) -> (&'static str, &'static str) {
+    match filter {
+        "all" => ("", "clips_history"),
+        "pinned" => (" AND pinned=1", "clips_history"),
+        kind if crate::CLIP_KINDS.contains(&kind) => (" AND kind=?2", "clips_history_kind"),
+        "" => (" AND collection=?2", "clips_history"),
+        _ => (
+            " AND collection!='' AND collection=?2",
+            "clips_history_board",
+        ),
+    }
+}
+
+pub(super) fn search_clause(query: &str) -> &'static str {
+    if query.is_empty() {
+        ""
+    } else {
+        " AND instr(lower(search),lower(?1))>0"
+    }
 }
 
 impl Store {
@@ -112,18 +143,14 @@ impl Store {
         let mut cursor = None;
         let target = limit.saturating_add(1);
         while clips.len() < target as usize {
-            let page = self.history_page(
-                query,
-                filter,
-                cutoff,
-                cursor.as_ref(),
-                (target - clips.len() as u32).min(100),
-            )?;
-            if page.clips.is_empty() {
-                break;
-            }
+            let requested = (target - clips.len() as u32).min(100);
+            let page = self.history_page(query, filter, cutoff, cursor.as_ref(), requested)?;
+            let exhausted = page.clips.len() < requested as usize;
             cursor = page.cursor;
             clips.extend(page.clips);
+            if exhausted {
+                break;
+            }
         }
         let has_more = clips.len() > limit as usize;
         clips.truncate(limit as usize);
@@ -167,30 +194,21 @@ impl Store {
         cursor: Option<&HistoryCursor>,
         limit: u32,
     ) -> Result<HistoryPage> {
-        let (constraint, value) = match filter {
-            "all" => ("", ""),
-            "pinned" => (" AND pinned=1", ""),
-            kind if crate::CLIP_KINDS.contains(&kind) => (" AND kind=?2", kind),
-            collection => (" AND collection=?2", collection),
-        };
+        let (constraint, index) = history_filter(filter);
+        let search = search_clause(query);
         let seek = if cursor.is_some() {
             " AND (pinned,recency,id)<(?4,?5,?6)"
         } else {
             ""
         };
-        let index = if crate::CLIP_KINDS.contains(&filter) {
-            "clips_history_kind"
-        } else {
-            "clips_history"
-        };
         let sql = format!(
-            "SELECT body,pinned,recency,id FROM clips INDEXED BY {index} WHERE deleted=0 AND activity_at>=?3 AND instr(lower(search),lower(?1))>0{constraint}{seek} ORDER BY pinned DESC,recency DESC,id DESC LIMIT ?7"
+            "SELECT body,pinned,recency,id FROM clips INDEXED BY {index} WHERE deleted=0 AND activity_at>=?3{search}{constraint}{seek} ORDER BY pinned DESC,recency DESC,id DESC LIMIT ?7"
         );
-        let mut statement = self.conn.prepare(&sql)?;
+        let mut statement = self.conn.prepare_cached(&sql)?;
         let rows = statement.query_map(
             params![
                 query,
-                value,
+                filter,
                 cutoff,
                 cursor.map(|cursor| cursor.pinned),
                 cursor.map(|cursor| cursor.recency),
@@ -219,6 +237,14 @@ impl Store {
     }
 
     pub fn history_has_earlier(&self, query: &str, filter: &str, cutoff: i64) -> Result<bool> {
-        Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM clips WHERE deleted=0 AND activity_at<?3 AND instr(lower(search),lower(?1))>0 AND (?2='all' OR (?2='pinned' AND pinned=1) OR kind=?2 OR collection=?2))", params![query,filter,cutoff], |row| row.get(0))?)
+        let (constraint, _) = history_filter(filter);
+        let search = search_clause(query);
+        let sql = format!(
+            "SELECT EXISTS(SELECT 1 FROM clips WHERE deleted=0 AND activity_at<?3{constraint}{search})"
+        );
+        Ok(self
+            .conn
+            .prepare_cached(&sql)?
+            .query_row(params![query, filter, cutoff], |row| row.get(0))?)
     }
 }

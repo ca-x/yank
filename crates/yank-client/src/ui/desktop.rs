@@ -486,12 +486,18 @@ pub(super) fn floating(ui: Ui, clip: Clip) {
                             .text_color(move || theme().foreground),
                     ),
                 )
-                .child(action("复制已保存内容", true, move || {
-                    u.copy_clip(c.clone())
-                }))
-                .child(action("关闭", false, move || {
-                    native::current_window().close()
-                }))
+                .child(
+                    view()
+                        .flex_row()
+                        .gap_2()
+                        .items_center()
+                        .child(action("复制已保存内容", true, move || {
+                            u.copy_clip(c.clone())
+                        }))
+                        .child(action("关闭", false, move || {
+                            native::current_window().close()
+                        })),
+                )
         });
     if let Some(window) = native::open_window(card) {
         ui.windows.borrow_mut().insert(id.clone(), window);
